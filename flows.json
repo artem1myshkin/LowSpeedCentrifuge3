@@ -109,7 +109,6 @@
             "d0936a4883287a3e",
             "5c8966b2f436b0f2",
             "919ad73d0499e421",
-            "c119d3d836e3f9c5",
             "125b1570b6b709d9",
             "49281f13d2e68275",
             "07ff7bd3ca490729",
@@ -131,12 +130,17 @@
             "4f1ee326853e85a7",
             "2af4e4dddc079d5e",
             "8fc155a62ec95715",
-            "29b5ecc0aaf5d6c5"
+            "29b5ecc0aaf5d6c5",
+            "bep_mqtt_status_in",
+            "bep_status_rename",
+            "bc6eff304fcf6a8e",
+            "e0755f9473bbaf96",
+            "15dd1b4f57f9cb3d"
         ],
-        "x": 1574,
+        "x": 1634,
         "y": 199,
-        "w": 1572,
-        "h": 722
+        "w": 2012,
+        "h": 782
     },
     {
         "id": "f0eb15aecee76f9c",
@@ -6402,10 +6406,10 @@
         "ui": "",
         "name": "БУН",
         "order": 2,
-        "width": "6",
-        "height": "15",
+        "width": "4",
+        "height": "14",
         "head": "",
-        "format": "<template>\n  <v-container class=\"container\">\n    <h1 class=\"mt-1 ml-4 mb-1\">{{ t(\"group_name\") }}</h1>\n\n    <v-card class=\"elevation-4 pa-4\">\n      <!-- ======= РЕЖИМ И ТОРМОЗ ======= -->\n      <v-row class=\"mb-4\">\n        <v-col cols=\"6\" class=\"d-flex align-center\">\n          <span class=\"mr-4 mb-5 title-top\">{{ t(\"select_mode\") }}</span>\n          <v-select\n            v-model=\"tilt.mode\"\n            :items=\"modeOptions\"\n            item-title=\"label\"\n            item-value=\"value\"\n            outlined\n            dense\n            class=\"mr-4\"\n            @update:model-value=\"changeMode\"\n          ></v-select>\n        </v-col>\n      </v-row>\n\n      <!-- ======= ЗАДАННЫЙ И ТЕКУЩИЙ УГОЛ ======= -->\n      <v-row class=\"mb-2\">\n        <v-col cols=\"6\">\n          <span class=\"title-top mb-1\">{{ t(\"set_angle\") }}</span>\n          <v-row>\n            <v-col cols=\"4\">\n              <v-text-field\n                v-model.number=\"angleInput.deg\"\n                :label=\"t('degrees')\"\n                type=\"number\"\n                @change=\"updateTargetFromDMS\"\n              />\n            </v-col>\n            <v-col cols=\"4\">\n              <v-text-field\n                v-model.number=\"angleInput.min\"\n                :label=\"t('minutes')\"\n                type=\"number\"\n                @change=\"updateTargetFromDMS\"\n              />\n            </v-col>\n            <v-col cols=\"4\">\n              <v-text-field\n                v-model.number=\"angleInput.sec\"\n                :label=\"t('seconds')\"\n                type=\"number\"\n                @change=\"updateTargetFromDMS\"\n              />\n            </v-col>\n          </v-row>\n        </v-col>\n\n        <v-col cols=\"6\" class=\"d-flex flex-column justify-center align-center mb-4\">\n          <span class=\"title-top\">{{ t(\"current_angle\") }}</span>\n          <h1 class=\"current-angle mt-1\">{{ currentAngleDMS }}</h1>\n        </v-col>\n      </v-row>\n\n      <!-- ======= КНОПКИ И ТОРМОЗ ======= -->\n      <v-row class=\"mb-6 align-center\">\n        <v-col cols=\"6\" class=\"d-flex flex-row justify-start\">\n          <v-btn class=\"btn-common mr-4 custom-btn-apply\" @click=\"setAngle\">\n            {{ t(\"set\") }}\n          </v-btn>\n          <v-btn class=\"btn-common btn-stop\" @click=\"sendCmd('stop')\">\n            <v-icon left>mdi-stop-circle</v-icon>\n            {{ t(\"stop\") }}\n          </v-btn>\n        </v-col>\n\n        <v-col cols=\"6\" class=\"d-flex flex-row justify-center align-center\">\n          <v-icon :color=\"tilt.brake ? 'green' : 'red'\" size=\"28\" class=\"mr-2\">mdi-cog-stop</v-icon>\n          <span>{{ t(\"brake\") }} <strong>{{ brakeStatus }}</strong></span>\n          <v-switch\n            v-model=\"tilt.brake\"\n            @change=\"toggleBrake\"\n            hide-details\n            inset\n            color=\"primary\"\n            :disabled=\"tilt.mode === 'Автоматический' || tilt.mode === 'Automatic'\"\n            class=\"ml-4\"\n          ></v-switch>\n        </v-col>\n      </v-row>\n\n      <!-- ======= УПРАВЛЕНИЕ НАКЛОНОМ ======= -->\n      <h2 class=\"mb-8 section-title\">{{ t(\"tilt_control\") }}</h2>\n\n      <v-row class=\"justify-center\">\n        <v-btn class=\"btn-common btn-release mr-4 mb-3\" @click=\"sendCmd('release')\">\n          <v-icon left>mdi-hand-back-right</v-icon>\n          {{ t(\"release\") }}\n        </v-btn>\n        <v-btn class=\"btn-common btn-zero mr-4 mb-3\" @click=\"sendCmd('zero')\">\n          <v-icon left>mdi-axis-arrow</v-icon>\n          {{ t(\"zero\") }}\n        </v-btn>\n        <v-btn class=\"btn-common btn-slowdn mr-4 mb-3\" @click=\"sendCmd('slowdown')\">\n          <v-icon left>mdi-arrow-down-bold</v-icon>\n          {{ t(\"slow_down\") }}\n        </v-btn>\n        <v-btn class=\"btn-common btn-slowup mb-3\" @click=\"sendCmd('slowup')\">\n          <v-icon left>mdi-arrow-up-bold</v-icon>\n          {{ t(\"slow_up\") }}\n        </v-btn>\n      </v-row>\n\n      <!-- ======= СОСТОЯНИЕ СИСТЕМЫ ======= -->\n      <v-row class=\"mt-6\">\n        <v-col cols=\"12\" class=\"d-flex align-center justify-center\">\n          <v-icon left color=\"primary\">mdi-information</v-icon>\n          <span class=\"system-state-text\">SYS_STATE:</span>\n          <strong class=\"ml-2\">{{ systemState }}</strong>\n        </v-col>\n      </v-row>\n    </v-card>\n  </v-container>\n</template>\n\n<script>\nexport default {\n  name: \"TiltTab\",\n  data() {\n    return {\n      system: { language: \"english\" },\n      tilt: {\n        mode: \"Ручной\",\n        brake: true,\n        targetAngle: 0, // угловые секунды\n        currentAngle: 0, // угловые секунды\n      },\n      angleInput: { deg: 0, min: 0, sec: 0 },\n      systemState: \"0x00\",\n    };\n  },\n  computed: {\n    modeOptions() {\n      return this.system.language === \"english\"\n        ? [\n            { label: \"Manual\", value: \"Manual\" },\n            { label: \"Automatic\", value: \"Automatic\" },\n          ]\n        : [\n            { label: \"Ручной\", value: \"Ручной\" },\n            { label: \"Автоматический\", value: \"Автоматический\" },\n          ];\n    },\n    brakeStatus() {\n      if (this.tilt.brake) {\n        return this.system.language === \"english\" ? \"ON\" : \"ВКЛ\";\n      } else {\n        return this.system.language === \"english\" ? \"OFF\" : \"ВЫКЛ\";\n      }\n    },\n    currentAngleDMS() {\n      const { deg, min, sec } = this.toDMS(this.tilt.currentAngle);\n      return `${deg}° ${min}′ ${sec.toFixed(1)}″`;\n    },\n  },\n  methods: {\n    /** Перевод */\n    t(key) {\n      const lang = this.system.language;\n      const dict = {\n        group_name: lang === \"english\" ? \"Tilt\" : \"БУН\",\n        select_mode: lang === \"english\" ? \"Select mode:\" : \"Выберите режим:\",\n        set_angle: lang === \"english\" ? \"Set tilt angle:\" : \"Установите угол наклона:\",\n        current_angle: lang === \"english\" ? \"Current angle:\" : \"Текущий угол:\",\n        degrees: lang === \"english\" ? \"Degrees\" : \"Градусы\",\n        minutes: lang === \"english\" ? \"Minutes\" : \"Минуты\",\n        seconds: lang === \"english\" ? \"Seconds\" : \"Секунды\",\n        set: lang === \"english\" ? \"Set\" : \"Установить\",\n        stop: lang === \"english\" ? \"Stop\" : \"Стоп\",\n        brake: lang === \"english\" ? \"Brake:\" : \"Тормоз:\",\n        tilt_control: lang === \"english\" ? \"Tilt control\" : \"Управление наклоном\",\n        release: lang === \"english\" ? \"Release\" : \"Release\",\n        zero: lang === \"english\" ? \"Set Zero\" : \"Нулевой угол\",\n        slow_down: lang === \"english\" ? \"Slow Down\" : \"Меньше\",\n        slow_up: lang === \"english\" ? \"Slow Up\" : \"Больше\",\n      };\n      return dict[key] || key;\n    },\n\n    updateTargetFromDMS() {\n      const d = Number(this.angleInput.deg) || 0;\n      const m = Number(this.angleInput.min) || 0;\n      const s = Number(this.angleInput.sec) || 0;\n      const sign = d < 0 ? -1 : 1;\n      this.tilt.targetAngle = sign * (Math.abs(d) * 3600 + m * 60 + s);\n      this.updateTargetAngle();\n    },\n    toDMS(seconds) {\n      const sign = seconds < 0 ? -1 : 1;\n      const abs = Math.abs(seconds);\n      const deg = Math.floor(abs / 3600) * sign;\n      const min = Math.floor((abs % 3600) / 60);\n      const sec = abs % 60;\n      return { deg, min, sec };\n    },\n    changeMode() {\n      this.send?.({ topic: \"tilt_mode\", payload: this.tilt.mode });\n    },\n    setAngle() {\n      this.send?.({ topic: \"bun_cmd_setpoint\", payload: this.tilt.targetAngle });\n    },\n    updateTargetAngle() {\n      this.send?.({ topic: \"tilt_target\", payload: this.tilt.targetAngle });\n    },\n    toggleBrake() {\n      this.send?.({ topic: \"tilt_brake\", payload: this.tilt.brake ? 1 : 0 });\n    },\n    sendCmd(cmd) {\n      this.send?.({ topic: \"bun_cmd\", payload: cmd });\n    },\n  },\n  watch: {\n    \"tilt.targetAngle\"(val) {\n      this.angleInput = this.toDMS(val);\n    },\n  },\n  mounted() {\n    this.angleInput = this.toDMS(this.tilt.targetAngle);\n    this.send?.({ topic: \"reread\" });\n    this.$socket.on(\"msg-input:\" + this.id, (msg) => {\n      if (msg.topic === \"init\") {\n        console.log(msg)\n        this.system.language = msg.language || \"english\";\n        this.tilt.brake = msg.bun_brake  || false;\n        };\n      if (msg.topic === \"bun_sysstate\") this.systemState = msg.payload || \"0x00\";\n      if (msg.topic === \"bun_angle\") this.tilt.currentAngle = msg.payload || 0;\n    });\n  },\n};\n</script>\n\n<style scoped>\n.title-top {\n  font-size: 18px;\n}\n.section-title {\n  font-size: 20px;\n  font-weight: 600;\n  color: #333;\n}\n.current-angle {\n  font-size: 28px;\n  font-weight: bold;\n  color: #1394ff;\n  text-align: center;\n}\n.system-state-text {\n  font-size: 18px;\n  margin-left: 6px;\n  font-weight: 500;\n}\n.btn-common {\n  font-size: 16px;\n  font-weight: 600;\n  padding: 12px 0;\n  width: 160px;\n  height: 50px;\n  border-radius: 8px;\n  color: white;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n}\n.custom-btn-apply {\n  background: #49c514;\n}\n.btn-stop {\n  background: #e53935;\n}\n.btn-slowup {\n  background: #2196f3;\n}\n.btn-slowdn {\n  background: #ff9800;\n}\n.btn-release {\n  background: #9c27b0;\n}\n.btn-zero {\n  background: #607d8b;\n}\n.v-card {\n  border-radius: 12px;\n  background-color: #fafafa;\n}\n.container {\n  display: flex;\n  flex-direction: column;\n  gap: 0px;\n  margin: 0px;\n}\n.v-btn .v-icon {\n  margin-right: 6px;\n}\n</style>\n",
+        "format": "<template>\n  <div class=\"bun-wrap\">\n    <h2 class=\"bun-title\">{{ t(\"group_name\") }}</h2>\n\n    <!-- ======= РЕЖИМ ======= -->\n    <div class=\"bun-section\">\n      <div class=\"bun-section__label\">{{ t(\"select_mode\") }}</div>\n      <v-select\n        v-model=\"tilt.mode\"\n        :items=\"modeOptions\"\n        item-title=\"label\"\n        item-value=\"value\"\n        outlined\n        dense\n        hide-details\n        class=\"bun-select\"\n        @update:model-value=\"changeMode\"\n      />\n    </div>\n\n    <!-- ======= ТЕКУЩИЙ УГОЛ ======= -->\n    <div class=\"bun-section\">\n      <div class=\"bun-section__label\">{{ t(\"current_angle\") }}</div>\n      <div class=\"bun-angle-display\">{{ currentAngleDMS }}</div>\n    </div>\n\n    <!-- ======= ЗАДАТЬ УГОЛ ======= -->\n    <div class=\"bun-section\">\n      <div class=\"bun-section__label\">{{ t(\"set_angle\") }}</div>\n      <div class=\"bun-angle-grid\">\n        <input\n          class=\"plain-input\"\n          type=\"number\"\n          v-model.number=\"angleInput.deg\"\n          :placeholder=\"t('degrees')\"\n          @change=\"updateTargetFromDMS\"\n        />\n        <input\n          class=\"plain-input\"\n          type=\"number\"\n          v-model.number=\"angleInput.min\"\n          :placeholder=\"t('minutes')\"\n          @change=\"updateTargetFromDMS\"\n        />\n        <input\n          class=\"plain-input\"\n          type=\"number\"\n          v-model.number=\"angleInput.sec\"\n          :placeholder=\"t('seconds')\"\n          @change=\"updateTargetFromDMS\"\n        />\n      </div>\n    </div>\n\n    <!-- ======= SET / STOP / ТОРМОЗ ======= -->\n    <div class=\"bun-section\">\n      <div class=\"bun-row\">\n        <button class=\"plain-btn btn-apply\" @click=\"setAngle\">{{ t(\"set\") }}</button>\n        <button class=\"plain-btn btn-stop\" @click=\"sendCmd('stop')\">\n          <v-icon size=\"16\" class=\"btn-icon\">mdi-stop-circle</v-icon>{{ t(\"stop\") }}\n        </button>\n      </div>\n      <div class=\"bun-brake-row\">\n        <v-icon :color=\"tilt.brake ? '#49c514' : '#e53935'\" size=\"20\">mdi-cog-stop</v-icon>\n        <span class=\"bun-brake-label\">{{ t(\"brake\") }} <strong>{{ brakeStatus }}</strong></span>\n        <v-switch\n          v-model=\"tilt.brake\"\n          @change=\"toggleBrake\"\n          hide-details\n          inset\n          color=\"primary\"\n          :disabled=\"tilt.mode === 'Автоматический' || tilt.mode === 'Automatic'\"\n          class=\"bun-switch\"\n        />\n      </div>\n    </div>\n\n    <!-- ======= УПРАВЛЕНИЕ НАКЛОНОМ ======= -->\n    <div class=\"bun-section\">\n      <div class=\"bun-section__label\">{{ t(\"tilt_control\") }}</div>\n      <div class=\"bun-ctrl-grid\">\n        <button class=\"plain-btn btn-release\" @click=\"sendCmd('release')\">\n          <v-icon size=\"16\" class=\"btn-icon\">mdi-hand-back-right</v-icon>{{ t(\"release\") }}\n        </button>\n        <button class=\"plain-btn btn-zero\" @click=\"sendCmd('zero')\">\n          <v-icon size=\"16\" class=\"btn-icon\">mdi-axis-arrow</v-icon>{{ t(\"zero\") }}\n        </button>\n        <button class=\"plain-btn btn-slowup\" @click=\"sendCmd('slowup')\">\n          <v-icon size=\"16\" class=\"btn-icon\">mdi-arrow-up-bold</v-icon>{{ t(\"slow_up\") }}\n        </button>\n        <button class=\"plain-btn btn-slowdn\" @click=\"sendCmd('slowdown')\">\n          <v-icon size=\"16\" class=\"btn-icon\">mdi-arrow-down-bold</v-icon>{{ t(\"slow_down\") }}\n        </button>\n      </div>\n    </div>\n\n    <!-- ======= СОСТОЯНИЕ СИСТЕМЫ ======= -->\n    <div class=\"bun-sysstate\">\n      <v-icon color=\"primary\" size=\"18\">mdi-information</v-icon>\n      <span>SYS_STATE: <strong>{{ systemState }}</strong></span>\n    </div>\n  </div>\n</template>\n\n<script>\nexport default {\n  name: \"TiltTab\",\n  data() {\n    return {\n      system: { language: \"english\" },\n      tilt: {\n        mode: \"Ручной\",\n        brake: true,\n        targetAngle: 0,\n        currentAngle: 0,\n      },\n      angleInput: { deg: 0, min: 0, sec: 0 },\n      systemState: \"0x00\",\n    };\n  },\n  computed: {\n    modeOptions() {\n      return this.system.language === \"english\"\n        ? [\n            { label: \"Manual\",    value: \"Manual\" },\n            { label: \"Automatic\", value: \"Automatic\" },\n          ]\n        : [\n            { label: \"Ручной\",         value: \"Ручной\" },\n            { label: \"Автоматический\", value: \"Автоматический\" },\n          ];\n    },\n    brakeStatus() {\n      if (this.tilt.brake)\n        return this.system.language === \"english\" ? \"ON\" : \"ВКЛ\";\n      return this.system.language === \"english\" ? \"OFF\" : \"ВЫКЛ\";\n    },\n    currentAngleDMS() {\n      const { deg, min, sec } = this.toDMS(this.tilt.currentAngle);\n      return `${deg}° ${min}′ ${sec.toFixed(1)}″`;\n    },\n  },\n  methods: {\n    t(key) {\n      const lang = this.system.language;\n      const dict = {\n        group_name:    lang === \"english\" ? \"Tilt\"              : \"БУН\",\n        select_mode:   lang === \"english\" ? \"Select mode:\"      : \"Режим:\",\n        set_angle:     lang === \"english\" ? \"Set tilt angle:\"   : \"Задать угол наклона:\",\n        current_angle: lang === \"english\" ? \"Current angle:\"    : \"Текущий угол:\",\n        degrees:       lang === \"english\" ? \"Deg...\"            : \"Град...\",\n        minutes:       lang === \"english\" ? \"Min...\"            : \"Мин...\",\n        seconds:       lang === \"english\" ? \"Sec...\"            : \"Сек...\",\n        set:           lang === \"english\" ? \"Set\"               : \"Установить\",\n        stop:          lang === \"english\" ? \"Stop\"              : \"Стоп\",\n        brake:         lang === \"english\" ? \"Brake:\"            : \"Тормоз:\",\n        tilt_control:  lang === \"english\" ? \"Tilt control\"      : \"Управление наклоном\",\n        release:       lang === \"english\" ? \"Release\"           : \"Release\",\n        zero:          lang === \"english\" ? \"Set Zero\"          : \"Нулевой угол\",\n        slow_down:     lang === \"english\" ? \"Slow Down\"         : \"Меньше\",\n        slow_up:       lang === \"english\" ? \"Slow Up\"           : \"Больше\",\n      };\n      return dict[key] || key;\n    },\n    updateTargetFromDMS() {\n      const d = Number(this.angleInput.deg) || 0;\n      const m = Number(this.angleInput.min) || 0;\n      const s = Number(this.angleInput.sec) || 0;\n      const sign = d < 0 ? -1 : 1;\n      this.tilt.targetAngle = sign * (Math.abs(d) * 3600 + m * 60 + s);\n      this.updateTargetAngle();\n    },\n    toDMS(seconds) {\n      const sign = seconds < 0 ? -1 : 1;\n      const abs  = Math.abs(seconds);\n      return {\n        deg: Math.floor(abs / 3600) * sign,\n        min: Math.floor((abs % 3600) / 60),\n        sec: abs % 60,\n      };\n    },\n    changeMode()       { this.send?.({ topic: \"tilt_mode\",       payload: this.tilt.mode }); },\n    setAngle()         { this.send?.({ topic: \"bun_cmd_setpoint\", payload: this.tilt.targetAngle }); },\n    updateTargetAngle(){ this.send?.({ topic: \"tilt_target\",      payload: this.tilt.targetAngle }); },\n    toggleBrake()      { this.send?.({ topic: \"tilt_brake\",       payload: this.tilt.brake ? 1 : 0 }); },\n    sendCmd(cmd)       { this.send?.({ topic: \"bun_cmd\",          payload: cmd }); },\n  },\n  watch: {\n    \"tilt.targetAngle\"(val) { this.angleInput = this.toDMS(val); },\n  },\n  mounted() {\n    this.angleInput = this.toDMS(this.tilt.targetAngle);\n    this.send?.({ topic: \"reread\" });\n    this.$socket.on(\"msg-input:\" + this.id, (msg) => {\n      if (msg.topic === \"init\") {\n        console.log(msg);\n        this.system.language = msg.language || \"english\";\n        this.tilt.brake      = msg.bun_brake || false;\n      }\n      if (msg.topic === \"bun_sysstate\") this.systemState       = msg.payload || \"0x00\";\n      if (msg.topic === \"bun_angle\")    this.tilt.currentAngle = msg.payload || 0;\n    });\n  },\n};\n</script>\n\n<style scoped>\n/* ── обёртка ── */\n.bun-wrap {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n  padding: 12px 14px;\n  height: 100%;\n  box-sizing: border-box;\n}\n\n.bun-title {\n  font-size: 22px;\n  font-weight: 700;\n  color: #1a1a1a;\n  margin: 0 0 4px 0;\n}\n\n/* ── секция ── */\n.bun-section {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n\n.bun-section__label {\n  font-size: 11px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.06em;\n  color: #888;\n  border-bottom: 1px solid #e0e0e0;\n  padding-bottom: 3px;\n}\n\n/* ── текущий угол ── */\n.bun-angle-display {\n  font-size: 26px;\n  font-weight: 700;\n  color: #1394ff;\n  letter-spacing: 0.02em;\n}\n\n/* ── поля ввода угла ── */\n.bun-angle-grid {\n  display: grid;\n  grid-template-columns: 1fr 1fr 1fr;\n  gap: 6px;\n}\n\n/* ── общий стиль кнопок (совпадает с БЕП) ── */\n.plain-btn {\n  height: 48px;\n  min-height: 48px;\n  max-height: 48px;\n  border: none;\n  border-radius: 6px;\n  color: #fff;\n  font-size: 14px;\n  font-weight: 600;\n  cursor: pointer;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 5px;\n  padding: 0 10px;\n  line-height: 46px;\n  transition: filter 0.15s;\n}\n.plain-btn:hover  { filter: brightness(1.1); }\n.plain-btn:active { filter: brightness(0.9); }\n\n/* ── поля ввода (совпадает с БЕП) ── */\n.plain-input {\n  height: 48px;\n  min-height: 48px;\n  max-height: 48px;\n  border: 1px solid #bdbdbd;\n  border-radius: 6px;\n  padding: 0 10px;\n  font-size: 14px;\n  color: #222;\n  background: #fff;\n  box-sizing: border-box;\n  width: 100%;\n  outline: none;\n  transition: border-color 0.2s;\n}\n.plain-input:focus { border-color: #1394ff; }\n\n/* ── строка Set / Stop ── */\n.bun-row {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 8px;\n}\n\n/* ── строка тормоза ── */\n.bun-brake-row {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 0;\n}\n.bun-brake-label {\n  font-size: 14px;\n  flex: 1;\n}\n.bun-switch {\n  margin: 0;\n  padding: 0;\n}\n\n/* ── сетка управления наклоном 2×2 ── */\n.bun-ctrl-grid {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 8px;\n}\n\n/* ── состояние системы ── */\n.bun-sysstate {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-size: 14px;\n  color: #444;\n  margin-top: auto;\n  padding-top: 8px;\n  border-top: 1px solid #e0e0e0;\n}\n\n/* ── цвета кнопок ── */\n.btn-apply   { background: #49c514; }\n.btn-stop    { background: #e53935; }\n.btn-release { background: #9c27b0; }\n.btn-zero    { background: #607d8b; }\n.btn-slowup  { background: #2196f3; }\n.btn-slowdn  { background: #ff9800; }\n\n.btn-icon { pointer-events: none; }\n</style>",
         "storeOutMessages": true,
         "passthru": false,
         "resendOnRefresh": true,
@@ -7013,55 +7017,21 @@
         "ui": "",
         "name": "BEP",
         "order": 1,
-        "width": "6",
+        "width": "8",
         "height": "14",
         "head": "",
-        "format": "<template>\n  <v-container class=\"bep-container\">\n    <div class=\"bep-header\">\n      <h1 class=\"bep-title\">{{ t('top_lable') }}</h1>\n    </div>\n\n    <v-card class=\"bep-card\">\n      <!-- ======= CHANNELS (text) ======= -->\n      <div class=\"section section-channels\">\n        <div class=\"channels-grid\">\n          <div \n            v-for=\"(val, idx) in channels\" \n            :key=\"idx\" \n            class=\"channel-card\"\n          >\n            <span class=\"channel-label\">{{ t('channel') }} {{ idx + 1 }}</span>\n            <div class=\"channel-value\">{{ formatValue(val) }}</div>\n          </div>\n        </div>\n      </div>\n\n        <!-- ======= CHART + CONTROLS ======= -->\n      <div class=\"section section-main\">\n          <div class=\"chart-container\">\n            <div class=\"chart-wrap\">\n              <canvas ref=\"barCanvas\"></canvas>\n            </div>\n          </div>\n\n        <div class=\"controls-panel\">\n          <div class=\"controls-group\">\n            <h3 class=\"controls-title\">{{ t('label_1') }}</h3>\n        \n            <v-text-field class=\"control-field\" v-model.number=\"boardNum\" :label=\"t('board_number')\" type=\"number\"\n              @change=\"boardChanged\" dense outlined >\n            </v-text-field>\n        \n            <v-text-field class=\"control-field\" v-model.number=\"capdacVal\" :label=\"t('capdac_value')\" type=\"number\"\n              @change=\"capdacChanged\" dense outlined>\n              </v-text-field>\n          </div>\n        </div>\n      </div>\n\n      <!-- ======= BUTTONS ======= -->\n      <div class=\"section section-buttons\">\n        <div class=\"buttons-grid\">\n          <v-btn class=\"btn btn-start\" @click=\"onStart\">\n            {{ t('start') }}\n          </v-btn>\n          <v-btn class=\"btn btn-stop\" @click=\"onStop\">\n            <v-icon left>mdi-stop-circle</v-icon>\n            {{ t('stop') }}\n          </v-btn>\n          <v-btn class=\"btn btn-single\" @click=\"onStartSingle\">\n            {{ t('start_single') }}\n          </v-btn>\n          <v-btn class=\"btn btn-capdac\" @click=\"onStartWithCapdac\">\n            {{ t('start_with_capdac') }}\n          </v-btn>\n        </div>\n      </div>\n    </v-card>\n  </v-container>\n</template>\n\n<script>\nexport default {\n  name: \"BepDashboard\",\n  data() {\n    return {\n      system: { language: \"english\" },\n      boardNum: 33,\n      capdacVal: 0,\n      dataText: \"[01,02,03,05,06,07,08,09,00]\",\n      channels: [9.8, 0, 0, 0, 0],\n      ctx: null,\n      colors: [\"#1f77b4\", \"#aec7e8\", \"#ff7f0e\", \"#2ca02c\", \"#98df8a\"],\n      chartResizeObserver: null,\n    };\n  },\n  methods: {\n    t(key) {\n      const lang = this.system.language === \"english\" ? \"english\" : \"russian\";\n      const dict = {\n        top_lable: lang === \"english\" ? \"Gap\" : \"БЕП\",\n        label_1: lang === \"english\" ? \"Settings:\" : \"Настройки:\",\n        header: lang === \"english\" ? \"BEP\" : \"БЕП\",\n        start: lang === \"english\" ? \"Start\" : \"Старт\",\n        stop: lang === \"english\" ? \"Stop\" : \"Стоп\",\n        start_single: lang === \"english\" ? \"Start (single)\" : \"Старт (single)\",\n        start_with_capdac: lang === \"english\" ? \"Start (CAPDAC)\" : \"Старт (CAPDAC)\",\n        board_number: lang === \"english\" ? \"Board number\" : \"Номер платы\",\n        capdac_value: lang === \"english\" ? \"Capdac value\" : \"Значение CAPDAC\",\n        data_label: lang === \"english\" ? \"Last message\" : \"Последние данные\",\n        channel: lang === \"english\" ? \"Channel\" : \"Канал\",\n      };\n      return dict[key] || key;\n    },\n\n    formatValue(v) {\n      if (typeof v === \"number\") return Number(v).toFixed(2);\n      return v;\n    },\n\n    onStart() {\n      this.send({ payload: \"run\", topic: \"mqtt_cmd\" });\n    },\n    onStop() {\n      this.send({ payload: \"stop\", topic: \"mqtt_cmd\" });\n    },\n    onStartSingle() {\n      this.send({ payload: \"start_single\", topic: \"mqtt_cmd\" });\n    },\n    onStartWithCapdac() {\n      const payload = `start_single_capdac_${this.boardNum}_${this.capdacVal}`;\n      this.send({ topic: \"mqtt_cmd\", payload });\n    },\n\n    boardChanged() {\n      this.send({ topic: \"board_num\", payload: this.boardNum });\n    },\n    capdacChanged() {\n      this.send({ topic: \"capdac_val\", payload: this.capdacVal });\n    },\n\n    sendCommand(cmd) {\n      this.send({ topic: \"cmd-topic\", payload: cmd });\n    },\n\n    drawBars() {\n      const canvas = this.$refs.barCanvas;\n      if (!canvas) return;\n\n      const ctx = canvas.getContext(\"2d\");\n      const dpr = window.devicePixelRatio || 1;\n      const rect = canvas.getBoundingClientRect();\n\n      // Установка размеров canvas с учётом DPR\n      canvas.width = rect.width * dpr;\n      canvas.height = rect.height * dpr;\n      ctx.scale(dpr, dpr);\n\n      // Размеры в CSS пикселях\n      const clientWidth = rect.width;\n      const clientHeight = rect.height;\n\n      // Очистка\n      ctx.clearRect(0, 0, clientWidth, clientHeight);\n\n      // Получение значений\n      const values = this.channels.map((v) =>\n        typeof v === \"number\" ? v : Number(v) || 0\n      );\n\n      // FIX: Если все значения нулевые, показываем символическую высоту\n      const hasNonZero = values.some(v => v > 0);\n      let maxVal = Math.max(...values);\n      if (maxVal === 0) {\n        maxVal = 1; // Даём визуальный масштаб для нулевых значений\n      }\n\n      const padding = 30;\n      const chartW = clientWidth - padding * 2;\n      const chartH = clientHeight - padding * 2;\n\n      // Горизонтальная сетка\n      ctx.strokeStyle = \"#e6e6e6\";\n      ctx.lineWidth = 1;\n      const gridLines = 5;\n      for (let i = 0; i <= gridLines; i++) {\n        const y = padding + (chartH * i) / gridLines;\n        ctx.beginPath();\n        ctx.moveTo(padding, y);\n        ctx.lineTo(padding + chartW, y);\n        ctx.stroke();\n      }\n\n      // Оси\n      ctx.strokeStyle = \"#bfbfbf\";\n      ctx.lineWidth = 2;\n      ctx.beginPath();\n      ctx.moveTo(padding, padding);\n      ctx.lineTo(padding, padding + chartH);\n      ctx.lineTo(padding + chartW, padding + chartH);\n      ctx.stroke();\n\n      // Бары\n      const barCount = 5;\n      const totalGap = 25 * (barCount - 1);\n      const barW = (chartW - totalGap) / barCount;\n      const gap = 25;\n\n      for (let i = 0; i < barCount; i++) {\n        const val = values[i] || 0;\n        const normalized = maxVal > 0 ? val / maxVal : 0;\n        const barH = normalized * chartH;\n        const x = padding + i * (barW + gap);\n        const y = padding + (chartH - barH);\n\n        // Заливка бара\n        ctx.fillStyle = this.colors[i % this.colors.length];\n        ctx.fillRect(x, y, barW, barH);\n\n        // Граница бара\n        ctx.strokeStyle = \"#bfbfbf\";\n        ctx.lineWidth = 1;\n        ctx.strokeRect(x, y, barW, barH);\n\n        // Значение сверху\n        ctx.fillStyle = \"#222\";\n        ctx.font = \"bold 12px Roboto, Arial, sans-serif\";\n        ctx.textAlign = \"center\";\n        ctx.textBaseline = \"bottom\";\n        const labelText = val.toFixed ? val.toFixed(1) : String(val);\n        ctx.fillText(labelText, x + barW / 2, y - 4);\n\n        // Подпись канала снизу\n        ctx.fillStyle = \"#666\";\n        ctx.font = \"12px Roboto, Arial, sans-serif\";\n        ctx.textAlign = \"center\";\n        ctx.textBaseline = \"top\";\n        ctx.fillText(this.t(\"channel\") + \" \" + (i + 1), x + barW / 2, padding + chartH + 6);\n      }\n    },\n\n    handleIncoming(msg) {\n      if (!msg || !msg.topic) return;\n\n      if (msg.topic === \"init\" && msg.language) {\n        this.system.language = msg.language === \"english\" || msg.language === \"en\" ? \"english\" : \"russian\";\n      } else if (msg.language) {\n        this.system.language = msg.language === \"english\" || msg.language === \"en\" ? \"english\" : \"russian\";\n      }\n\n      if (msg.topic === \"bep_data\" || msg.topic === \"data\" || msg.topic === \"node_data\") {\n        this.dataText = typeof msg.payload === \"object\" ? JSON.stringify(msg.payload) : String(msg.payload);\n      }\n\n      if (typeof msg.topic === \"string\" && msg.topic.startsWith(\"Channel \")) {\n        const idx = parseInt(msg.topic.split(\" \")[1], 10) - 1;\n        if (!isNaN(idx) && idx >= 0 && idx < 5) {\n          this.channels[idx] = Number(msg.payload);\n          this.drawBars();\n        }\n      }\n\n      if (msg.topic === \"board_num\") {\n        this.boardNum = Number(msg.payload) || this.boardNum;\n      }\n      if (msg.topic === \"capdac_val\") {\n        this.capdacVal = Number(msg.payload) || this.capdacVal;\n      }\n    },\n  },\n  mounted() {\n    this.$nextTick(() => {\n      this.drawBars();\n\n      // ResizeObserver для адаптивности\n      if (window.ResizeObserver) {\n        const canvas = this.$refs.barCanvas;\n        if (canvas) {\n          this.chartResizeObserver = new ResizeObserver(() => {\n            this.drawBars();\n          });\n          this.chartResizeObserver.observe(canvas.parentElement);\n        }\n      }\n    });\n\n    this.send?.({ topic: \"reread\" });\n\n    this.$socket.on(\"msg-input:\" + this.id, (msg) => {\n      try {\n        this.handleIncoming(msg);\n      } catch (e) {\n        // swallow\n      }\n    });\n  },\n  beforeDestroy() {\n    if (this.chartResizeObserver) {\n      this.chartResizeObserver.disconnect();\n    }\n  },\n};\n</script>\n\n<style scoped>\n.bep-container {\n  display: flex;\n  flex-direction: column;\n  gap: 0;\n  margin: 0;\n  padding: 16px;\n  background-color: #fff;\n}\n\n.bep-header {\n  margin-bottom: 16px;\n}\n\n.bep-title {\n  margin: 0;\n  font-size: 28px;\n  font-weight: 700;\n  color: #1976d2;\n  letter-spacing: -0.5px;\n}\n\n.bep-card {\n  border-radius: 12px;\n  background-color: white;\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);\n  overflow: hidden;\n}\n\n.section {\n  padding: 24px;\n  border-bottom: 1px solid #f0f0f0;\n}\n\n.section:last-child {\n  border-bottom: none;\n}\n\n/* ===== DATA SECTION ===== */\n.section-data {\n  padding: 20px 24px;\n}\n\n.data-field {\n  max-width: 100%;\n}\n\n/* ===== CHANNELS SECTION ===== */\n.section-channels {\n  padding: 24px;\n  background-color: #fafafa;\n}\n\n.channels-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));\n  gap: 16px;\n}\n\n.channel-card {\n  display: flex;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  padding: 16px;\n  background-color: white;\n  border-radius: 8px;\n  border: 1px solid #e8e8e8;\n  transition: all 0.2s ease;\n}\n\n.channel-card:hover {\n  border-color: #1976d2;\n  box-shadow: 0 2px 4px rgba(25, 118, 210, 0.12);\n}\n\n.channel-label {\n  font-size: 12px;\n  font-weight: 600;\n  color: #666;\n  text-transform: uppercase;\n  letter-spacing: 0.5px;\n  margin-bottom: 8px;\n}\n\n.channel-value {\n  font-size: 20px;\n  color: #1976d2;\n  font-weight: 700;\n}\n\n/* ===== MAIN SECTION (Chart + Controls) ===== */\n.section-main {\n  padding: 24px;\n  display: grid;\n  grid-template-columns: 2fr 1fr;\n  gap: 24px;\n  align-items: start;\n}\n\n.chart-container {\n  display: flex;\n  flex-direction: column;\n}\n\n.chart-wrap {\n  display: flex;\n  justify-content: center;\n  align-items: center;\n  border-radius: 8px;\n  background: white;\n  border: 1px solid #e8e8e8;\n  overflow: hidden;\n  height: 300px;\n}\n\n.chart-wrap canvas {\n  width: 100%;\n  height: 100%;\n  display: block;\n}\n\n.controls-panel {\ndisplay: flex;\nflex-direction: column;\nheight: 100%;\n}\n\n.controls-group {\ndisplay: flex;\nflex-direction: column;\ngap: 0;\npadding: 0;\nbackground-color: transparent;\nborder-radius: 0;\nborder: none;\n}\n\n.controls-title {\nmargin: 0 0 16px 0;\nfont-size: 14px;\nfont-weight: 600;\ncolor: #666;\ntext-transform: uppercase;\nletter-spacing: 0.5px;\n}\n\n.control-field {\nwidth: 100%;\nmargin-bottom: 16px;\n}\n\n.control-field:last-of-type {\nmargin-bottom: 0;\n}\n\n/* ===== BUTTONS SECTION ===== */\n.section-buttons {\n  padding: 24px;\n  background-color: #fafafa;\n}\n\n.buttons-grid {\n  display: grid;\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\n  gap: 12px;\n}\n\n.btn {\n  font-size: 14px;\n  font-weight: 600;\n  padding: 10px 16px !important;\n  height: 44px !important;\n  border-radius: 8px !important;\n  color: white !important;\n  text-transform: uppercase;\n  letter-spacing: 0.5px;\n  transition: all 0.2s ease;\n  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);\n}\n\n.btn:hover {\n  transform: translateY(-2px);\n  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);\n}\n\n.btn:active {\n  transform: translateY(0);\n}\n\n.btn-start {\n  background: linear-gradient(135deg, #49c514 0%, #3aa80e 100%) !important;\n}\n\n.btn-stop {\n  background: linear-gradient(135deg, #e53935 0%, #d32f2f 100%) !important;\n}\n\n.btn-single {\n  background: linear-gradient(135deg, #03a9f4 0%, #0288d1 100%) !important;\n}\n\n.btn-capdac {\n  background: linear-gradient(135deg, #9c27b0 0%, #7b1fa2 100%) !important;\n}\n\n/* ===== RESPONSIVE ===== */\n@media (max-width: 768px) {\n  .bep-container {\n    padding: 12px;\n  }\n\n  .section {\n    padding: 16px;\n  }\n\n  .section-main {\n    grid-template-columns: 1fr;\n    gap: 16px;\n  }\n\n  .channels-grid {\n    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));\n    gap: 12px;\n  }\n\n  .buttons-grid {\n    grid-template-columns: repeat(2, 1fr);\n  }\n\n  .chart-wrap {\n    height: 250px;\n  }\n}\n\n@media (max-width: 480px) {\n  .bep-title {\n    font-size: 22px;\n  }\n\n  .channels-grid {\n    grid-template-columns: repeat(2, 1fr);\n  }\n\n  .buttons-grid {\n    grid-template-columns: 1fr;\n  }\n\n  .section-main {\n    gap: 12px;\n  }\n\n  .section {\n    padding: 12px;\n  }\n}\n</style>",
+        "format": "<template>\n  <v-container class=\"bep-root pa-2\" fluid>\n\n    <div class=\"bep-header mb-2\">\n      <div class=\"d-flex align-center flex-wrap\" style=\"gap:6px;\">\n        <h1 class=\"page-title\">{{ tr('title') }}</h1>\n        <v-chip :color=\"proc.running ? 'success' : 'error'\" variant=\"flat\" size=\"small\">\n          <v-icon start size=\"12\">{{ proc.running ? 'mdi-circle' : 'mdi-circle-outline' }}</v-icon>\n          {{ proc.running ? tr('proc_running') : tr('proc_stopped') }}\n        </v-chip>\n        <v-chip v-if=\"proc.uptime_s > 0\" color=\"blue-grey\" variant=\"outlined\" size=\"small\">\n          {{ tr('uptime') }}: {{ fmtUptime(proc.uptime_s) }}\n        </v-chip>\n        <v-chip v-if=\"proc.packets > 0\" color=\"blue-grey\" variant=\"outlined\" size=\"small\">\n          {{ tr('packets') }}: {{ proc.packets }}\n        </v-chip>\n      </div>\n      <v-alert v-if=\"proc.error_code\" type=\"error\" density=\"compact\" class=\"mt-1\" closable\n        @click:close=\"proc.error_code = ''\">\n        <strong>{{ proc.error_code }}</strong>: {{ proc.error_msg }}\n      </v-alert>\n      <v-alert v-if=\"execError\" type=\"warning\" density=\"compact\" class=\"mt-1\" closable @click:close=\"execError = ''\">\n        {{ execError }}\n      </v-alert>\n    </div>\n\n    <v-row class=\"mb-2\" dense>\n      <v-col cols=\"12\" md=\"4\">\n        <v-card class=\"dashboard-card pa-3 h-100\" elevation=\"0\" rounded=\"lg\">\n          <div class=\"sec-title mb-2\">\n            <v-icon size=\"14\" class=\"mr-1\">mdi-map-marker-radius</v-icon>\n            {{ tr('sensor_map') }}\n          </div>\n          <div class=\"d-flex justify-center align-center sensor-map-wrap\">\n            <svg viewBox=\"0 0 220 220\" class=\"sensor-map-svg\">\n              <circle cx=\"110\" cy=\"110\" r=\"100\" fill=\"#f8fbff\" stroke=\"#c7d3df\" stroke-width=\"2\" />\n              <circle cx=\"110\" cy=\"110\" r=\"72\" fill=\"none\" stroke=\"#dbe5ee\" stroke-width=\"1\" stroke-dasharray=\"4 3\" />\n              <circle cx=\"110\" cy=\"110\" r=\"50\" fill=\"#d7ebff\" stroke=\"#1976d2\" stroke-width=\"2\" />\n              <text x=\"110\" y=\"114\" text-anchor=\"middle\" font-size=\"9\" fill=\"#1565c0\" font-weight=\"bold\">шпиндель</text>\n\n              <g transform=\"translate(110,110) rotate(-135) translate(0,-82)\">\n                <rect x=\"-14\" y=\"-9\" width=\"28\" height=\"18\" rx=\"4\" :fill=\"sFill(0)\" stroke=\"white\" stroke-width=\"1\" />\n                <text x=\"0\" y=\"4\" text-anchor=\"middle\" font-size=\"8\" fill=\"white\" font-weight=\"bold\">{{ sAbbr(0) }}</text>\n              </g>\n              <g transform=\"translate(110,110) rotate(-45) translate(0,-82)\">\n                <rect x=\"-14\" y=\"-9\" width=\"28\" height=\"18\" rx=\"4\" :fill=\"sFill(1)\" stroke=\"white\" stroke-width=\"1\" />\n                <text x=\"0\" y=\"4\" text-anchor=\"middle\" font-size=\"8\" fill=\"white\" font-weight=\"bold\">{{ sAbbr(1) }}</text>\n              </g>\n              <g transform=\"translate(110,110) rotate(135) translate(0,-82)\">\n                <rect x=\"-14\" y=\"-9\" width=\"28\" height=\"18\" rx=\"4\" :fill=\"sFill(2)\" stroke=\"white\" stroke-width=\"1\" />\n                <text x=\"0\" y=\"4\" text-anchor=\"middle\" font-size=\"8\" fill=\"white\" font-weight=\"bold\">{{ sAbbr(2) }}</text>\n              </g>\n              <g transform=\"translate(110,110) rotate(45) translate(0,-82)\">\n                <rect x=\"-14\" y=\"-9\" width=\"28\" height=\"18\" rx=\"4\" :fill=\"sFill(3)\" stroke=\"white\" stroke-width=\"1\" />\n                <text x=\"0\" y=\"4\" text-anchor=\"middle\" font-size=\"8\" fill=\"white\" font-weight=\"bold\">{{ sAbbr(3) }}</text>\n              </g>\n              <rect x=\"190\" y=\"101\" width=\"28\" height=\"18\" rx=\"4\" :fill=\"sFill(4)\" stroke=\"white\" stroke-width=\"1\" />\n              <text x=\"204\" y=\"113\" text-anchor=\"middle\" font-size=\"8\" fill=\"white\" font-weight=\"bold\">{{ sAbbr(4) }}</text>\n              <line x1=\"188\" y1=\"110\" x2=\"162\" y2=\"110\" stroke=\"#bdbdbd\" stroke-width=\"1\" stroke-dasharray=\"3 2\" />\n              <text x=\"204\" y=\"128\" text-anchor=\"middle\" font-size=\"7\" fill=\"#9e9e9e\">ос.</text>\n\n              <text x=\"68\" y=\"90\" text-anchor=\"middle\" font-size=\"9\" fill=\"#424242\">{{ fmtShort(0) }}</text>\n              <text x=\"152\" y=\"90\" text-anchor=\"middle\" font-size=\"9\" fill=\"#424242\">{{ fmtShort(1) }}</text>\n              <text x=\"68\" y=\"136\" text-anchor=\"middle\" font-size=\"9\" fill=\"#424242\">{{ fmtShort(2) }}</text>\n              <text x=\"152\" y=\"136\" text-anchor=\"middle\" font-size=\"9\" fill=\"#424242\">{{ fmtShort(3) }}</text>\n            </svg>\n          </div>\n          <div class=\"legend-grid mt-1\">\n            <div v-for=\"(s, i) in localSensors\" :key=\"i\" class=\"legend-item\">\n              <span class=\"legend-dot\" :style=\"{ background: sFill(i) }\"></span>\n              <span class=\"legend-text\">{{ s.label }}: <strong>{{ fmtVal(i) }}</strong></span>\n            </div>\n          </div>\n        </v-card>\n      </v-col>\n\n      <v-col cols=\"12\" md=\"8\">\n        <v-card class=\"dashboard-card pa-3 h-100\" elevation=\"0\" rounded=\"lg\">\n          <div class=\"sec-title mb-2\">\n            <v-icon size=\"14\" class=\"mr-1\">mdi-chart-bar</v-icon>\n            {{ tr('chart_title') }}\n          </div>\n          <div class=\"chart-wrap\">\n            <canvas ref=\"barCanvas\"></canvas>\n          </div>\n        </v-card>\n      </v-col>\n    </v-row>\n\n    <div class=\"bottom-layout\">\n      <section class=\"dashboard-card bottom-card control-card\">\n        <div class=\"bottom-title\">\n          <span class=\"bottom-title__icon\">&#9881;</span>\n          <div class=\"sec-title\">{{ tr('control_title') }}</div>\n        </div>\n\n        <div class=\"control-section\">\n          <div class=\"field-lbl control-label\">{{ tr('process_ctrl') }}</div>\n          <div class=\"plain-grid\">\n            <button type=\"button\" class=\"plain-btn plain-btn--success\" :disabled=\"procStarting\" @click=\"startProcess\">\n              <span class=\"plain-btn__icon\">&#9654;</span>\n              <span class=\"plain-btn__text\">{{ tr('proc_start') }}</span>\n            </button>\n            <button type=\"button\" class=\"plain-btn plain-btn--danger\" @click=\"stopProcess\">\n              <span class=\"plain-btn__icon\">&#9632;</span>\n              <span class=\"plain-btn__text\">{{ tr('proc_stop') }}</span>\n            </button>\n            <button type=\"button\" class=\"plain-btn plain-btn--ghost plain-btn--wide\" @click=\"reloadCfg\">\n              <span class=\"plain-btn__icon\">&#8635;</span>\n              <span class=\"plain-btn__text\">{{ tr('reload_cfg') }}</span>\n            </button>\n          </div>\n        </div>\n\n        <div class=\"control-divider\"></div>\n\n        <div class=\"control-section\">\n          <div class=\"field-lbl control-label\">{{ tr('meas_ctrl') }}</div>\n          <div class=\"plain-grid\">\n            <button type=\"button\" class=\"plain-btn plain-btn--success\" @click=\"onStart\">\n              <span class=\"plain-btn__icon\">&#9654;</span>\n              <span class=\"plain-btn__text\">{{ tr('start') }}</span>\n            </button>\n            <button type=\"button\" class=\"plain-btn plain-btn--danger\" @click=\"onStop\">\n              <span class=\"plain-btn__icon\">&#9632;</span>\n              <span class=\"plain-btn__text\">{{ tr('stop') }}</span>\n            </button>\n            <button type=\"button\" class=\"plain-btn plain-btn--blue\" @click=\"onStartSingle\">\n              <span class=\"plain-btn__text\">{{ tr('start_single') }}</span>\n            </button>\n            <button type=\"button\" class=\"plain-btn plain-btn--purple\" @click=\"onStartCapdac\">\n              <span class=\"plain-btn__text\">{{ tr('start_capdac') }}</span>\n            </button>\n          </div>\n        </div>\n\n        <div class=\"control-divider\"></div>\n\n        <div class=\"control-section\">\n          <div class=\"field-lbl control-label\">{{ tr('board_settings') }}</div>\n          <div class=\"plain-grid\">\n            <input class=\"plain-input\" v-model.number=\"boardNum\" type=\"number\" :placeholder=\"tr('board_num')\" @change=\"boardChanged\">\n            <input class=\"plain-input\" v-model.number=\"capdacVal\" type=\"number\" :placeholder=\"tr('capdac_val')\" @change=\"capdacChanged\">\n          </div>\n        </div>\n      </section>\n\n      <section class=\"dashboard-card bottom-card bottom-card--config\">\n        <div class=\"config-headline\">\n          <div class=\"bottom-title bottom-title--compact\">\n            <span class=\"bottom-title__icon\">&#8801;</span>\n            <div class=\"sec-title\">{{ tr('sensor_cfg') }}</div>\n          </div>\n          <button type=\"button\" class=\"plain-btn plain-btn--primary plain-btn--save\" :disabled=\"savingConfig\" @click=\"saveConfig\">\n            <span class=\"plain-btn__icon\">&#9635;</span>\n            <span class=\"plain-btn__text\">{{ tr('save') }}</span>\n          </button>\n        </div>\n\n        <div class=\"cfg-head\">\n          <span>{{ tr('col_ch') }}</span>\n          <span>{{ tr('col_label') }}</span>\n          <span>{{ tr('col_canid') }}</span>\n          <span>{{ tr('col_pos') }}</span>\n          <span>{{ tr('col_on') }}</span>\n        </div>\n\n        <div v-for=\"(s, i) in localSensors\" :key=\"i\" class=\"cfg-row\">\n          <div class=\"cfg-cell cfg-cell--channel\">\n            <span class=\"ch-badge\" :style=\"{ background: sFill(i) }\">{{ s.channel }}</span>\n          </div>\n          <div class=\"cfg-field cfg-field--label\">\n            <input class=\"cfg-control\" v-model=\"s.label\" type=\"text\">\n          </div>\n          <div class=\"cfg-field cfg-field--can\">\n            <input class=\"cfg-control\" v-model.number=\"s.can_id\" type=\"number\">\n          </div>\n          <div class=\"cfg-field cfg-field--position\">\n            <select class=\"cfg-control cfg-select\" v-model=\"s.position\">\n              <option v-for=\"opt in positionOptions\" :key=\"opt.value\" :value=\"opt.value\">{{ opt.label }}</option>\n            </select>\n          </div>\n          <div class=\"cfg-cell cfg-cell--switch\">\n            <label class=\"cfg-switch\">\n              <input v-model=\"s.enabled\" type=\"checkbox\">\n              <span class=\"cfg-switch__track\"></span>\n              <span class=\"cfg-switch__thumb\"></span>\n            </label>\n          </div>\n        </div>\n\n        <div v-if=\"proc.unknown_can_ids && proc.unknown_can_ids.length\" class=\"cfg-note\">\n          <strong>{{ tr('unknown_ids') }}:</strong>\n          <span v-for=\"id in proc.unknown_can_ids\" :key=\"id\" class=\"ml-1 font-mono\">\n            0x{{ id.toString(16).toUpperCase() }} ({{ id }})\n          </span>\n          - {{ tr('add_to_cfg') }}\n        </div>\n      </section>\n    </div>\n\n  </v-container>\n</template>\n\n<script>\n  export default {\n  name: \"BepDashboard\",\n\n  data() {\n    return {\n      lang: \"russian\",\n      channels: [0, 0, 0, 0, 0],\n\n      localSensors: [\n        { can_id: 33, channel: 1, position: \"radial_top_left\", label: \"Рад. верх Л\", enabled: true },\n        { can_id: 34, channel: 2, position: \"radial_top_right\", label: \"Рад. верх П\", enabled: true },\n        { can_id: 35, channel: 3, position: \"radial_bot_left\", label: \"Рад. низ Л\", enabled: true },\n        { can_id: 36, channel: 4, position: \"radial_bot_right\", label: \"Рад. низ П\", enabled: true },\n        { can_id: 37, channel: 5, position: \"axial\", label: \"Осевой\", enabled: true },\n      ],\n\n      proc: {\n        ok: false, running: false, uptime_s: 0, packets: 0,\n        error_code: \"\", error_msg: \"\", unknown_can_ids: [], sensors: [],\n      },\n\n      boardNum: 33,\n      capdacVal: 0,\n      procStarting: false,\n      savingConfig: false,\n      execError: \"\",\n      chartResizeObserver: null,\n\n      colors: [\"#1976d2\", \"#0097a7\", \"#388e3c\", \"#7b1fa2\", \"#e64a19\"],\n\n      positionOptions: [\n        { value: \"radial_top_left\",  label: \"Рад. верх Л\" },\n        { value: \"radial_top_right\", label: \"Рад. верх П\" },\n        { value: \"radial_bot_left\",  label: \"Рад. низ Л\" },\n        { value: \"radial_bot_right\", label: \"Рад. низ П\" },\n        { value: \"axial\",            label: \"Осевой\" },\n      ],\n\n      i18nDict: {\n        russian: {\n          title: \"БЕП — Контроль зазора\",\n          proc_running: \"Запущен\", proc_stopped: \"Остановлен\",\n          proc_start: \"Запустить\", proc_stop: \"Остановить\",\n          reload_cfg: \"Перечитать конфиг\",\n          uptime: \"Аптайм\", packets: \"Пакетов\",\n          sensor_map: \"Схема датчиков\", chart_title: \"Показания каналов\",\n          control_title: \"Управление\",\n          process_ctrl: \"Процесс\", meas_ctrl: \"Измерения\",\n          board_settings: \"Параметры платы\",\n          sensor_cfg: \"Конфигурация датчиков\", save: \"Сохранить\",\n          col_ch: \"Кан.\", col_label: \"Название\", col_canid: \"CAN ID\",\n          col_pos: \"Позиция\", col_on: \"Вкл\",\n          start: \"Старт\", stop: \"Стоп\",\n          start_single: \"Старт (single)\", start_capdac: \"Старт (CAPDAC)\",\n          board_num: \"Номер платы\", capdac_val: \"Знач. CAPDAC\",\n          unknown_ids: \"Неизвестные CAN ID\", add_to_cfg: \"добавьте в конфиг\",\n        },\n        english: {\n          title: \"BEP — Gap Control\",\n          proc_running: \"Running\", proc_stopped: \"Stopped\",\n          proc_start: \"Start\", proc_stop: \"Stop\",\n          reload_cfg: \"Reload config\",\n          uptime: \"Uptime\", packets: \"Packets\",\n          sensor_map: \"Sensor Map\", chart_title: \"Channel Readings\",\n          control_title: \"Control\",\n          process_ctrl: \"Process\", meas_ctrl: \"Measurements\",\n          board_settings: \"Board Settings\",\n          sensor_cfg: \"Sensor Configuration\", save: \"Save\",\n          col_ch: \"Ch.\", col_label: \"Label\", col_canid: \"CAN ID\",\n          col_pos: \"Position\", col_on: \"On\",\n          start: \"Start\", stop: \"Stop\",\n          start_single: \"Start (single)\", start_capdac: \"Start (CAPDAC)\",\n          board_num: \"Board number\", capdac_val: \"CAPDAC value\",\n          unknown_ids: \"Unknown CAN IDs\", add_to_cfg: \"add to config\",\n        },\n      },\n    };\n  },\n\n  methods: {\n    tr(key) {\n      var d = this.i18nDict[this.lang] || this.i18nDict.russian;\n      return d[key] !== undefined ? d[key] : key;\n    },\n\n    fmtVal(idx) {\n      var v = this.channels[idx];\n      if (v === undefined || v === null || v === 0) return \"—\";\n      return Number(v).toLocaleString();\n    },\n    fmtShort(idx) {\n      var v = this.channels[idx];\n      if (!v) return \"\";\n      return Number(v).toLocaleString();\n    },\n    fmtUptime(secs) {\n      if (secs < 60) return secs + \"с\";\n      if (secs < 3600) return Math.floor(secs / 60) + \"м \" + (secs % 60) + \"с\";\n      return Math.floor(secs / 3600) + \"ч \" + Math.floor((secs % 3600) / 60) + \"м\";\n    },\n\n    sFill(idx) {\n      var s = this.localSensors[idx];\n      if (!s || !s.enabled) return \"#bdbdbd\";\n      return this.colors[idx % this.colors.length];\n    },\n    sAbbr(idx) {\n      var s = this.localSensors[idx];\n      if (!s) return \"?\";\n      var map = {\n        radial_top_left: \"ВЛ\", radial_top_right: \"ВП\",\n        radial_bot_left: \"НЛ\", radial_bot_right: \"НП\",\n        axial: \"ОС\",\n      };\n      return map[s.position] || String(s.channel);\n    },\n\n    _roundRect(ctx, x, y, w, h, r) {\n      ctx.beginPath();\n      ctx.moveTo(x + r, y);\n      ctx.lineTo(x + w - r, y);\n      ctx.quadraticCurveTo(x + w, y, x + w, y + r);\n      ctx.lineTo(x + w, y + h - r);\n      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);\n      ctx.lineTo(x + r, y + h);\n      ctx.quadraticCurveTo(x, y + h, x, y + h - r);\n      ctx.lineTo(x, y + r);\n      ctx.quadraticCurveTo(x, y, x + r, y);\n      ctx.closePath();\n    },\n\n    drawBars() {\n      var canvas = this.$refs.barCanvas;\n      if (!canvas) return;\n      var ctx = canvas.getContext(\"2d\");\n      var dpr = window.devicePixelRatio || 1;\n      var rect = canvas.getBoundingClientRect();\n      if (!rect.width || !rect.height) return;\n      canvas.width = rect.width * dpr;\n      canvas.height = rect.height * dpr;\n      ctx.scale(dpr, dpr);\n      var W = rect.width, H = rect.height;\n      ctx.clearRect(0, 0, W, H);\n\n      var values = this.channels.map(function(v) {\n        return typeof v === \"number\" ? v : Number(v) || 0;\n      });\n      var maxVal = Math.max.apply(null, values);\n      if (maxVal === 0) maxVal = 1;\n\n      var pad = 30, chartW = W - pad * 2, chartH = H - pad * 2;\n      var n = values.length;\n      var gapW = 10;\n      var barW = (chartW - gapW * (n - 1)) / n;\n\n      ctx.strokeStyle = \"#eef3f7\";\n      ctx.lineWidth = 1;\n      for (var gi = 0; gi <= 4; gi++) {\n        var gy = pad + (chartH * gi) / 4;\n        ctx.beginPath();\n        ctx.moveTo(pad, gy);\n        ctx.lineTo(pad + chartW, gy);\n        ctx.stroke();\n        ctx.fillStyle = \"#8fa1b3\";\n        ctx.font = \"9px Roboto,Arial,sans-serif\";\n        ctx.textAlign = \"right\";\n        ctx.textBaseline = \"middle\";\n        ctx.fillText(Math.round(maxVal * (1 - gi / 4)).toLocaleString(), pad - 3, gy);\n      }\n\n      ctx.strokeStyle = \"#c7d3df\";\n      ctx.lineWidth = 1.5;\n      ctx.beginPath();\n      ctx.moveTo(pad, pad);\n      ctx.lineTo(pad, pad + chartH);\n      ctx.lineTo(pad + chartW, pad + chartH);\n      ctx.stroke();\n\n      for (var i = 0; i < n; i++) {\n        var val = values[i] || 0;\n        var barH = (val / maxVal) * chartH;\n        var x = pad + i * (barW + gapW);\n        var y = pad + chartH - barH;\n        var color = this.colors[i % this.colors.length];\n\n        var grd = ctx.createLinearGradient(x, y, x, y + barH);\n        grd.addColorStop(0, color + \"bb\");\n        grd.addColorStop(1, color);\n        ctx.fillStyle = grd;\n        this._roundRect(ctx, x, y, barW, barH, 3);\n        ctx.fill();\n\n        ctx.fillStyle = \"#1f2933\";\n        ctx.font = \"bold 9px Roboto,Arial,sans-serif\";\n        ctx.textAlign = \"center\";\n        ctx.textBaseline = \"bottom\";\n        ctx.fillText(val.toLocaleString(), x + barW / 2, y - 2);\n\n        var s = this.localSensors[i];\n        var lbl = s ? s.label.slice(0, 7) : (\"К\" + (i + 1));\n        ctx.fillStyle = \"#6b7c8f\";\n        ctx.font = \"8px Roboto,Arial,sans-serif\";\n        ctx.textBaseline = \"top\";\n        ctx.fillText(lbl, x + barW / 2, pad + chartH + 4);\n      }\n    },\n\n    onStart()       { this.send({ payload: \"run\",                                          topic: \"mqtt_cmd\" }); },\n    onStop()        { this.send({ payload: \"stop\",                                         topic: \"mqtt_cmd\" }); },\n    onStartSingle() { this.send({ payload: \"run one \" + this.boardNum,                     topic: \"mqtt_cmd\" }); },\n    onStartCapdac() { this.send({ payload: \"run one \" + this.boardNum + \" \" + this.capdacVal, topic: \"mqtt_cmd\" }); },\n    boardChanged()  { this.send({ topic: \"board_num\",  payload: this.boardNum  }); },\n    capdacChanged() { this.send({ topic: \"capdac_val\", payload: this.capdacVal }); },\n\n    startProcess() {\n      this.procStarting = true;\n      this.execError = \"\";\n      this.send({ topic: \"bep_process\", payload: \"start\" });\n      var self = this;\n      setTimeout(function() { self.procStarting = false; }, 5000);\n    },\n    stopProcess() { this.send({ topic: \"bep_process\", payload: \"stop\"   }); },\n    reloadCfg()   { this.send({ topic: \"bep_process\", payload: \"reload\" }); },\n\n    saveConfig() {\n      this.savingConfig = true;\n      var newCfg = {\n        version: 1,\n        udp_host: \"192.168.1.20\",\n        udp_port: 20001,\n        mqtt_host: \"localhost\",\n        mqtt_port: 1883,\n        status_interval_s: 3,\n        sensors: this.localSensors.map(function(s) {\n          return {\n            can_id: Number(s.can_id), channel: Number(s.channel),\n            position: s.position, label: s.label, enabled: !!s.enabled,\n          };\n        }),\n      };\n      this.send({ topic: \"bep_config_write\", payload: JSON.stringify(newCfg) });\n      var self = this;\n      setTimeout(function() { self.savingConfig = false; }, 2000);\n    },\n\n    handleMsg(msg) {\n      if (!msg || !msg.topic) return;\n\n      if (msg.language) {\n        this.lang = (msg.language === \"english\" || msg.language === \"en\") ? \"english\" : \"russian\";\n      }\n      if (msg.topic === \"init\" && msg.language) {\n        this.lang = (msg.language === \"english\" || msg.language === \"en\") ? \"english\" : \"russian\";\n        return;\n      }\n\n      if (typeof msg.topic === \"string\" && msg.topic.startsWith(\"Channel \")) {\n        var idx = parseInt(msg.topic.split(\" \")[1], 10) - 1;\n        if (!isNaN(idx) && idx >= 0 && idx < 5) {\n          this.channels.splice(idx, 1, Number(msg.payload));\n          this.drawBars();\n        }\n        return;\n      }\n\n      if (msg.topic === \"bep_status\") {\n        var raw = msg.payload;\n        var parsed = (typeof raw === \"string\") ? JSON.parse(raw) : raw;\n        var self = this;\n        Object.keys(parsed).forEach(function(k) {\n          if (k !== \"sensors\") { self.proc[k] = parsed[k]; }\n        });\n        if (parsed.sensors && parsed.sensors.length > 0) {\n          parsed.sensors.forEach(function(srv) {\n            var ch = Number(srv.channel) - 1;\n            if (ch >= 0 && ch < self.localSensors.length) {\n              if (self.localSensors[ch].can_id === srv.can_id) {\n                Object.assign(self.localSensors[ch], srv);\n              }\n            }\n          });\n        }\n        return;\n      }\n\n      if (msg.topic === \"bep_exec_stderr\" || msg.topic === \"bep_exec_error\") {\n        var txt = String(msg.payload || \"\").trim();\n        if (txt) this.execError = txt.slice(0, 400);\n        this.procStarting = false;\n        return;\n      }\n      if (msg.topic === \"bep_exec_stdout\") { this.procStarting = false; return; }\n      if (msg.topic === \"board_num\")  this.boardNum  = Number(msg.payload) || this.boardNum;\n      if (msg.topic === \"capdac_val\") this.capdacVal = Number(msg.payload) || this.capdacVal;\n    },\n  },\n\n  mounted() {\n    var self = this;\n    this.$nextTick(function() {\n      self.drawBars();\n      if (window.ResizeObserver) {\n        var canvas = self.$refs.barCanvas;\n        if (canvas && canvas.parentElement) {\n          self.chartResizeObserver = new ResizeObserver(function() { self.drawBars(); });\n          self.chartResizeObserver.observe(canvas.parentElement);\n        }\n      }\n    });\n    this.send({ topic: \"reread\" });\n    this.$socket.on(\"msg-input:\" + this.id, function(msg) {\n      try { self.handleMsg(msg); } catch (e) { /* ignore */ }\n    });\n  },\n\n  beforeDestroy() {\n    if (this.chartResizeObserver) this.chartResizeObserver.disconnect();\n  },\n};\n</script>\n\n<style scoped>\n  .bep-root {\n    background: #ffffff;\n    min-height: 100%;\n    color: #1f2933;\n  }\n\n  .dashboard-card {\n    background: #ffffff;\n    border: 1px solid #e5edf5;\n    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.06), 0 4px 10px rgba(15, 23, 42, 0.03);\n  }\n\n  .control-card {\n    /* убираем align-self: flex-start — пусть растягивается по высоте соседа */\n    width: 100%;\n  }\n\n  /* ── заголовок страницы ── */\n  .page-title {\n    font-size: 20px;\n    font-weight: 700;\n    color: #0d47a1;\n    letter-spacing: -0.3px;\n  }\n\n  .bep-header {\n    padding-bottom: 2px;\n  }\n\n  .sec-title {\n    font-size: 12px;\n    /* было 11px */\n    font-weight: 700;\n    color: #607d8b;\n    text-transform: uppercase;\n    letter-spacing: 0.8px;\n    display: flex;\n    align-items: center;\n  }\n\n  .field-lbl {\n    font-size: 11px;\n    font-weight: 700;\n    color: #78909c;\n    text-transform: uppercase;\n    letter-spacing: 0.5px;\n  }\n\n  /* ── схема датчиков — немного больше ── */\n  .sensor-map-wrap {\n    min-height: 178px;\n    /* было 158px */\n    border: 1px solid #edf2f7;\n    border-radius: 10px;\n    background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);\n  }\n\n  .sensor-map-svg {\n    width: 164px;\n    /* было 152px */\n    height: 164px;\n  }\n\n  /* ── график — немного выше ── */\n  .chart-wrap {\n    width: 100%;\n    height: 218px;\n    /* было 192px */\n    border: 1px solid #e3edf7;\n    border-radius: 10px;\n    background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);\n    overflow: hidden;\n  }\n\n  .chart-wrap canvas {\n    width: 100%;\n    height: 100%;\n    display: block;\n  }\n\n  /* ── легенда — шрифт чуть больше ── */\n  .legend-grid {\n    display: flex;\n    flex-wrap: wrap;\n    gap: 4px 10px;\n  }\n\n  .legend-item {\n    display: flex;\n    align-items: center;\n    gap: 4px;\n    font-size: 11px;\n    /* было 10px */\n    color: #455a64;\n  }\n\n  .legend-dot {\n    width: 7px;\n    height: 7px;\n    border-radius: 50%;\n    flex-shrink: 0;\n  }\n\n  .legend-text {\n    line-height: 1.3;\n  }\n\n  /* ── нижняя секция ── */\n  .control-section {\n    display: block;\n    width: 100%;\n  }\n\n  .bottom-layout {\n    display: grid;\n    grid-template-columns: minmax(300px, 4fr) minmax(0, 8fr);\n    gap: 12px;\n    align-items: stretch;\n    /* было start — теперь обе карточки одинаковой высоты */\n  }\n\n  .bottom-card {\n    padding: 12px 14px;\n    /* одинаковые отступы для обеих карточек */\n    border-radius: 12px;\n    box-sizing: border-box;\n  }\n\n  .bottom-card--config {\n    min-width: 0;\n  }\n\n  /* заголовок нижних блоков — одинаковое расстояние сверху */\n  .bottom-title {\n    display: flex;\n    align-items: center;\n    gap: 6px;\n    min-height: 44px; /* ← равно высоте кнопки «Сохранить» */\n    margin-bottom: 10px;\n    padding-top: 0;\n  }\n  \n  .bottom-title--compact { margin-bottom: 0; }\n\n  .bottom-title__icon {\n    color: #607d8b;\n    font-size: 12px;\n    line-height: 1;\n  }\n\n  .control-label {\n    display: block;\n    margin-bottom: 6px;\n  }\n\n  .control-divider {\n    height: 1px;\n    margin: 8px 0;\n    background: #edf2f7;\n  }\n\n  /* ── кнопки ── */\n  .plain-grid {\n    display: grid;\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n    gap: 8px;\n    align-items: center;\n    width: 100%;\n  }\n\n  .plain-btn {\n    appearance: none;\n    display: inline-flex;\n    align-items: center;\n    justify-content: center;\n    gap: 6px;\n    width: 100%;\n    min-width: 0;\n    height: 44px;\n    min-height: 44px;\n    max-height: 44px;\n    padding: 0 10px;\n    box-sizing: border-box;\n    border: 1px solid transparent;\n    border-radius: 4px;\n    color: #ffffff;\n    font: inherit;\n    font-size: 13px;\n    font-weight: 600;\n    letter-spacing: 0;\n    line-height: 42px;\n    white-space: nowrap;\n    overflow: hidden;\n    text-overflow: ellipsis;\n    cursor: pointer;\n    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.16);\n    transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;\n  }\n\n  .plain-btn:hover {\n    transform: translateY(-1px);\n    box-shadow: 0 6px 12px rgba(15, 23, 42, 0.14);\n  }\n\n  .plain-btn:disabled {\n    opacity: 0.7;\n    cursor: default;\n    transform: none;\n  }\n\n  .plain-btn__icon {\n    flex: 0 0 auto;\n    font-size: 10px;\n    line-height: 1;\n  }\n\n  .plain-btn__text {\n    min-width: 0;\n    overflow: hidden;\n    text-overflow: ellipsis;\n  }\n\n  .plain-btn--wide {\n    grid-column: 1 / -1;\n  }\n\n  .plain-btn--success {\n    background: #a9db45;\n    color: #101010;\n  }\n\n  .plain-btn--danger {\n    background: #ff5252;\n  }\n\n  .plain-btn--blue {\n    background: #1976d2;\n  }\n\n  .plain-btn--purple {\n    background: #7b1fa2;\n  }\n\n  .plain-btn--primary {\n    background: #1098d5;\n  }\n\n  .plain-btn--ghost {\n    background: #ffffff;\n    color: #4d6678;\n    border-color: #7b96aa;\n    box-shadow: none;\n  }\n\n  /* ── поля ввода ── */\n  .plain-input {\n    width: 100%;\n    box-sizing: border-box;\n    height: 44px;\n    min-height: 44px;\n    max-height: 44px;\n    padding: 0 12px;\n    border: 1px solid #aeb8c2;\n    border-radius: 4px;\n    background: #ffffff;\n    color: #1f2933;\n    font: inherit;\n    font-size: 13px;\n    outline: none;\n  }\n\n  .plain-input:focus {\n    border-color: #039bd3;\n    box-shadow: 0 0 0 1px #039bd3;\n  }\n\n  /* ── конфигурация ── */\n  .plain-btn--save {\n    min-width: 120px;\n    max-width: 140px;\n  }\n\n  .config-headline {\n    display: flex;\n    align-items: center;\n    justify-content: space-between;\n    gap: 12px;\n    min-height: 44px; /* ← то же самое */\n    margin-bottom: 10px;\n  }\n\n  .cfg-head {\n    display: grid;\n    grid-template-columns: 48px minmax(160px, 1.35fr) minmax(80px, 0.7fr) minmax(140px, 1fr) 56px;\n    gap: 10px;\n    align-items: center;\n    font-size: 10px;\n    font-weight: 700;\n    color: #78909c;\n    text-transform: uppercase;\n    letter-spacing: 0.6px;\n    padding: 0 8px 6px;\n    margin-bottom: 4px;\n    border-bottom: 1px solid #edf2f7;\n  }\n\n  .cfg-row {\n    display: grid;\n    grid-template-columns: 48px minmax(160px, 1.35fr) minmax(80px, 0.7fr) minmax(140px, 1fr) 56px;\n    gap: 10px;\n    align-items: center;\n    padding: 4px 0;\n    margin-bottom: 4px;\n  }\n\n  .cfg-head>*,\n  .cfg-row>* {\n    min-width: 0;\n  }\n\n  .cfg-field {\n    min-width: 0;\n  }\n\n  .cfg-control {\n    width: 100%;\n    box-sizing: border-box;\n    height: 36px;\n    padding: 0 10px;\n    border: 1px solid #aeb8c2;\n    border-radius: 4px;\n    background: #ffffff;\n    color: #1f2933;\n    font: inherit;\n    font-size: 13px;\n    outline: none;\n    appearance: none;\n  }\n\n  .cfg-control:focus {\n    border-color: #039bd3;\n    box-shadow: 0 0 0 1px #039bd3;\n  }\n\n  .cfg-select {\n    padding-right: 32px;\n    background-image:\n      linear-gradient(45deg, transparent 50%, #7f8f9d 50%),\n      linear-gradient(135deg, #7f8f9d 50%, transparent 50%);\n    background-position: calc(100% - 16px) 50%, calc(100% - 10px) 50%;\n    background-size: 5px 5px, 5px 5px;\n    background-repeat: no-repeat;\n  }\n\n  .cfg-row+.cfg-row {\n    border-top: 1px solid #edf2f7;\n    padding-top: 6px;\n  }\n\n  .cfg-cell--channel {\n    display: flex;\n    align-items: center;\n    justify-content: center;\n  }\n\n  .cfg-cell--switch {\n    display: flex;\n    align-items: center;\n    justify-content: center;\n  }\n\n  /* ── тоггл ── */\n  .cfg-switch {\n    position: relative;\n    display: inline-flex;\n    width: 40px;\n    height: 22px;\n  }\n\n  .cfg-switch input {\n    position: absolute;\n    inset: 0;\n    margin: 0;\n    opacity: 0;\n    cursor: pointer;\n  }\n\n  .cfg-switch__track {\n    position: absolute;\n    inset: 4px 0;\n    border-radius: 999px;\n    background: #b7c7d3;\n    transition: background 0.18s ease;\n  }\n\n  .cfg-switch__thumb {\n    position: absolute;\n    top: 2px;\n    left: 2px;\n    width: 18px;\n    height: 18px;\n    border-radius: 50%;\n    background: #7b8c98;\n    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);\n    transition: transform 0.18s ease, background 0.18s ease;\n  }\n\n  .cfg-switch input:checked~.cfg-switch__track {\n    background: #b6e1f4;\n  }\n\n  .cfg-switch input:checked~.cfg-switch__thumb {\n    transform: translateX(18px);\n    background: #1098d5;\n  }\n\n  /* ── прочее ── */\n  .cfg-note {\n    margin-top: 8px;\n    padding: 8px 10px;\n    border: 1px solid #d6e7f3;\n    border-radius: 8px;\n    background: #f5fbff;\n    color: #4a6676;\n    font-size: 12px;\n    line-height: 1.4;\n  }\n\n  .ch-badge {\n    width: 26px;\n    height: 26px;\n    border-radius: 50%;\n    display: inline-flex;\n    align-items: center;\n    justify-content: center;\n    color: #ffffff;\n    font-size: 10px;\n    font-weight: 700;\n    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.12);\n  }\n\n  .font-mono {\n    font-family: monospace;\n  }\n\n  .h-100 {\n    height: 100%;\n  }\n\n  @media (max-width: 960px) {\n    .bottom-layout {\n      grid-template-columns: 1fr;\n    }\n\n    .cfg-head {\n      display: none;\n    }\n\n    .cfg-row {\n      grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr);\n      grid-template-areas:\n        \"channel label    label\"\n        \"channel can      position\"\n        \"channel toggle   toggle\";\n      align-items: start;\n    }\n\n    .cfg-cell--channel {\n      grid-area: channel;\n      justify-content: flex-start;\n      padding-top: 4px;\n    }\n\n    .cfg-field--label {\n      grid-area: label;\n    }\n\n    .cfg-field--can {\n      grid-area: can;\n    }\n\n    .cfg-field--position {\n      grid-area: position;\n    }\n\n    .cfg-cell--switch {\n      grid-area: toggle;\n      justify-content: flex-start;\n      padding-left: 2px;\n    }\n  }\n\n  @media (max-width: 768px) {\n    .chart-wrap {\n      height: 170px;\n    }\n  }\n\n  @media (max-width: 600px) {\n    .plain-grid {\n      grid-template-columns: 1fr;\n    }\n\n    .plain-btn--wide {\n      grid-column: auto;\n    }\n\n    .config-headline {\n      flex-direction: column;\n      align-items: stretch;\n    }\n\n    .plain-btn--save {\n      max-width: none;\n    }\n\n    .chart-wrap {\n      height: 150px;\n    }\n\n    .sensor-map-wrap {\n      min-height: 160px;\n    }\n\n    .sensor-map-svg {\n      width: 148px;\n      height: 148px;\n    }\n  }\n</style>",
         "storeOutMessages": true,
         "passthru": false,
         "resendOnRefresh": true,
         "templateScope": "local",
         "className": "",
-        "x": 2250,
-        "y": 780,
+        "x": 3030,
+        "y": 820,
         "wires": [
             [
-                "c119d3d836e3f9c5",
-                "fdc5d5de98540ce9"
-            ]
-        ]
-    },
-    {
-        "id": "c119d3d836e3f9c5",
-        "type": "switch",
-        "z": "5bbcbebf6ff74a86",
-        "g": "52568354c3badd48",
-        "name": "cmd?",
-        "property": "topic",
-        "propertyType": "msg",
-        "rules": [
-            {
-                "t": "eq",
-                "v": "mqtt_cmd",
-                "vt": "str"
-            },
-            {
-                "t": "eq",
-                "v": "reread",
-                "vt": "str"
-            }
-        ],
-        "checkall": "true",
-        "repair": false,
-        "outputs": 2,
-        "x": 2390,
-        "y": 780,
-        "wires": [
-            [
-                "d7ecfaf6acff715e"
-            ],
-            [
-                "07ff7bd3ca490729"
+                "fdc5d5de98540ce9",
+                "bc6eff304fcf6a8e"
             ]
         ]
     },
@@ -7092,8 +7062,8 @@
         "from": "",
         "to": "",
         "reg": false,
-        "x": 2070,
-        "y": 860,
+        "x": 2850,
+        "y": 900,
         "wires": [
             [
                 "919ad73d0499e421"
@@ -7110,8 +7080,8 @@
             "62e963d0dec6c8e9",
             "07ff7bd3ca490729"
         ],
-        "x": 1975,
-        "y": 860,
+        "x": 2755,
+        "y": 900,
         "wires": [
             [
                 "125b1570b6b709d9"
@@ -7128,8 +7098,8 @@
         "links": [
             "49281f13d2e68275"
         ],
-        "x": 2495,
-        "y": 880,
+        "x": 3295,
+        "y": 780,
         "wires": []
     },
     {
@@ -7147,8 +7117,8 @@
         "correl": "",
         "expiry": "",
         "broker": "ed4f1a176f6d33ed",
-        "x": 2520,
-        "y": 720,
+        "x": 3340,
+        "y": 740,
         "wires": []
     },
     {
@@ -7164,8 +7134,8 @@
         "complete": "false",
         "statusVal": "",
         "statusType": "auto",
-        "x": 2420,
-        "y": 640,
+        "x": 3200,
+        "y": 680,
         "wires": []
     },
     {
@@ -7182,8 +7152,8 @@
         "rap": true,
         "rh": 0,
         "inputs": 0,
-        "x": 1660,
-        "y": 860,
+        "x": 2440,
+        "y": 900,
         "wires": [
             [
                 "84983c310254256f"
@@ -7204,8 +7174,8 @@
         "rap": true,
         "rh": 0,
         "inputs": 0,
-        "x": 1660,
-        "y": 820,
+        "x": 2440,
+        "y": 860,
         "wires": [
             [
                 "84983c310254256f"
@@ -7226,8 +7196,8 @@
         "rap": true,
         "rh": 0,
         "inputs": 0,
-        "x": 1660,
-        "y": 780,
+        "x": 2440,
+        "y": 820,
         "wires": [
             [
                 "84983c310254256f"
@@ -7248,8 +7218,8 @@
         "rap": true,
         "rh": 0,
         "inputs": 0,
-        "x": 1660,
-        "y": 740,
+        "x": 2440,
+        "y": 780,
         "wires": [
             [
                 "84983c310254256f"
@@ -7270,8 +7240,8 @@
         "rap": true,
         "rh": 0,
         "inputs": 0,
-        "x": 1660,
-        "y": 680,
+        "x": 2440,
+        "y": 720,
         "wires": [
             [
                 "84983c310254256f"
@@ -7336,8 +7306,8 @@
         "from": "",
         "to": "",
         "reg": false,
-        "x": 1860,
-        "y": 780,
+        "x": 2640,
+        "y": 820,
         "wires": [
             [
                 "6bf3697a49fd5702",
@@ -7358,8 +7328,8 @@
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 2040,
-        "y": 780,
+        "x": 2820,
+        "y": 820,
         "wires": [
             [
                 "919ad73d0499e421"
@@ -7380,8 +7350,8 @@
         "targetType": "full",
         "statusVal": "",
         "statusType": "auto",
-        "x": 2020,
-        "y": 660,
+        "x": 2800,
+        "y": 700,
         "wires": []
     },
     {
@@ -8895,6 +8865,399 @@
         "statusType": "auto",
         "x": 1830,
         "y": 1060,
+        "wires": []
+    },
+    {
+        "id": "bep_mqtt_status_in",
+        "type": "mqtt in",
+        "z": "5bbcbebf6ff74a86",
+        "g": "52568354c3badd48",
+        "name": "bep/status",
+        "topic": "bep/status",
+        "qos": "2",
+        "datatype": "auto-detect",
+        "broker": "ed4f1a176f6d33ed",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 2660,
+        "y": 940,
+        "wires": [
+            [
+                "bep_status_rename"
+            ]
+        ]
+    },
+    {
+        "id": "bep_status_rename",
+        "type": "change",
+        "z": "5bbcbebf6ff74a86",
+        "g": "52568354c3badd48",
+        "name": "→ bep_status",
+        "rules": [
+            {
+                "t": "set",
+                "p": "topic",
+                "pt": "msg",
+                "to": "bep_status",
+                "tot": "str"
+            }
+        ],
+        "x": 2820,
+        "y": 940,
+        "wires": [
+            [
+                "919ad73d0499e421"
+            ]
+        ]
+    },
+    {
+        "id": "672d1d6cb7177d75",
+        "type": "switch",
+        "z": "5bbcbebf6ff74a86",
+        "name": "cmd?",
+        "property": "topic",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "mqtt_cmd",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "reread",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "bep_process",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "bep_config_write",
+                "vt": "str"
+            }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 4,
+        "x": 3270,
+        "y": 1240,
+        "wires": [
+            [],
+            [],
+            [
+                "bep_process_router"
+            ],
+            [
+                "bep_cfg_write_fn"
+            ]
+        ]
+    },
+    {
+        "id": "bep_process_router",
+        "type": "switch",
+        "z": "5bbcbebf6ff74a86",
+        "name": "start/stop/reload?",
+        "property": "payload",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "start",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "stop",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "reload",
+                "vt": "str"
+            }
+        ],
+        "checkall": "false",
+        "repair": false,
+        "outputs": 3,
+        "x": 3470,
+        "y": 1260,
+        "wires": [
+            [
+                "bep_exec_start"
+            ],
+            [
+                "bep_exec_stop"
+            ],
+            [
+                "bep_mqtt_reload"
+            ]
+        ]
+    },
+    {
+        "id": "bep_exec_start",
+        "type": "exec",
+        "z": "5bbcbebf6ff74a86",
+        "command": "python",
+        "addpay": false,
+        "append": "",
+        "useSpawn": "true",
+        "timer": "",
+        "winHide": false,
+        "oldrc": false,
+        "name": "start nc3_bep.py",
+        "x": 3860,
+        "y": 1140,
+        "wires": [
+            [
+                "bep_stdout_fn"
+            ],
+            [
+                "bep_stderr_fn"
+            ],
+            [
+                "bep_exitcode_fn"
+            ]
+        ]
+    },
+    {
+        "id": "bep_set_script",
+        "type": "change",
+        "z": "5bbcbebf6ff74a86",
+        "name": "set script path",
+        "rules": [
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "C:\\NC3\\nc3_bep.py",
+                "tot": "str"
+            }
+        ],
+        "x": 3940,
+        "y": 980,
+        "wires": [
+            [
+                "bep_exec_start"
+            ]
+        ]
+    },
+    {
+        "id": "bep_exec_stop",
+        "type": "function",
+        "z": "5bbcbebf6ff74a86",
+        "name": "build stop cmd",
+        "func": "// Сначала пробуем MQTT graceful stop\nnode.send([{topic:'bep/control', payload:'stop'}]);\n// Через 2 сек — taskkill если PID известен\nvar pid = flow.get('bep_pid');\nif (pid) {\n    setTimeout(function(){\n        node.send([null, {payload: 'taskkill /PID ' + pid + ' /F', topic:'kill'}]);\n    }, 2000);\n}\nreturn null;",
+        "outputs": 2,
+        "x": 3860,
+        "y": 1195,
+        "wires": [
+            [
+                "bep_mqtt_ctrl_out"
+            ],
+            [
+                "bep_exec_kill"
+            ]
+        ]
+    },
+    {
+        "id": "bep_mqtt_ctrl_out",
+        "type": "mqtt out",
+        "z": "5bbcbebf6ff74a86",
+        "name": "bep/control",
+        "topic": "bep/control",
+        "qos": "2",
+        "retain": "",
+        "broker": "ed4f1a176f6d33ed",
+        "x": 4090,
+        "y": 1180,
+        "wires": []
+    },
+    {
+        "id": "bep_exec_kill",
+        "type": "exec",
+        "z": "5bbcbebf6ff74a86",
+        "command": "",
+        "addpay": true,
+        "append": "",
+        "useSpawn": "false",
+        "timer": "5",
+        "winHide": false,
+        "oldrc": false,
+        "name": "taskkill",
+        "x": 4070,
+        "y": 1240,
+        "wires": [
+            [],
+            [],
+            []
+        ]
+    },
+    {
+        "id": "bep_mqtt_reload",
+        "type": "mqtt out",
+        "z": "5bbcbebf6ff74a86",
+        "name": "bep/control reload",
+        "topic": "bep/control",
+        "qos": "2",
+        "retain": "",
+        "broker": "ed4f1a176f6d33ed",
+        "x": 3860,
+        "y": 1250,
+        "wires": []
+    },
+    {
+        "id": "bep_stdout_fn",
+        "type": "function",
+        "z": "5bbcbebf6ff74a86",
+        "name": "stdout handler",
+        "func": "// Сохраняем PID при первом сообщении (spawn mode)\nif (msg.pid && !flow.get('bep_pid')) {\n    flow.set('bep_pid', msg.pid);\n    node.log('BEP PID: ' + msg.pid);\n}\n// Пересылаем stdout в UI\nmsg.topic = 'bep_exec_stdout';\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 4100,
+        "y": 1060,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "bep_stderr_fn",
+        "type": "function",
+        "z": "5bbcbebf6ff74a86",
+        "name": "stderr handler",
+        "func": "// stderr — отправляем в UI для отображения пользователю\nif (msg.payload && String(msg.payload).trim()) {\n    msg.topic = 'bep_exec_stderr';\n    return msg;\n}\nreturn null;",
+        "outputs": 1,
+        "x": 4100,
+        "y": 1100,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "bep_exitcode_fn",
+        "type": "function",
+        "z": "5bbcbebf6ff74a86",
+        "name": "exit code handler",
+        "func": "// Процесс завершился\nflow.set('bep_pid', null);\nvar code = msg.payload;\nif (code !== 0) {\n    msg.topic = 'bep_exec_stderr';\n    msg.payload = 'Процесс завершился с кодом ' + code + '. Проверьте bep.log.';\n    return msg;\n}\nreturn null;",
+        "outputs": 1,
+        "x": 4110,
+        "y": 1140,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "bep_cfg_write_fn",
+        "type": "function",
+        "z": "5bbcbebf6ff74a86",
+        "name": "fwd config write",
+        "func": "// Пересылаем JSON конфига в MQTT bep/write-config\nmsg.topic = 'bep/write-config';\nreturn msg;",
+        "outputs": 1,
+        "x": 3460,
+        "y": 1320,
+        "wires": [
+            [
+                "bep_cfg_write_out"
+            ]
+        ]
+    },
+    {
+        "id": "bep_cfg_write_out",
+        "type": "mqtt out",
+        "z": "5bbcbebf6ff74a86",
+        "name": "bep/write-config",
+        "topic": "bep/write-config",
+        "qos": "2",
+        "retain": "",
+        "broker": "ed4f1a176f6d33ed",
+        "x": 3660,
+        "y": 1320,
+        "wires": []
+    },
+    {
+        "id": "bc6eff304fcf6a8e",
+        "type": "switch",
+        "z": "5bbcbebf6ff74a86",
+        "g": "52568354c3badd48",
+        "name": "cmd?",
+        "property": "topic",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "mqtt_cmd",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "reread",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "bep_process",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "bep_config_write",
+                "vt": "str"
+            }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 4,
+        "x": 3170,
+        "y": 820,
+        "wires": [
+            [
+                "d7ecfaf6acff715e"
+            ],
+            [
+                "07ff7bd3ca490729"
+            ],
+            [],
+            [
+                "e0755f9473bbaf96"
+            ]
+        ]
+    },
+    {
+        "id": "e0755f9473bbaf96",
+        "type": "function",
+        "z": "5bbcbebf6ff74a86",
+        "g": "52568354c3badd48",
+        "name": "fwd config write",
+        "func": "// Пересылаем JSON конфига в MQTT bep/write-config\nmsg.topic = 'bep/write-config';\nreturn msg;",
+        "outputs": 1,
+        "x": 3360,
+        "y": 880,
+        "wires": [
+            [
+                "15dd1b4f57f9cb3d"
+            ]
+        ]
+    },
+    {
+        "id": "15dd1b4f57f9cb3d",
+        "type": "mqtt out",
+        "z": "5bbcbebf6ff74a86",
+        "g": "52568354c3badd48",
+        "name": "bep/write-config",
+        "topic": "bep/write-config",
+        "qos": "2",
+        "retain": "",
+        "broker": "ed4f1a176f6d33ed",
+        "x": 3540,
+        "y": 880,
         "wires": []
     }
 ]
