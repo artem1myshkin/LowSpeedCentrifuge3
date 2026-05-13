@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scenario Dataflow</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --border: #d8e0ea;
+      --text: #1f2937;
+      --muted: #64748b;
+      --blue: #2563eb;
+      --green: #16a34a;
+      --orange: #ea580c;
+      --red: #dc2626;
+      --violet: #7c3aed;
+      --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .page {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+    }
+    p.lead {
+      margin: 0 0 24px;
+      color: var(--muted);
+    }
+    .lane-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .lane {
+      background: rgba(255,255,255,0.45);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 14px;
+    }
+    .lane-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 14px;
+      font-weight: 700;
+    }
+    .box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      margin-bottom: 16px;
+      box-shadow: var(--shadow);
+    }
+    .box h2 {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+    .box p {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .box ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 999px;
+      padding: 4px 8px;
+      margin: 4px 6px 0 0;
+      color: white;
+    }
+    .blue { background: var(--blue); }
+    .green { background: var(--green); }
+    .orange { background: var(--orange); }
+    .red { background: var(--red); }
+    .violet { background: var(--violet); }
+    .arrow {
+      text-align: center;
+      font-size: 22px;
+      color: #94a3b8;
+      margin: -4px 0 12px;
+    }
+    .notes {
+      margin-top: 22px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .note {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+    .note h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+    }
+    .note p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    @media (max-width: 1200px) {
+      .lane-grid { grid-template-columns: 1fr 1fr; }
+      .notes { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 760px) {
+      .lane-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>Схема Потоков Данных: Режим Сценариев</h1>
+    <p class="lead">Целевая схема для реализации автоматического воспроизведения угловой скорости по файлу сценария.</p>
+
+    <div class="lane-grid">
+      <section class="lane">
+        <div class="lane-title">UI / Operator</div>
+
+        <div class="box">
+          <h2>SpeedTab</h2>
+          <p>Пользователь включает режим сценария и управляет исполнением.</p>
+          <span class="tag blue">Работа по сценарию</span>
+          <span class="tag blue">Старт</span>
+          <span class="tag orange">Пауза</span>
+          <span class="tag orange">Продолжить</span>
+          <span class="tag red">Стоп</span>
+          <span class="tag red">Аварийный стоп</span>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="box">
+          <h2>Scenario Status UI</h2>
+          <ul>
+            <li>имя файла сценария</li>
+            <li>номер шага / общее число шагов</li>
+            <li>целевая и фактическая скорость</li>
+            <li>статус: ready / hold / paused / error</li>
+            <li>оставшееся время удержания</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="lane">
+        <div class="lane-title">Scenario Runtime</div>
+
+        <div class="box">
+          <h2>Scenario File Loader</h2>
+          <p>Читает файл из <code>C:\NC3\scenarios</code>, валидирует заголовок и строки вида <code>скорость + время удержания</code>.</p>
+          <span class="tag violet">journal_refresh</span>
+          <span class="tag violet">scenario_load</span>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="box">
+          <h2>ScenarioManager</h2>
+          <ul>
+            <li>держит state machine сценария</li>
+            <li>вычисляет текущий шаг</li>
+            <li>решает, нужен ли switch range</li>
+            <li>ожидает достижения допуска</li>
+            <li>запускает таймер удержания</li>
+            <li>инициирует автоматическую запись в протокол</li>
+          </ul>
+          <span class="tag green">running_step</span>
+          <span class="tag green">holding</span>
+          <span class="tag orange">paused</span>
+          <span class="tag red">emergency_stop</span>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="box">
+          <h2>ScenarioReadyEvaluator</h2>
+          <p>Сравнивает текущую скорость с целевой, выдает признак достижения требуемой точности.</p>
+        </div>
+      </section>
+
+      <section class="lane">
+        <div class="lane-title">ELMO Control</div>
+
+        <div class="box">
+          <h2>CommandHandler</h2>
+          <ul>
+            <li><code>AC</code>, <code>DC</code>, <code>JV</code>, <code>BG</code> для шага сценария</li>
+            <li><code>ST</code> для стопа / аварийного стопа</li>
+            <li><code>OL[1]</code> + sequence для смены диапазона</li>
+            <li><code>Drive Init</code> после смены диапазона</li>
+          </ul>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="box">
+          <h2>TCP → ELMO</h2>
+          <p>Отправка команд в привод по TCP.</p>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="box">
+          <h2>ELMO</h2>
+          <p>Исполнение движения, возврат статусов, фактической скорости и ошибок.</p>
+        </div>
+      </section>
+
+      <section class="lane">
+        <div class="lane-title">Telemetry / State</div>
+
+        <div class="box">
+          <h2>ResponseParser</h2>
+          <ul>
+            <li><code>VX</code> → фактическая скорость</li>
+            <li><code>MS</code>, <code>SO</code>, <code>MO</code></li>
+            <li><code>SR</code> → диагностика</li>
+            <li><code>OL[1]</code> → текущий диапазон</li>
+            <li><code>PX</code> → положение для raw data</li>
+          </ul>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="box">
+          <h2>Global Context</h2>
+          <ul>
+            <li><code>drive_state</code></li>
+            <li><code>current_range</code></li>
+            <li><code>angle_buffer</code></li>
+            <li><code>scenario_state</code></li>
+          </ul>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="box">
+          <h2>GlobalStateReader</h2>
+          <p>Отдает UI агрегированный state сценария и привода.</p>
+        </div>
+      </section>
+
+      <section class="lane">
+        <div class="lane-title">Protocol / Journal</div>
+
+        <div class="box">
+          <h2>Angle Buffer</h2>
+          <p>Накопление временного ряда <code>время + угол</code> из опроса ELMO.</p>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="box">
+          <h2>ProtocolManager</h2>
+          <ul>
+            <li>автоматическая запись результата шага</li>
+            <li>создание data-file при включенном raw-data</li>
+            <li>запись событий range switch / stop / resume в журнал</li>
+          </ul>
+        </div>
+
+        <div class="arrow">↓</div>
+
+        <div class="box">
+          <h2>Journal UI</h2>
+          <p>Просмотр файлов протокола и связанных data-files.</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="notes">
+      <div class="note">
+        <h3>Аварийная Остановка</h3>
+        <p><code>ScenarioManager</code> должен немедленно зафиксировать состояние, отправить <code>ST</code>, сохранить текущий шаг и причину останова, затем отдать в UI состояние <code>emergency_stop</code>.</p>
+      </div>
+
+      <div class="note">
+        <h3>Продолжение</h3>
+        <p>После снятия причины аварии сценарий должен продолжаться с текущего шага. Для первой версии безопаснее повторно выполнять шаг целиком, а не восстанавливать частично удержанное время.</p>
+      </div>
+
+      <div class="note">
+        <h3>Автосмена Диапазона</h3>
+        <p>Если шаг требует другого диапазона, runtime должен остановить движение, переключить диапазон, выполнить инициализацию и затем продолжить тот же шаг без потери сценарного контекста.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
