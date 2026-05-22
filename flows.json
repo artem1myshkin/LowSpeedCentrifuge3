@@ -136,7 +136,7 @@
         ],
         "x": 14,
         "y": 19,
-        "w": 1592,
+        "w": 1492,
         "h": 762
     },
     {
@@ -908,9 +908,7 @@
         "x": 1110,
         "y": 440,
         "wires": [
-            [
-                "facb56f63b2cc38b"
-            ]
+            []
         ]
     },
     {
@@ -3168,7 +3166,6 @@
         "name": "to UI",
         "mode": "link",
         "links": [
-            "65956605739723e7",
             "e36224cf5a7a94e1",
             "5f65b6086231c61f",
             "d052743e2b95be4c",
@@ -3189,8 +3186,8 @@
         "links": [
             "defeba9f1c3e6b14"
         ],
-        "x": 1125,
-        "y": 700,
+        "x": 1145,
+        "y": 740,
         "wires": [
             [
                 "2c823494d7f38024"
@@ -3263,8 +3260,8 @@
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 1510,
-        "y": 220,
+        "x": 1050,
+        "y": 680,
         "wires": []
     },
     {
@@ -3345,6 +3342,95 @@
         "wires": []
     },
     {
+        "id": "codex_elmo_sample_inject",
+        "type": "inject",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "ELMO PX/TM sample poll",
+        "props": [
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "0.1",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "elmo_sample_poll",
+        "x": 160,
+        "y": 680,
+        "wires": [
+            [
+                "codex_elmo_sample_cmd"
+            ]
+        ]
+    },
+    {
+        "id": "codex_elmo_sample_cmd",
+        "type": "function",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "ELMO PX/TM command",
+        "func": "msg.topic = 'elmo_sample_poll';\nmsg.payload = 'PX;TM;';\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 390,
+        "y": 680,
+        "wires": [
+            [
+                "codex_elmo_sample_tcp"
+            ]
+        ]
+    },
+    {
+        "id": "codex_elmo_sample_tcp",
+        "type": "tcp request",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "ELMO PX/TM",
+        "server": "192.168.1.2",
+        "port": "2000",
+        "out": "sit",
+        "ret": "string",
+        "splitc": " ",
+        "newline": ";",
+        "trim": false,
+        "tls": "",
+        "x": 610,
+        "y": 680,
+        "wires": [
+            [
+                "codex_elmo_sample_parser"
+            ]
+        ]
+    },
+    {
+        "id": "codex_elmo_sample_parser",
+        "type": "function",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "ELMO PX/TM parser",
+        "func": "function parseElmoNumber(value) {\n    var text = String(value || '').trim();\n    if (!text) return NaN;\n    return Number(text);\n}\n\nvar raw = String(msg.payload || '').split(String.fromCharCode(0)).join('').trim();\nif (!raw) return null;\nraw = raw.replace(/^\"+|\"+$/g, '')\n    .replace(new RegExp('[\\\\r\\\\n]+', 'g'), ';')\n    .replace(/;{2,}/g, ';')\n    .replace(/^;|;$/g, '');\nif (!raw) return null;\n\nvar tokens = raw.split(';').map(function(s) { return s.trim(); }).filter(Boolean);\nvar sample = flow.get('elmo_sample') || {};\n\nfor (var i = 0; i < tokens.length; i++) {\n    var token = tokens[i];\n    var eqIdx = token.indexOf('=');\n    var param;\n    var value;\n    if (eqIdx !== -1) {\n        param = token.slice(0, eqIdx).trim().toUpperCase();\n        value = parseElmoNumber(token.slice(eqIdx + 1));\n    } else {\n        if (i + 1 >= tokens.length || tokens[i + 1].indexOf('=') !== -1) continue;\n        param = token.toUpperCase();\n        value = parseElmoNumber(tokens[i + 1]);\n        i++;\n    }\n    if (isNaN(value)) continue;\n    if (param === 'PX') sample.position_ticks = value;\n    if (param === 'TM') sample.tm_us = value;\n}\n\nif (sample.position_ticks === undefined || sample.tm_us === undefined) {\n    flow.set('elmo_sample', sample);\n    return null;\n}\n\nvar resolution = global.get('current_range') || 'high';\nvar ticksPerRev = (resolution === 'high') ? 262144000 : 6553600;\nvar angleDeg = Number(sample.position_ticks) / ticksPerRev * 360.0;\nvar payload = {\n    position: Number(sample.position_ticks),\n    position_ticks: Number(sample.position_ticks),\n    tm_us: Number(sample.tm_us),\n    angle: angleDeg,\n    resolution: resolution\n};\n\nflow.set('elmo_sample', payload);\nglobal.set('elmo_sample', payload);\nglobal.set('elmo_position_ticks', payload.position_ticks);\nglobal.set('elmo_angle_deg', payload.angle);\nglobal.set('elmo_tm_us', payload.tm_us);\n\nmsg.topic = 'elmo_sample';\nmsg.payload = payload;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 840,
+        "y": 680,
+        "wires": [
+            [
+                "b00b50ceb5e7071a"
+            ]
+        ]
+    },
+    {
         "id": "9a2df656e15bdbfd",
         "type": "ui-template",
         "z": "3e07d83af7348f65",
@@ -3377,19 +3463,19 @@
         "z": "3e07d83af7348f65",
         "g": "65aa9b618869d533",
         "name": "SettingsNormalize",
+        "func": "// Normalize settings, compute derived angle fields, and update global context.\nvar settings = msg.payload || {};\n\nvar DEFAULTS = {\n    general: {\n        remoteControl: false,\n        angleCorrectionEnabled: false,\n        language: 'Russian',\n        angleSavingMode: 'header'\n    },\n    advanced: {\n        readPeriodRotation: 100,\n        readPeriodTilt: 1000,\n        readPeriodBEP: 100,\n        dataDurationSec: 60,\n        rotationSpeedRanges: {\n            high: {\n                min: { deg: 0, min: 0, sec: 1.000001, decimalDeg: 0.000277778, rad: 0.000004848141 },\n                max: { deg: 20, min: 0, sec: 0, decimalDeg: 20, rad: 0.349065850399 }\n            },\n            low: {\n                min: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n                max: { deg: 360, min: 0, sec: 0, decimalDeg: 360, rad: 6.28318530718 }\n            }\n        },\n        rotationSpeed: null,\n        tiltAngle: {\n            min: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 },\n            max: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }\n        },\n        encoderSwitchSpeed: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n        BEPcoeffs: [0, 0, 0, 0, 0],\n        aerostaticSupportDiagram: '',\n        encoderCalibrationLines: ''\n    }\n};\n\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction merge(base, patch) {\n    var out = clone(base);\n    patch = patch && typeof patch === 'object' ? patch : {};\n    Object.keys(patch).forEach(function(k) {\n        if (patch[k] && typeof patch[k] === 'object' && !Array.isArray(patch[k]) && out[k] && typeof out[k] === 'object' && !Array.isArray(out[k])) {\n            out[k] = merge(out[k], patch[k]);\n        } else {\n            out[k] = patch[k];\n        }\n    });\n    return out;\n}\nfunction number(v, fallback) {\n    var x = Number(v);\n    return isFinite(x) ? x : fallback;\n}\nfunction languageName(v) {\n    var s = String(v || '').toLowerCase();\n    return (s === 'english' || s === 'en') ? 'English' : 'Russian';\n}\nfunction dmsToDecimal(v) {\n    v = v || {};\n    var sign = number(v.deg, 0) < 0 ? -1 : 1;\n    return sign * (Math.abs(number(v.deg, 0)) + number(v.min, 0) / 60 + number(v.sec, 0) / 3600);\n}\nfunction fillDms(v, decimalDeg) {\n    var sign = decimalDeg < 0 ? -1 : 1;\n    var abs = Math.abs(decimalDeg);\n    var deg = Math.floor(abs);\n    var minutesFloat = (abs - deg) * 60;\n    var min = Math.floor(minutesFloat);\n    var sec = (minutesFloat - min) * 60;\n    v.deg = sign * deg;\n    v.min = min;\n    v.sec = Number(sec.toFixed(6));\n}\nfunction normalizeAngle(v, fallback) {\n    v = merge(fallback || { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }, v || {});\n    var decimalDeg;\n    if (v.decimalDeg !== undefined && v.decimalDeg !== null && v.decimalDeg !== '') {\n        decimalDeg = number(v.decimalDeg, dmsToDecimal(v));\n    } else if (v.rad !== undefined && v.rad !== null && v.rad !== '') {\n        decimalDeg = number(v.rad, 0) * 180 / Math.PI;\n    } else {\n        decimalDeg = dmsToDecimal(v);\n    }\n    v.decimalDeg = Number(decimalDeg.toFixed(9));\n    v.rad = Number((decimalDeg * Math.PI / 180).toFixed(12));\n    fillDms(v, decimalDeg);\n    return v;\n}\nfunction normalizeRange(range, fallback) {\n    return {\n        min: normalizeAngle(range && range.min, fallback.min),\n        max: normalizeAngle(range && range.max, fallback.max)\n    };\n}\nfunction ticksPerDeg(res) { return (res === 'high') ? (262144000 / 360) : (6553600 / 360); }\nfunction rangeLimits(range, res) {\n    var tpd = ticksPerDeg(res);\n    return {\n        resolution: res,\n        ticks_per_deg: tpd,\n        speed_min_deg: range.min.decimalDeg,\n        speed_max_deg: range.max.decimalDeg,\n        speed_min_ticks: Math.ceil(Math.abs(range.min.decimalDeg) * tpd),\n        speed_max_ticks: Math.floor(Math.abs(range.max.decimalDeg) * tpd)\n    };\n}\n\nsettings = merge(DEFAULTS, settings);\nsettings.general.language = languageName(settings.general.language);\nsettings.general.angleSavingMode = settings.general.angleSavingMode === 'none' ? 'none' : 'header';\nsettings.advanced.dataDurationSec = Math.max(1, number(settings.advanced.dataDurationSec, 60));\nsettings.advanced.readPeriodRotation = Math.max(1, number(settings.advanced.readPeriodRotation, 100));\nsettings.advanced.readPeriodTilt = Math.max(1, number(settings.advanced.readPeriodTilt, 1000));\nsettings.advanced.readPeriodBEP = Math.max(1, number(settings.advanced.readPeriodBEP, 100));\n\nif (!settings.advanced.rotationSpeedRanges && settings.advanced.rotationSpeed) {\n    settings.advanced.rotationSpeedRanges = { high: settings.advanced.rotationSpeed, low: DEFAULTS.advanced.rotationSpeedRanges.low };\n}\nsettings.advanced.rotationSpeedRanges = {\n    high: normalizeRange(settings.advanced.rotationSpeedRanges.high, DEFAULTS.advanced.rotationSpeedRanges.high),\n    low: normalizeRange(settings.advanced.rotationSpeedRanges.low, DEFAULTS.advanced.rotationSpeedRanges.low)\n};\nsettings.advanced.rotationSpeed = settings.advanced.rotationSpeedRanges.high;\nsettings.advanced.tiltAngle = normalizeRange(settings.advanced.tiltAngle, DEFAULTS.advanced.tiltAngle);\nsettings.advanced.encoderSwitchSpeed = normalizeAngle(settings.advanced.encoderSwitchSpeed, DEFAULTS.advanced.encoderSwitchSpeed);\nif (!Array.isArray(settings.advanced.BEPcoeffs)) settings.advanced.BEPcoeffs = [0, 0, 0, 0, 0];\nwhile (settings.advanced.BEPcoeffs.length < 5) settings.advanced.BEPcoeffs.push(0);\nsettings.advanced.BEPcoeffs = settings.advanced.BEPcoeffs.slice(0, 5).map(function(v) { return number(v, 0); });\n\nglobal.set('settings', settings);\nglobal.set('ui_language', settings.general.language === 'English' ? 'english' : 'russian');\nglobal.set('drive_speed_ranges', settings.advanced.rotationSpeedRanges);\nglobal.set('recording_duration_sec', settings.advanced.dataDurationSec);\nvar currentRange = global.get('current_range') || 'high';\nglobal.set('drive_limits_override', rangeLimits(settings.advanced.rotationSpeedRanges[currentRange] || settings.advanced.rotationSpeedRanges.high, currentRange));\n\nmsg.settings = settings;\nmsg.payload = settings;\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
         "x": 830,
         "y": 220,
         "wires": [
             [
                 "codex_settings_persist"
             ]
-        ],
-        "func": "// Normalize settings, compute derived angle fields, and update global context.\nvar settings = msg.payload || {};\n\nvar DEFAULTS = {\n    general: {\n        remoteControl: false,\n        angleCorrectionEnabled: false,\n        language: 'Russian',\n        angleSavingMode: 'header'\n    },\n    advanced: {\n        readPeriodRotation: 100,\n        readPeriodTilt: 1000,\n        readPeriodBEP: 100,\n        dataDurationSec: 60,\n        rotationSpeedRanges: {\n            high: {\n                min: { deg: 0, min: 0, sec: 1.000001, decimalDeg: 0.000277778, rad: 0.000004848141 },\n                max: { deg: 20, min: 0, sec: 0, decimalDeg: 20, rad: 0.349065850399 }\n            },\n            low: {\n                min: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n                max: { deg: 360, min: 0, sec: 0, decimalDeg: 360, rad: 6.28318530718 }\n            }\n        },\n        rotationSpeed: null,\n        tiltAngle: {\n            min: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 },\n            max: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }\n        },\n        encoderSwitchSpeed: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n        BEPcoeffs: [0, 0, 0, 0, 0],\n        aerostaticSupportDiagram: '',\n        encoderCalibrationLines: ''\n    }\n};\n\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction merge(base, patch) {\n    var out = clone(base);\n    patch = patch && typeof patch === 'object' ? patch : {};\n    Object.keys(patch).forEach(function(k) {\n        if (patch[k] && typeof patch[k] === 'object' && !Array.isArray(patch[k]) && out[k] && typeof out[k] === 'object' && !Array.isArray(out[k])) {\n            out[k] = merge(out[k], patch[k]);\n        } else {\n            out[k] = patch[k];\n        }\n    });\n    return out;\n}\nfunction number(v, fallback) {\n    var x = Number(v);\n    return isFinite(x) ? x : fallback;\n}\nfunction languageName(v) {\n    var s = String(v || '').toLowerCase();\n    return (s === 'english' || s === 'en') ? 'English' : 'Russian';\n}\nfunction dmsToDecimal(v) {\n    v = v || {};\n    var sign = number(v.deg, 0) < 0 ? -1 : 1;\n    return sign * (Math.abs(number(v.deg, 0)) + number(v.min, 0) / 60 + number(v.sec, 0) / 3600);\n}\nfunction fillDms(v, decimalDeg) {\n    var sign = decimalDeg < 0 ? -1 : 1;\n    var abs = Math.abs(decimalDeg);\n    var deg = Math.floor(abs);\n    var minutesFloat = (abs - deg) * 60;\n    var min = Math.floor(minutesFloat);\n    var sec = (minutesFloat - min) * 60;\n    v.deg = sign * deg;\n    v.min = min;\n    v.sec = Number(sec.toFixed(6));\n}\nfunction normalizeAngle(v, fallback) {\n    v = merge(fallback || { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }, v || {});\n    var decimalDeg;\n    if (v.decimalDeg !== undefined && v.decimalDeg !== null && v.decimalDeg !== '') {\n        decimalDeg = number(v.decimalDeg, dmsToDecimal(v));\n    } else if (v.rad !== undefined && v.rad !== null && v.rad !== '') {\n        decimalDeg = number(v.rad, 0) * 180 / Math.PI;\n    } else {\n        decimalDeg = dmsToDecimal(v);\n    }\n    v.decimalDeg = Number(decimalDeg.toFixed(9));\n    v.rad = Number((decimalDeg * Math.PI / 180).toFixed(12));\n    fillDms(v, decimalDeg);\n    return v;\n}\nfunction normalizeRange(range, fallback) {\n    return {\n        min: normalizeAngle(range && range.min, fallback.min),\n        max: normalizeAngle(range && range.max, fallback.max)\n    };\n}\nfunction ticksPerDeg(res) { return (res === 'high') ? (262144000 / 360) : (6553600 / 360); }\nfunction rangeLimits(range, res) {\n    var tpd = ticksPerDeg(res);\n    return {\n        resolution: res,\n        ticks_per_deg: tpd,\n        speed_min_deg: range.min.decimalDeg,\n        speed_max_deg: range.max.decimalDeg,\n        speed_min_ticks: Math.ceil(Math.abs(range.min.decimalDeg) * tpd),\n        speed_max_ticks: Math.floor(Math.abs(range.max.decimalDeg) * tpd)\n    };\n}\n\nsettings = merge(DEFAULTS, settings);\nsettings.general.language = languageName(settings.general.language);\nsettings.general.angleSavingMode = settings.general.angleSavingMode === 'none' ? 'none' : 'header';\nsettings.advanced.dataDurationSec = Math.max(1, number(settings.advanced.dataDurationSec, 60));\nsettings.advanced.readPeriodRotation = Math.max(1, number(settings.advanced.readPeriodRotation, 100));\nsettings.advanced.readPeriodTilt = Math.max(1, number(settings.advanced.readPeriodTilt, 1000));\nsettings.advanced.readPeriodBEP = Math.max(1, number(settings.advanced.readPeriodBEP, 100));\n\nif (!settings.advanced.rotationSpeedRanges && settings.advanced.rotationSpeed) {\n    settings.advanced.rotationSpeedRanges = { high: settings.advanced.rotationSpeed, low: DEFAULTS.advanced.rotationSpeedRanges.low };\n}\nsettings.advanced.rotationSpeedRanges = {\n    high: normalizeRange(settings.advanced.rotationSpeedRanges.high, DEFAULTS.advanced.rotationSpeedRanges.high),\n    low: normalizeRange(settings.advanced.rotationSpeedRanges.low, DEFAULTS.advanced.rotationSpeedRanges.low)\n};\nsettings.advanced.rotationSpeed = settings.advanced.rotationSpeedRanges.high;\nsettings.advanced.tiltAngle = normalizeRange(settings.advanced.tiltAngle, DEFAULTS.advanced.tiltAngle);\nsettings.advanced.encoderSwitchSpeed = normalizeAngle(settings.advanced.encoderSwitchSpeed, DEFAULTS.advanced.encoderSwitchSpeed);\nif (!Array.isArray(settings.advanced.BEPcoeffs)) settings.advanced.BEPcoeffs = [0, 0, 0, 0, 0];\nwhile (settings.advanced.BEPcoeffs.length < 5) settings.advanced.BEPcoeffs.push(0);\nsettings.advanced.BEPcoeffs = settings.advanced.BEPcoeffs.slice(0, 5).map(function(v) { return number(v, 0); });\n\nglobal.set('settings', settings);\nglobal.set('ui_language', settings.general.language === 'English' ? 'english' : 'russian');\nglobal.set('drive_speed_ranges', settings.advanced.rotationSpeedRanges);\nglobal.set('recording_duration_sec', settings.advanced.dataDurationSec);\nvar currentRange = global.get('current_range') || 'high';\nglobal.set('drive_limits_override', rangeLimits(settings.advanced.rotationSpeedRanges[currentRange] || settings.advanced.rotationSpeedRanges.high, currentRange));\n\nmsg.settings = settings;\nmsg.payload = settings;\nreturn msg;",
-        "outputs": 1,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": []
+        ]
     },
     {
         "id": "de32a7de4d39c36b",
@@ -3606,95 +3692,6 @@
         "y": 200,
         "wires": [
             []
-        ]
-    },
-    {
-        "id": "codex_elmo_sample_inject",
-        "type": "inject",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "ELMO PX/TM sample poll",
-        "props": [
-            {
-                "p": "topic",
-                "vt": "str"
-            }
-        ],
-        "repeat": "0.1",
-        "crontab": "",
-        "once": false,
-        "onceDelay": 0.1,
-        "topic": "elmo_sample_poll",
-        "x": 160,
-        "y": 680,
-        "wires": [
-            [
-                "codex_elmo_sample_cmd"
-            ]
-        ]
-    },
-    {
-        "id": "codex_elmo_sample_cmd",
-        "type": "function",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "ELMO PX/TM command",
-        "func": "msg.topic = 'elmo_sample_poll';\nmsg.payload = 'PX;TM;';\nreturn msg;",
-        "outputs": 1,
-        "timeout": 0,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 390,
-        "y": 680,
-        "wires": [
-            [
-                "codex_elmo_sample_tcp"
-            ]
-        ]
-    },
-    {
-        "id": "codex_elmo_sample_tcp",
-        "type": "tcp request",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "ELMO PX/TM",
-        "server": "192.168.1.2",
-        "port": "2000",
-        "out": "sit",
-        "ret": "string",
-        "splitc": " ",
-        "newline": ";",
-        "trim": false,
-        "tls": "",
-        "x": 610,
-        "y": 680,
-        "wires": [
-            [
-                "codex_elmo_sample_parser"
-            ]
-        ]
-    },
-    {
-        "id": "codex_elmo_sample_parser",
-        "type": "function",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "ELMO PX/TM parser",
-        "func": "function parseElmoNumber(value) {\n    var text = String(value || '').trim();\n    if (!text) return NaN;\n    return Number(text);\n}\n\nvar raw = String(msg.payload || '').split(String.fromCharCode(0)).join('').trim();\nif (!raw) return null;\nraw = raw.replace(/^\"+|\"+$/g, '')\n    .replace(new RegExp('[\\\\r\\\\n]+', 'g'), ';')\n    .replace(/;{2,}/g, ';')\n    .replace(/^;|;$/g, '');\nif (!raw) return null;\n\nvar tokens = raw.split(';').map(function(s) { return s.trim(); }).filter(Boolean);\nvar sample = flow.get('elmo_sample') || {};\n\nfor (var i = 0; i < tokens.length; i++) {\n    var token = tokens[i];\n    var eqIdx = token.indexOf('=');\n    var param;\n    var value;\n    if (eqIdx !== -1) {\n        param = token.slice(0, eqIdx).trim().toUpperCase();\n        value = parseElmoNumber(token.slice(eqIdx + 1));\n    } else {\n        if (i + 1 >= tokens.length || tokens[i + 1].indexOf('=') !== -1) continue;\n        param = token.toUpperCase();\n        value = parseElmoNumber(tokens[i + 1]);\n        i++;\n    }\n    if (isNaN(value)) continue;\n    if (param === 'PX') sample.position_ticks = value;\n    if (param === 'TM') sample.tm_us = value;\n}\n\nif (sample.position_ticks === undefined || sample.tm_us === undefined) {\n    flow.set('elmo_sample', sample);\n    return null;\n}\n\nvar resolution = global.get('current_range') || 'high';\nvar ticksPerRev = (resolution === 'high') ? 262144000 : 6553600;\nvar angleDeg = Number(sample.position_ticks) / ticksPerRev * 360.0;\nvar payload = {\n    position: Number(sample.position_ticks),\n    position_ticks: Number(sample.position_ticks),\n    tm_us: Number(sample.tm_us),\n    angle: angleDeg,\n    resolution: resolution\n};\n\nflow.set('elmo_sample', payload);\nglobal.set('elmo_sample', payload);\nglobal.set('elmo_position_ticks', payload.position_ticks);\nglobal.set('elmo_angle_deg', payload.angle);\nglobal.set('elmo_tm_us', payload.tm_us);\n\nmsg.topic = 'elmo_sample';\nmsg.payload = payload;\nreturn msg;",
-        "outputs": 1,
-        "timeout": 0,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 840,
-        "y": 680,
-        "wires": [
-            [
-                "b00b50ceb5e7071a"
-            ]
         ]
     }
 ]
