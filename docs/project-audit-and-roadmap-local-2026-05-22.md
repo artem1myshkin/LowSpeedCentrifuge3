@@ -1077,3 +1077,74 @@ P3:
 - В `function` и `ui-template` узлах не найдено `require`, `import` или `requier`.
 - Смоделирован цикл `open_protocol -> start_recording(save_raw_data=true) -> stop_recording`: заголовок содержит реальные переносы, результат содержит ссылку на `data_<timestamp>.txt`, data-файл содержит временной ряд.
 - Смоделировано закрытие протокола во время активной записи: на первый выход `ProtocolManager` уходит строка результата и затем финальный `=====`, на второй выход уходит data-файл.
+
+## 15. Архитектура XState / State Machine для Node-RED от 2026-05-25
+
+### 15.1. Зачем вводить машину состояний
+
+Текущий проект уже фактически содержит несколько неявных автоматов: инициализация ELMO, ручное управление скоростью, сценарии, запись протокола, состояние БУН, состояние БЕП и аварийные блокировки. Сейчас эти состояния распределены по `flow/global context`, `switch`, `function`, `ui-template` и нескольким TCP/UDP/MQTT веткам. Из-за этого появляются гонки: несколько UI-событий могут одновременно породить команды к одному физическому устройству, а разные вкладки могут иметь разное представление о готовности привода.
+
+State machine должна стать единым уровнем принятия решений: UI и таймеры посылают события, машина проверяет текущее состояние и условия безопасности, затем выпускает разрешенные команды в транспортный слой. Это особенно важно для `ELMO Direct Access TCP/IP`, где нужен один последовательный владелец обмена, а не несколько параллельных веток.
+
+### 15.2. Как XState можно использовать в Node-RED
+
+По документации Node-RED, `Function` node поддерживает хранение состояния через `context`, `flow`, `global`, а также код `On Start` / `On Stop` для инициализации и очистки ресурсов. Внешние npm-модули нельзя просто подключать через `require/import` внутри обычного кода Function node; официальный путь - `functionGlobalContext` в `settings.js` или `functionExternalModules: true` и вкладка `Setup` Function node.
+
+XState описывает автомат через `createMachine(...)`, а исполняемый экземпляр создается через `createActor(...)`. Actor принимает события через `actor.send(...)`, обрабатывает их последовательно и публикует снимки состояния через `subscribe(...)` / `getSnapshot()`. Это хорошо ложится на Node-RED: входящие `msg.topic/msg.payload` становятся событиями автомата, а выходные действия автомата превращаются в команды для TCP/UDP/MQTT и UI-снимки.
+
+С учетом текущих правил проекта рекомендуемые варианты внедрения:
+
+1. Консервативный вариант без npm-модуля: реализовать простую таблицу переходов в одном `Function` node `SystemStateMachine`, хранить `state/context` в `flow` или `global`, а все команды выпускать через один `CommandGate`. Это проще для Node-RED и не требует изменения `settings.js`.
+2. Вариант с XState: включить `functionExternalModules` или добавить `xstate` в `functionGlobalContext`, создать actor в `On Start`, остановить его в `On Stop`, а в `On Message` прокидывать события `actor.send({ type, ... })`. Этот вариант нужно применять только если production-среда Node-RED гарантированно поддерживает внешние модули Function node.
+3. Production-вариант: оформить state machine как отдельный custom node или внешний Node.js-сервис. Node-RED тогда остается HMI/интеграционным слоем, а автомат владеет последовательностью команд, timeout, retry, safety interlock и журналированием переходов.
+
+### 15.3. Предлагаемая декомпозиция для НЦ-3
+
+Первый автомат лучше делать не для всего проекта сразу, а для контура `ELMO + сценарии + запись`, потому что там самая высокая цена гонок.
+
+Минимальные состояния:
+
+- `offline` - нет свежего ответа ELMO;
+- `fault` - `SR/EE[5]/MF` показывают ошибку;
+- `safety_locked` - активен STO/safety/inhibit, команды движения запрещены;
+- `idle` - связь есть, мотор выключен;
+- `initializing` - выполняется Drive Init;
+- `ready` - привод готов, мотор включен, сценарий не выполняется;
+- `manual_velocity` - ручная скорость активна;
+- `scenario_running` - выполняется сценарий;
+- `recording` - идет запись измерения;
+- `stopping` - выполняется `ST/MO=0`, ожидание подтверждения остановки.
+
+Входные события:
+
+- `ELMO.POLL_OK`, `ELMO.POLL_TIMEOUT`, `ELMO.FAULT`, `ELMO.SAFETY`;
+- `UI.DRIVE_INIT`, `UI.MOTOR_ON`, `UI.MOTOR_OFF`, `UI.SET_VELOCITY`, `UI.STOP`;
+- `SCENARIO.START`, `SCENARIO.STEP_DONE`, `SCENARIO.PAUSE`, `SCENARIO.CANCEL`;
+- `PROTOCOL.OPEN`, `PROTOCOL.START_RECORDING`, `PROTOCOL.STOP_RECORDING`, `PROTOCOL.CLOSE`;
+- `BUN.STATE`, `BEP.STATE`, `PRESSURE.WARNING`, `PRESSURE.ALARM`.
+
+Выходы автомата:
+
+- команды в единый `ELMO Transport` с очередью и одним TCP request;
+- команды БУН/БЕП только после проверки interlock;
+- `global.system_state`, `global.drive_state`, `global.scenario_state`, `global.protocol_state`;
+- UI-снимок для всех вкладок через один `GlobalStateReader`;
+- запись переходов в журнал.
+
+### 15.4. Интеграция с текущими flow
+
+1. Ввести `CommandIngress`: все UI-команды переводятся в события автомата, прямые провода из UI в `CommandHandler` постепенно убрать.
+2. Ввести `ElmoTransport`: единственный владелец TCP к `192.168.1.2:2000`. Все ветки `CommandHandler`, `polling ELMO`, `PX/TM sample poll` должны отправлять запросы через очередь, а не держать независимые TCP-сессии.
+3. `ResponseParser` должен не только обновлять `global.elmo`, но и отправлять событие `ELMO.POLL_OK` / `ELMO.FAULT` / `ELMO.SAFETY` в state machine.
+4. `ProtocolManager` не должен сам решать, можно ли стартовать/останавливать запись. Он должен выполнять команды автомата и возвращать результат.
+5. `ScenarioRunner` должен стать дочерним автоматом или подмашиной: шаг сценария, ожидание достижения скорости, удержание времени, запись результата, переход к следующему шагу.
+6. Для отладки на первом этапе достаточно логировать каждое событие и переход в `global.logs`: `old_state -> event -> new_state`.
+
+### 15.5. Практический план внедрения
+
+1. Сначала реализовать простой `SystemStateMachine` без npm-зависимости, чтобы не менять runtime Node-RED.
+2. Перевести только команды `reread`, `driveInit`, `motor_on`, `motor_off`, `drive_stop`, `set_velocity` на вход через автомат.
+3. После стабилизации перенести сценарии и протокол.
+4. Если таблица переходов станет слишком сложной, заменить внутреннюю реализацию на XState actor через `functionExternalModules` или custom node, сохранив внешний контракт событий.
+
+Источники для проектирования: Node-RED `Writing Functions` (`On Start`, `On Stop`, context, external modules) - https://nodered.org/docs/user-guide/writing-functions; XState `State machines` и `Actors` - https://stately.ai/docs/machines и https://stately.ai/docs/actors.
