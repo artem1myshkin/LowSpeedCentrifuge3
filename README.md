@@ -30,4 +30,4 @@ Node-RED references used for these rules:
 
 # Описание проекта
 
-Описание находится в папке /docs в файле project-audit-and-roadmap-local-2026-05-22.md
+Актуальное состояние проекта описано в `docs/project-state.md`. Контракты интеграций (ELMO/БУН/БЕП, протоколы и данные) — в `docs/protocols-and-integrations.md`. План сценарного режима — в `docs/scenario-feature-summary.md`.
