@@ -91,6 +91,15 @@ acceptance-замером в итерации 1.0), существующие
 | **P2** | Скетч писал file-checkpoint на каждый snapshot | §4.6, §6.2: запись `{resolution}` только при фактической смене resolution |
 | **P2** | Transport-generated poll не фиксировал финальный `CR` | §4.2, §4.6: invariant `sendTcp` нормализует финальный `\r` для всех команд, включая poll |
 
+**Раунд 4 (реализация):**
+
+| # | Замечание | Что изменено |
+|---|---|---|
+| **P0** | `global.nc3` не настроен → Function-узлы не инициализируются | §9.1: переход с `libs`/external modules на **`functionGlobalContext`** (require по пути, try/catch); flows.json без `libs`; bootstrap в settings.js один раз на машину; `scripts/setup-nc3.js` |
+| **P0/P1** | Используется `file` context store, который не включён | Убран `file`-store: `context.get/set('elmo_checkpoint')` теперь в memory-store; `contextStorage` в settings.js не требуется. Чекпойнт — лишь pre-poll подсказка |
+| **P1** | Динамический poll не работает — `context.vx`/`resolution` не обновляются | `src/parse.js` (`parseElmoScalars`) + action `ingestResp`: на `ELMO.RESP` извлекаются `VX`/`OL[1]`/`SO`/`MS`/`SR`, обновляют контекст → `computePollDelayMs` даёт реальные 1–30 Гц; setpoint-hint через `envelope.meta.setpointDegS` |
+| **P1** | `resetTcp()` не чистит FrameSplitter | Транспорт получил **out3** → FrameSplitter; `resetTcp` шлёт `{reset:true}` и в tcp (out0), и в splitter (out3); splitter по `msg.reset` вызывает `splitter.reset()` |
+
 ---
 
 ## 1. Текущее состояние (подтверждено по коду)
@@ -921,17 +930,17 @@ state value + context, но НЕ переисполняет** `entry`/`exit`-act
 
 ### 6.2. Что персистим
 
-1. Включить file context store в `settings.js` (сейчас закомментирован):
-
-```js
-contextStorage: {
-  default: { module: "memory" },
-  file:    { module: "localfilesystem" }
-}
-```
-
+1. **Этап 1 (ElmoTransport): file context store НЕ требуется.** Чекпойнт `{ resolution }`
+   хранится в **default (memory) store** — это лишь подсказка диапазона до первого poll, а
+   реальный `resolution` пересобирается из `OL[1]` первым же ответом (§4.4.4, action
+   `ingestResp`). Так settings.js не нужно править под `contextStorage` (важно для
+   переносимости через git — §9.1). Файловый store включается **позже, для Этапа 2**
+   (персистентность шага сценария):
+   ```js
+   contextStorage: { default: { module: "memory" }, file: { module: "localfilesystem" } }
+   ```
 2. **actorRef — только в node-context (in-memory)**, в файл НЕ кладём (не сериализуем).
-3. **`ElmoTransport`:** checkpoint `{ resolution }` (см. §4.6). Без raw snapshot.
+3. **`ElmoTransport`:** checkpoint `{ resolution }` в memory-store (см. §4.6). Без raw snapshot.
 4. **`ScenarioManager`:** доменный checkpoint `{ file_path, steps, step_index,
    target_speed_ticks, hold_remaining_sec, phase, resolution }` (подмножество
    `scenario_state`). При старте — **не** `createActor({snapshot})`, а восстановление в
@@ -976,18 +985,18 @@ README rule 7–8 запрещают `import/require/module.exports` **в тел
 (официальная документация Node-RED по external modules / writing functions). Поэтому
 заранее выбираем механизм доставки **нашего** кода машины:
 
-- **Рекомендация: локальный npm-пакет `nc3-elmo-machines`** (фабрики `createElmoTransport()`,
-  `createScenarioManager()`, парсер `.scn`, таблица `RES`). Устанавливается в `userDir`,
-  подключается как external module в Setup-вкладке (даёт переменную, напр. `nc3`). В `On Start`:
-  `const { createElmoTransport } = nc3;` — это **не** `require` в теле, а доступ к настроенному
-  модулю. Один источник истины: тот же пакет покрывается pure-тестами (п. 1 выше). Нет дрейфа.
-- Так же подключается сам `xstate` v5 (отдельная переменная, напр. `xstateLib`).
+- **Выбрано: локальный npm-пакет `nc3-elmo-machines`** (фабрики `createElmoTransport()`/
+  `startElmoTransport()`, `createFrameSplitter()`, `parseElmoScalars()`, таблица `RES`),
+  подключаемый через **`functionGlobalContext`** (§9.1), а НЕ через Setup-вкладку
+  external modules. Причина — см. §9.1: external modules резолвятся из userDir → 404 на
+  локальный пакет и риск прунинга palette. В `On Start`: `const nc3 = global.get('nc3');
+  const actor = nc3.startElmoTransport(effects, input);` — это **не** `require` в теле.
+  `xstate` остаётся **внутри** пакета (его зависимость), узлу отдельный модуль не нужен.
+  Один источник истины: тот же пакет покрывается pure-тестами (п. 1 выше). Нет дрейфа.
 - Альтернатива для быстрого POC: машину **инлайнить** в тело Function-узла, держа
   зеркальную `.js`-копию для тестов — но это риск расхождения, поэтому только на старте.
-- `functionGlobalContext` — третий вариант (преднастроенные модули в `settings.js`), но он
-  правит глобальный `settings.js` и менее локален, чем external module узла.
 
-Итог: «тонкая обвязка в узле» = вызов фабрики из локального npm-пакета, а не `require`.
+Итог: «тонкая обвязка в узле» = вызов фабрики из `global.get('nc3')`, а не `require`.
 
 ---
 
@@ -997,34 +1006,50 @@ README rule 7–8 запрещают `import/require/module.exports` **в тел
   `node-red-contrib-xstate-machine` фиксирует `xstate@4.x` — **не использовать** как
   целевую архитектуру (semantic/API drift; вывод deep-research отчёта).
 
-### 9.1. P2: где и как ставятся модули (deployment)
+### 9.1. Deployment: `functionGlobalContext`, а НЕ external modules userDir
 
-Нужны **два** external-модуля: внешний `xstate@^5` и локальный `nc3-elmo-machines` (§8.1).
-Цепочка установки и её воспроизведение на целевой машине:
+**Почему не `libs`/external modules:** Node-RED резолвит function external modules из
+**userDir** `node_modules` (проектный `package.json` остаётся пустым), а сам пакет —
+локальный (не в npm registry), поэтому auto-install даёт **404** на свежей машине. Хуже
+того, любой `npm install` в userDir **прунит** palette-узлы, не объявленные в
+`userDir/package.json` (см. [[feedback-node-red-userdir-npm]]) — недопустимо на машине,
+подключённой к железу.
 
-1. **`nc3-elmo-machines`** — локальный пакет (исходники в репозитории, напр. `./packages/nc3-elmo-machines`).
-   `xstate` — его **peer/обычная зависимость**, объявленная в `package.json` пакета.
-2. **Установка в Node-RED `userDir`**, а не автоматически в каталог проекта. `userDir` —
-   runtime-каталог Node-RED, где лежат `settings.js` и `node_modules`. В текущей установке это
-   `C:\Users\Артём\.node-red`; каталог проекта — `C:\Users\Артём\.node-red\projects\LowSpeedCentrifuge3`.
-   Поэтому команда выполняется из `userDir`, например:
-   `npm install ./projects/LowSpeedCentrifuge3/packages/nc3-elmo-machines` — это подтянет и
-   `xstate` (если он dependency пакета). Node-RED берёт модули для Function-узлов именно из
-   `node_modules` `userDir`.
-3. **Подключение в узле:** на Setup-вкладке Function-узла добавить модули `xstate`→`xstateLib`
-   и `nc3-elmo-machines`→`nc3` (это и есть механизм external modules при `functionExternalModules:true`).
-   В `package.json` `userDir` появятся записи `dependencies`/lockfile; проектный
-   `package.json` можно использовать для исходников и тестов пакета, но он сам по себе не
-   делает модуль доступным Function-узлу.
-4. **Целевая машина:** клон/обновление проекта в `projects/LowSpeedCentrifuge3` → из Node-RED
-   `userDir` выполнить `npm install ./projects/LowSpeedCentrifuge3/packages/nc3-elmo-machines`
-   или включить auto-install external modules и проверить, что зависимости появились в
-   `userDir/node_modules` → deploy `flows.json`. Версии `xstate` и пакета пинятся
-   (`^5.x` / точная), чтобы стенд и прод совпадали.
+**Выбранный механизм — `functionGlobalContext` (README rule 8):** пакет загружается **по
+пути** из git-синхронизируемого проекта, а его зависимости (`xstate`) живут **внутри папки
+пакета** — `npm install` затрагивает только её, userDir не трогается.
 
-> Важно: просто прописать `xstate` в `dependencies` проектного `package.json`
-> **недостаточно** — модуль должен быть установлен в `node_modules` userDir и **подключён в
-> самом Function-узле** (editor), иначе в теле узла он недоступен (require запрещён, README rule 7–8).
+Что переносится через git (не требует ручных действий на каждой машине):
+- исходники `packages/nc3-elmo-machines/**`;
+- `flows.json` с узлами без `libs` (используют `global.get('nc3')`);
+- скрипт `scripts/setup-nc3.js` и этот план.
+
+Что делается **один раз на каждой машине** (node_modules и `settings.js` через git не
+переносятся в принципе):
+
+1. **Установить зависимости пакета (изолированно, безопасно):**
+   ```
+   node scripts/setup-nc3.js
+   # = cd packages/nc3-elmo-machines && npm install   (ставит xstate ВНУТРИ пакета)
+   ```
+2. **Bootstrap в `<userDir>/settings.js`** — один раз добавить в `functionGlobalContext`
+   (try/catch, чтобы отсутствие пакета не блокировало старт Node-RED):
+   ```js
+   functionGlobalContext: {
+       nc3: (function () {
+           try { return require('./projects/LowSpeedCentrifuge3/packages/nc3-elmo-machines'); }
+           catch (e) { console.warn('[nc3-elmo-machines] ' + e.message); return undefined; }
+       })(),
+   },
+   ```
+   Путь — относительно `settings.js` (он лежит в userDir). После правки — **restart Node-RED**.
+3. **Deploy** `flows.json` (или он уже подтянут через git). Узлы `ElmoTransport`/`FrameSplitter`
+   берут пакет через `global.get('nc3')`; если bootstrap не сделан — узел залогирует понятную
+   ошибку, но Node-RED стартует.
+
+> Версия `xstate` пинится в `packages/nc3-elmo-machines/package.json` (`^5`) + lockfile —
+> стенд и прод получают одну версию. `node_modules` принципиально per-machine (нативные
+> модули вроде serialport), поэтому шаг 1 неизбежен на любой машине.
 
 ---
 

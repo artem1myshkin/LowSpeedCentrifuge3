@@ -1,8 +1,9 @@
 'use strict';
 
-const { setup, assign } = require('xstate');
+const { setup, assign, createActor } = require('xstate');
 const { priorityInsert, dequeue: queueDequeue, hasKind, PRIORITY } = require('./queue');
 const { buildPollEnvelope, shouldExtend, computePollDelayMs } = require('./poll');
+const { parseElmoScalars } = require('./parse');
 
 // ElmoTransport — single serialized owner of the ELMO TCP socket (plan §4).
 // The machine is pure: all I/O is delegated to injected `effects` so it can be unit-tested
@@ -72,9 +73,30 @@ function createElmoTransport(effects) {
       CONNECT_TIMEOUT: () => connectTimeoutMs,
     },
     actions: {
-      enqueueCmd: assign(({ context, event }) => ({
-        queue: priorityInsert(context.queue, normalizeEnvelope(event.envelope)),
-      })),
+      enqueueCmd: assign(({ context, event }) => {
+        const env = normalizeEnvelope(event.envelope);
+        const patch = { queue: priorityInsert(context.queue, env) };
+        // Setpoint fallback (§4.4): use target speed for poll rate until the first VX poll.
+        const sp = env.meta && env.meta.setpointDegS;
+        if (sp != null && Number.isFinite(Number(sp))) {
+          patch.omegaSource = 'setpoint';
+          patch.setpointDegS = Number(sp);
+        }
+        return patch;
+      }),
+
+      // Update only the fields the transport needs for its own decisions (poll rate, range).
+      // Does NOT replace ResponseParser — raw is still forwarded downstream (§4.6).
+      ingestResp: assign(({ context, event }) => {
+        const f = parseElmoScalars(event.raw);
+        const patch = {};
+        if (f.vx !== undefined) { patch.vx = f.vx; patch.omegaSource = 'measured'; }
+        if (f.resolution) patch.resolution = f.resolution;
+        if (f.so !== undefined) patch.so = f.so;
+        if (f.ms !== undefined) patch.ms = f.ms;
+        if (f.sr !== undefined) patch.sr = f.sr;
+        return patch;
+      }),
 
       enqueuePoll: assign(({ context }) => {
         // Single poll in flight/queue at a time (§4.4.4 dedup).
@@ -181,7 +203,7 @@ function createElmoTransport(effects) {
           awaiting: {
             after: { TIMEOUT: { target: '#transport.fault', actions: 'failInFlight' } },
             on: {
-              'ELMO.RESP': { target: 'dispatch', actions: 'forwardAndAck' },
+              'ELMO.RESP': { target: 'dispatch', actions: ['ingestResp', 'forwardAndAck'] },
               'ELMO.TIMEOUT': { target: '#transport.fault', actions: 'failInFlight' },
             },
           },
@@ -207,4 +229,11 @@ function createElmoTransport(effects) {
   });
 }
 
-module.exports = { createElmoTransport };
+// Convenience for the Node-RED glue: create + start the actor in one call so the Function
+// node only needs the `nc3` module (xstate stays internal to this package — no second
+// external module / no userDir install needed; see docs/xstate-integration-plan.md §9.1).
+function startElmoTransport(effects, input) {
+  return createActor(createElmoTransport(effects), { input: input || {} }).start();
+}
+
+module.exports = { createElmoTransport, startElmoTransport };

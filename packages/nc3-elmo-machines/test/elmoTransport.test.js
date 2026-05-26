@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createActor } = require('xstate');
 
-const { createElmoTransport } = require('../src/elmoTransport');
+const { createElmoTransport, startElmoTransport } = require('../src/elmoTransport');
 const { LEAN_POLL } = require('../src/poll');
 
 // Harness: mock effects with call recording and an injectable clock.
@@ -143,6 +143,39 @@ test('poll dedup: only one poll in flight/queue at a time', () => {
   assert.equal(h.ctx().inFlight.kind, 'poll');
   h.actor.send({ type: 'POLL.TICK' }); // deduped: inFlight is already a poll
   assert.equal(h.ctx().queue.length, 0);
+});
+
+test('ingests VX/OL[1] from a poll response (drives dynamic poll rate)', () => {
+  const { computePollDelayMs } = require('../src/poll');
+  const h = makeHarness({ startNow: 500 });
+  h.actor.send({ type: 'CONNECT' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });   // connected.idle
+  h.actor.send({ type: 'POLL.TICK' });                  // lean poll in flight (awaiting)
+  assert.equal(h.ctx().inFlight.kind, 'poll');
+
+  // High speed (low range, 180 deg/s) response -> context updates -> faster poll.
+  h.actor.send({ type: 'ELMO.RESP', raw: 'TM=1;PX=2;VX=-3276800;OL[1]=1;MS=0;' });
+  const c = h.ctx();
+  assert.equal(c.vx, -3276800);
+  assert.equal(c.resolution, 'low');
+  assert.equal(c.omegaSource, 'measured');
+  // 180 deg/s -> 15 Hz -> ~67 ms (was 1000 ms at rest), proving the rate is now dynamic.
+  assert.equal(computePollDelayMs(c), Math.round(1000 / 15));
+});
+
+test('setpoint hint sets omegaSource before first VX poll', () => {
+  const h = connectedWithCmd();
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'jv', kind: 'cmd', cmd: 'JV=1;BG', meta: { topic: 'set_velocity', setpointDegS: 360 } } });
+  const c = h.ctx();
+  assert.equal(c.omegaSource, 'setpoint');
+  assert.equal(c.setpointDegS, 360);
+});
+
+test('startElmoTransport returns a started actor in offline with given resolution', () => {
+  const actor = startElmoTransport({ sendTcp: () => {} }, { resolution: 'low' });
+  assert.equal(actor.getSnapshot().value, 'offline');
+  assert.equal(actor.getSnapshot().context.resolution, 'low');
+  actor.stop();
 });
 
 test('a cmd preempts a queued poll (priority)', () => {
