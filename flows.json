@@ -132,14 +132,13 @@
             "b00b50ceb5e7071a",
             "9a9c7b519313301e",
             "5e1ab91d73c3505b",
-            "6a35fe96b9a48a77",
-            "97bacba5f28a6acc",
-            "6cebf01333cb8e85"
+            "6cebf01333cb8e85",
+            "4873c06413320495"
         ],
         "x": 34,
-        "y": 19,
-        "w": 1552,
-        "h": 762
+        "y": 39,
+        "w": 1412,
+        "h": 742
     },
     {
         "id": "65aa9b618869d533",
@@ -573,10 +572,10 @@
         "type": "ui-group",
         "name": "Журнал",
         "page": "e1abfbdf19485d07",
-        "width": 6,
+        "width": "8",
         "height": 1,
         "order": 1,
-        "showTitle": true,
+        "showTitle": false,
         "className": "",
         "visible": "true",
         "disabled": "false",
@@ -758,7 +757,7 @@
         "complete": "false",
         "statusVal": "",
         "statusType": "auto",
-        "x": 1080,
+        "x": 1100,
         "y": 460,
         "wires": []
     },
@@ -826,7 +825,7 @@
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 660,
+        "x": 690,
         "y": 140,
         "wires": [
             []
@@ -893,8 +892,8 @@
         "ui": "",
         "name": "Журнал",
         "order": 1,
-        "width": 0,
-        "height": 0,
+        "width": "0",
+        "height": "0",
         "head": "",
         "format": "<template>\n  <v-container class=\"journal-root pa-3\" fluid>\n    <div class=\"journal-header mb-4\">\n      <div>\n        <div class=\"journal-title\">Журнал протоколов</div>\n        <div class=\"journal-subtitle\">Просмотр файлов протокола и связанных файлов данных</div>\n      </div>\n      <div class=\"d-flex align-center gap-2 flex-wrap justify-end\">\n        <v-chip :color=\"protocolOpen ? 'red-darken-1' : 'grey-darken-1'\" size=\"small\" variant=\"flat\">\n          {{ protocolOpen ? 'Протокол открыт' : 'Протокол закрыт' }}\n        </v-chip>\n        <v-chip v-if=\"protocolFile\" size=\"small\" variant=\"outlined\" class=\"font-mono\">\n          {{ basename(protocolFile) }}\n        </v-chip>\n      </div>\n    </div>\n\n    <v-row dense>\n      <v-col cols=\"12\" md=\"4\">\n        <div class=\"journal-card\">\n          <div class=\"journal-card-title\">\n            <v-icon size=\"16\" class=\"mr-1\">mdi-folder-multiple-outline</v-icon>Файлы протоколов\n          </div>\n          <div class=\"d-flex align-center gap-2 mb-3 flex-wrap\">\n            <v-btn\n              color=\"primary\"\n              variant=\"elevated\"\n              size=\"small\"\n              prepend-icon=\"mdi-refresh\"\n              @click=\"refreshFiles\"\n              :loading=\"loading\"\n            >\n              Обновить список\n            </v-btn>\n            <v-chip size=\"small\" variant=\"outlined\">{{ files.length }}</v-chip>\n          </div>\n\n          <div v-if=\"!files.length\" class=\"journal-empty\">\n            Файлы протоколов не найдены.\n          </div>\n\n          <v-list v-else density=\"compact\" lines=\"two\" class=\"journal-files\">\n            <v-list-item\n              v-for=\"file in files\"\n              :key=\"file.path\"\n              :active=\"selectedProtocol === file.path\"\n              active-class=\"journal-file--active\"\n              rounded=\"lg\"\n              @click=\"openProtocol(file)\"\n            >\n              <template #prepend>\n                <v-icon size=\"18\" color=\"blue-grey-darken-1\">mdi-file-document-outline</v-icon>\n              </template>\n              <v-list-item-title class=\"font-mono text-body-2\">{{ file.name }}</v-list-item-title>\n              <v-list-item-subtitle>{{ file.mtime }} · {{ formatBytes(file.size) }}</v-list-item-subtitle>\n              <template #append>\n                <v-chip\n                  v-if=\"protocolFile === file.path\"\n                  color=\"red\"\n                  size=\"x-small\"\n                  variant=\"flat\"\n                >\n                  открыт\n                </v-chip>\n              </template>\n            </v-list-item>\n          </v-list>\n        </div>\n      </v-col>\n\n      <v-col cols=\"12\" md=\"8\">\n        <div class=\"journal-card journal-card--viewer\">\n          <div class=\"journal-card-title\">\n            <v-icon size=\"16\" class=\"mr-1\">\n              {{ selectedKind === 'data' ? 'mdi-chart-line' : 'mdi-text-box-search-outline' }}\n            </v-icon>\n            {{ selectedKind === 'data' ? 'Файл данных' : 'Файл протокола' }}\n          </div>\n\n          <div class=\"d-flex align-center gap-2 mb-3 flex-wrap\">\n            <span v-if=\"selectedName\" class=\"font-mono text-body-2\">{{ selectedName }}</span>\n            <v-spacer></v-spacer>\n            <v-btn\n              v-if=\"selectedKind === 'data' && selectedProtocol\"\n              variant=\"text\"\n              color=\"primary\"\n              size=\"small\"\n              prepend-icon=\"mdi-arrow-left\"\n              @click=\"openProtocolByPath(selectedProtocol)\"\n            >\n              К протоколу\n            </v-btn>\n          </div>\n\n          <div v-if=\"error\" class=\"journal-error\">{{ error }}</div>\n          <div v-else-if=\"!selectedFile\" class=\"journal-empty\">\n            Выберите файл протокола слева.\n          </div>\n          <div v-else class=\"journal-viewer font-mono\">\n            <div\n              v-for=\"(row, index) in rows\"\n              :key=\"index\"\n              class=\"journal-row\"\n              :class=\"'journal-row--' + row.kind\"\n            >\n              <template v-if=\"row.kind === 'protocol-link'\">\n                <span class=\"journal-measure\">{{ row.speed }}</span>\n                <span class=\"journal-measure\">{{ row.error }}</span>\n                <v-btn\n                  variant=\"text\"\n                  size=\"small\"\n                  color=\"primary\"\n                  class=\"journal-link\"\n                  @click=\"openDataFile(row.dataFilePath)\"\n                >\n                  {{ row.dataFileName }}\n                </v-btn>\n                <span class=\"journal-comment\">{{ row.comment }}</span>\n              </template>\n              <template v-else>\n                {{ row.text }}\n              </template>\n            </div>\n          </div>\n        </div>\n      </v-col>\n    </v-row>\n  </v-container>\n</template>\n\n<script>\nexport default {\n  name: \"JournalTab\",\n\n  data() {\n    return {\n      files: [],\n      rows: [],\n      protocolOpen: false,\n      protocolFile: \"\",\n      selectedProtocol: \"\",\n      selectedFile: \"\",\n      selectedKind: \"protocol\",\n      selectedName: \"\",\n      error: \"\",\n      loading: false,\n    };\n  },\n\n  methods: {\n    basename(filePath) {\n      return String(filePath || \"\").split(/[\\\\/]/).pop() || \"\";\n    },\n\n    formatBytes(size) {\n      const value = Number(size) || 0;\n      if (value < 1024) return value + \" Б\";\n      if (value < 1024 * 1024) return (value / 1024).toFixed(1) + \" КБ\";\n      return (value / (1024 * 1024)).toFixed(1) + \" МБ\";\n    },\n\n    refreshFiles() {\n      this.loading = true;\n      this.send({ topic: \"journal_refresh\", payload: {} });\n    },\n\n    openProtocol(file) {\n      if (!file || !file.path) return;\n      this.loading = true;\n      this.send({\n        topic: \"journal_open_file\",\n        payload: {\n          filename: file.path,\n          kind: \"protocol\",\n          selectedProtocol: file.path,\n        },\n      });\n    },\n\n    openProtocolByPath(filePath) {\n      if (!filePath) return;\n      this.openProtocol({ path: filePath });\n    },\n\n    openDataFile(filePath) {\n      if (!filePath) return;\n      this.loading = true;\n      this.send({\n        topic: \"journal_open_file\",\n        payload: {\n          filename: filePath,\n          kind: \"data\",\n          selectedProtocol: this.selectedProtocol,\n        },\n      });\n    },\n\n    applyState(payload) {\n      const state = payload && typeof payload === \"object\" ? payload : {};\n      this.files = Array.isArray(state.files) ? state.files : [];\n      this.rows = Array.isArray(state.rows) ? state.rows : [];\n      this.protocolOpen = !!state.protocolOpen;\n      this.protocolFile = state.protocolFile || \"\";\n      this.selectedProtocol = state.selectedProtocol || \"\";\n      this.selectedFile = state.selectedFile || \"\";\n      this.selectedKind = state.selectedKind || \"protocol\";\n      this.selectedName = state.selectedName || this.basename(this.selectedFile);\n      this.error = state.error || \"\";\n      this.loading = false;\n    },\n\n    handleIncoming(msg) {\n      if (!msg || !msg.topic) return;\n      if (msg.topic === \"init\" || msg.topic === \"logs_update\") {\n        const payload = msg.payload && typeof msg.payload === \"object\" ? msg.payload : {};\n        if (payload.protocolOpen !== undefined) this.protocolOpen = !!payload.protocolOpen;\n        if (payload.protocol_open !== undefined) this.protocolOpen = !!payload.protocol_open;\n        if (payload.protocolFile !== undefined) this.protocolFile = payload.protocolFile || \"\";\n        if (payload.protocol_file !== undefined) this.protocolFile = payload.protocol_file || \"\";\n        return;\n      }\n      if (msg.topic === \"journal_state\") {\n        this.applyState(msg.payload);\n      }\n    },\n  },\n\n  mounted() {\n    this.$socket.on(\"msg-input:\" + this.id, (msg) => this.handleIncoming(msg));\n    this.send({ topic: \"reread\", payload: {} });\n    this.refreshFiles();\n  },\n};\n</script>\n\n<style scoped>\n.journal-root {\n  background: #f4f7fb;\n  min-height: 100%;\n}\n.journal-header {\n  display: flex;\n  justify-content: space-between;\n  align-items: flex-start;\n  gap: 12px;\n}\n.journal-title {\n  font-size: 24px;\n  font-weight: 700;\n  color: #1f2937;\n}\n.journal-subtitle {\n  font-size: 13px;\n  color: #64748b;\n  margin-top: 4px;\n}\n.journal-card {\n  background: #ffffff;\n  border: 1px solid #dde4ee;\n  border-radius: 14px;\n  padding: 14px;\n  height: 100%;\n  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);\n}\n.journal-card--viewer {\n  min-height: 560px;\n}\n.journal-card-title {\n  font-size: 12px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.6px;\n  color: #546e7a;\n  display: flex;\n  align-items: center;\n  border-bottom: 1px solid #eceff1;\n  padding-bottom: 6px;\n  margin-bottom: 12px;\n}\n.journal-files {\n  max-height: 560px;\n  overflow: auto;\n  border-radius: 10px;\n}\n.journal-file--active {\n  background: #e3f2fd;\n}\n.journal-viewer {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  white-space: pre-wrap;\n  max-height: 620px;\n  overflow: auto;\n  padding-right: 4px;\n}\n.journal-row {\n  font-size: 13px;\n  line-height: 1.45;\n  color: #1f2937;\n}\n.journal-row--comment {\n  color: #607d8b;\n}\n.journal-row--separator,\n.journal-row--marker {\n  color: #90a4ae;\n}\n.journal-row--protocol-link {\n  display: grid;\n  grid-template-columns: 100px 90px auto 1fr;\n  gap: 10px;\n  align-items: center;\n}\n.journal-measure {\n  color: #0f4c81;\n  font-weight: 700;\n}\n.journal-link {\n  justify-self: start;\n  min-width: 0;\n  text-transform: none;\n  padding: 0;\n}\n.journal-comment {\n  color: #607d8b;\n}\n.journal-empty {\n  color: #78909c;\n  font-size: 14px;\n  padding: 18px 8px;\n}\n.journal-error {\n  color: #b71c1c;\n  background: #ffebee;\n  border: 1px solid #ef9a9a;\n  border-radius: 10px;\n  padding: 12px;\n  font-size: 14px;\n}\n.gap-2 {\n  gap: 8px;\n}\n.gap-3 {\n  gap: 12px;\n}\n</style>\n",
         "storeOutMessages": true,
@@ -2603,8 +2602,7 @@
         "wires": [
             [
                 "a4c3fbb3cecc89ec",
-                "2bf42c6651257b16",
-                "3e43327483cdf7f5"
+                "2bf42c6651257b16"
             ]
         ]
     },
@@ -2749,7 +2747,8 @@
         "y": 180,
         "wires": [
             [
-                "094feefc78513059"
+                "094feefc78513059",
+                "4873c06413320495"
             ]
         ]
     },
@@ -2894,8 +2893,7 @@
         "y": 180,
         "wires": [
             [
-                "fd823fb67f7b2e69",
-                "6a35fe96b9a48a77"
+                "fd823fb67f7b2e69"
             ],
             [
                 "467bb4e422d6bdda"
@@ -2907,8 +2905,7 @@
                 "e62c2f4510a8af0b"
             ],
             [
-                "e62c2f4510a8af0b",
-                "97bacba5f28a6acc"
+                "e62c2f4510a8af0b"
             ],
             [
                 "01ebe906f9df9688"
@@ -3306,56 +3303,38 @@
         "wires": []
     },
     {
-        "id": "6a35fe96b9a48a77",
+        "id": "6cebf01333cb8e85",
         "type": "debug",
         "z": "ac37a9949da4d9d6",
         "g": "103337ebd466ad7c",
-        "name": "debug 4",
-        "active": false,
+        "name": "debug 9",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 760,
+        "y": 660,
+        "wires": []
+    },
+    {
+        "id": "4873c06413320495",
+        "type": "debug",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "debug 10",
+        "active": true,
         "tosidebar": true,
         "console": false,
         "tostatus": false,
         "complete": "false",
         "statusVal": "",
         "statusType": "auto",
-        "x": 1400,
-        "y": 60,
-        "wires": []
-    },
-    {
-        "id": "97bacba5f28a6acc",
-        "type": "debug",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "debug 5",
-        "active": false,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "true",
-        "targetType": "full",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 1480,
-        "y": 360,
-        "wires": []
-    },
-    {
-        "id": "6cebf01333cb8e85",
-        "type": "debug",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "debug 9",
-        "active": false,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "true",
-        "targetType": "full",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 740,
-        "y": 660,
+        "x": 1000,
+        "y": 80,
         "wires": []
     },
     {
