@@ -1,0 +1,151 @@
+[
+  {
+    "id": "elmoxs-tab",
+    "type": "tab",
+    "label": "ELMO XState (sit)",
+    "disabled": false,
+    "info": "Parallel bring-up of the ElmoTransport XState actor over one tcp request (sit). Does not replace existing ELMO nodes. See docs/xstate-integration-plan.md §4.9."
+  },
+  {
+    "id": "elmoxs-transport",
+    "type": "function",
+    "z": "elmoxs-tab",
+    "name": "ElmoTransport",
+    "func": "const actor = context.get('elmoActor');\nif (!actor) { node.error('ElmoTransport actor not initialized', msg); return null; }\n\nif (msg.elmo_raw === true) { actor.send({ type: 'ELMO.RESP', raw: msg.payload }); return null; }\nif (msg.topic === 'CONNECT') { actor.send({ type: 'CONNECT' }); return null; }\nif (msg.topic === 'POLL.TICK') { actor.send({ type: 'POLL.TICK' }); return null; }\n\n// Bring-up: msg.payload as a raw ELMO command string (e.g. \"VX\").\nif (typeof msg.payload === 'string' && msg.payload.length) {\n    actor.send({ type: 'UI.CMD', envelope: { kind: 'cmd', cmd: msg.payload, meta: { topic: msg.topic || 'manual' } } });\n}\nreturn null;",
+    "outputs": 3,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "const { createActor } = xstateLib;\nconst { createElmoTransport } = nc3;\n\nfunction ensureCr(c) { const t = String(c == null ? '' : c); return t.endsWith('\\r') ? t : t + '\\r'; }\n\nconst ckpt = context.get('elmo_checkpoint', 'file') || {};\n\nconst machine = createElmoTransport({\n    // out0 -> tcp request (sit). resetTcp uses msg.reset to force reconnect.\n    sendTcp: function (cmd) { node.send([{ payload: ensureCr(cmd) }, null, null]); },\n    resetTcp: function () { node.send([{ reset: true }, null, null]); },\n    // out1 -> ResponseParser (here: debug). Restore logical topic (poll -> poll_data).\n    forwardResp: function (raw, topic) { node.send([null, { topic: topic || 'poll_data', payload: raw }, null]); },\n    // out2 -> domain events (CMD.ACKED/FAILED, ...).\n    emitEvent: function (evt) { node.send([null, null, { topic: evt.type, payload: evt }]); },\n    setStatus: function (st) { node.status(st); },\n    timeoutMs: 1000,\n    connectTimeoutMs: 2000,\n    statePeriodMs: 1000\n});\n\nconst actor = createActor(machine, { input: { resolution: ckpt.resolution || 'high' } }).start();\n\nlet lastRes = ckpt.resolution || null;\nactor.subscribe(function (snap) {\n    context.set('transport_state', snap.value);\n    const r = snap.context.resolution;\n    if (r && r !== lastRes) { context.set('elmo_checkpoint', { resolution: r }, 'file'); lastRes = r; }\n});\n\ncontext.set('elmoActor', actor);\n\n// Kick connect + self-clocked poll AFTER On Start completes.\nconst ct = setTimeout(function () {\n    const a = context.get('elmoActor');\n    if (a) a.send({ type: 'CONNECT' });\n}, 0);\ncontext.set('connectTimer', ct);",
+    "finalize": "const actor = context.get('elmoActor');\nif (actor) actor.stop();\nconst ct = context.get('connectTimer');\nif (ct) clearTimeout(ct);",
+    "libs": [
+      {
+        "var": "xstateLib",
+        "module": "xstate"
+      },
+      {
+        "var": "nc3",
+        "module": "nc3-elmo-machines"
+      }
+    ],
+    "x": 470,
+    "y": 160,
+    "wires": [
+      [
+        "elmoxs-tcp"
+      ],
+      [
+        "elmoxs-dbg-resp"
+      ],
+      [
+        "elmoxs-dbg-evt"
+      ]
+    ]
+  },
+  {
+    "id": "elmoxs-tcp",
+    "type": "tcp request",
+    "z": "elmoxs-tab",
+    "name": "ELMO tcp (sit)",
+    "server": "192.168.1.2",
+    "port": "2000",
+    "out": "sit",
+    "ret": "string",
+    "splitc": "",
+    "newline": "",
+    "trim": false,
+    "tls": "",
+    "x": 700,
+    "y": 120,
+    "wires": [
+      [
+        "elmoxs-splitter"
+      ]
+    ]
+  },
+  {
+    "id": "elmoxs-splitter",
+    "type": "function",
+    "z": "elmoxs-tab",
+    "name": "FrameSplitter",
+    "func": "const splitter = context.get('splitter');\nif (!splitter) { node.error('FrameSplitter not initialized', msg); return null; }\n\nconst frames = splitter.push(msg.payload);\nfor (let i = 0; i < frames.length; i++) {\n    node.send({ elmo_raw: true, payload: frames[i] });\n}\n\n// Idle-gap fallback: if the terminator is wrong/unknown, flush the buffered remainder\n// after a short silence so bring-up still produces frames (single in-flight => safe).\nlet t = context.get('idleTimer');\nif (t) clearTimeout(t);\nt = setTimeout(function () {\n    const s = context.get('splitter');\n    const rem = s && s.flush();\n    if (rem != null && rem.length) node.send({ elmo_raw: true, payload: rem });\n}, 15);\ncontext.set('idleTimer', t);\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "const { createFrameSplitter } = nc3;\n// Stand bring-up: terminator '\\r' is the candidate end-of-frame (confirm on stand, §11.1).\ncontext.set('splitter', createFrameSplitter({ terminator: '\\r' }));",
+    "finalize": "const t = context.get('idleTimer');\nif (t) clearTimeout(t);",
+    "libs": [
+      {
+        "var": "nc3",
+        "module": "nc3-elmo-machines"
+      }
+    ],
+    "x": 700,
+    "y": 220,
+    "wires": [
+      [
+        "elmoxs-transport"
+      ]
+    ]
+  },
+  {
+    "id": "elmoxs-inject",
+    "type": "inject",
+    "z": "elmoxs-tab",
+    "name": "manual cmd (VX)",
+    "props": [
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "manual",
+    "payload": "VX",
+    "payloadType": "str",
+    "x": 230,
+    "y": 160,
+    "wires": [
+      [
+        "elmoxs-transport"
+      ]
+    ]
+  },
+  {
+    "id": "elmoxs-dbg-resp",
+    "type": "debug",
+    "z": "elmoxs-tab",
+    "name": "forwarded resp (out1)",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 720,
+    "y": 360,
+    "wires": []
+  },
+  {
+    "id": "elmoxs-dbg-evt",
+    "type": "debug",
+    "z": "elmoxs-tab",
+    "name": "transport events (out2)",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 730,
+    "y": 420,
+    "wires": []
+  }
+]
