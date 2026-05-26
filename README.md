@@ -30,4 +30,4 @@ Node-RED references used for these rules:
 
 # Описание проекта
 
-Актуальное состояние проекта описано в `docs/project-state.md`. Контракты интеграций (ELMO/БУН/БЕП, протоколы и данные) — в `docs/protocols-and-integrations.md`. План сценарного режима — в `docs/scenario-feature-summary.md`.
+Актуальное состояние проекта описано в `docs/project-state.md`. Контракты интеграций (ELMO/БУН/БЕП, протоколы и данные) — в `docs/protocols-and-integrations.md`. Дизайн единого транспорта ELMO (устранение TCP race, динамический опрос 1–30 Гц) и сценарного режима — в `docs/elmo-transport-design.md`. План сценарного режима — в `docs/scenario-feature-summary.md`.
