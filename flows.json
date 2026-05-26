@@ -715,6 +715,7 @@
         "id": "ee546594e8b06dc6",
         "type": "tcp request",
         "z": "f5735fc042f6e9a2",
+        "d": true,
         "name": "",
         "server": "192.168.1.2",
         "port": "2000",
@@ -1787,89 +1788,6 @@
         "wires": []
     },
     {
-        "id": "eda8edd22078b581",
-        "type": "inject",
-        "z": "5bbcbebf6ff74a86",
-        "name": "",
-        "props": [
-            {
-                "p": "payload"
-            }
-        ],
-        "repeat": "",
-        "crontab": "",
-        "once": false,
-        "onceDelay": 0.1,
-        "topic": "",
-        "payload": "PX\\r",
-        "payloadType": "str",
-        "x": 2930,
-        "y": 2120,
-        "wires": [
-            [
-                "90521671a9898340"
-            ]
-        ]
-    },
-    {
-        "id": "f9979d0d3f304430",
-        "type": "debug",
-        "z": "5bbcbebf6ff74a86",
-        "name": "debug 29",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "true",
-        "targetType": "full",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 3600,
-        "y": 2120,
-        "wires": []
-    },
-    {
-        "id": "964d1c19ad1c3e04",
-        "type": "tcp request",
-        "z": "5bbcbebf6ff74a86",
-        "name": "",
-        "server": "192.168.1.2",
-        "port": "2000",
-        "out": "time",
-        "ret": "string",
-        "splitc": "1000",
-        "newline": "",
-        "trim": false,
-        "tls": "",
-        "x": 3380,
-        "y": 2120,
-        "wires": [
-            [
-                "f9979d0d3f304430"
-            ]
-        ]
-    },
-    {
-        "id": "90521671a9898340",
-        "type": "function",
-        "z": "5bbcbebf6ff74a86",
-        "name": "function 3",
-        "func": "msg.payload = \"PX\\r\";\nreturn msg;",
-        "outputs": 1,
-        "timeout": 0,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 3140,
-        "y": 2120,
-        "wires": [
-            [
-                "964d1c19ad1c3e04"
-            ]
-        ]
-    },
-    {
         "id": "4f1ee326853e85a7",
         "type": "debug",
         "z": "5bbcbebf6ff74a86",
@@ -1911,13 +1829,14 @@
         "id": "8fc155a62ec95715",
         "type": "tcp request",
         "z": "5bbcbebf6ff74a86",
+        "d": true,
         "g": "52568354c3badd48",
         "name": "",
         "server": "192.168.1.2",
         "port": "2000",
         "out": "time",
         "ret": "string",
-        "splitc": "1000",
+        "splitc": "100",
         "newline": "",
         "trim": false,
         "tls": "",
@@ -2740,6 +2659,7 @@
         "id": "4fcf13177fcee3a2",
         "type": "tcp request",
         "z": "ac37a9949da4d9d6",
+        "d": true,
         "g": "103337ebd466ad7c",
         "name": "",
         "server": "192.168.1.2",
@@ -2831,6 +2751,7 @@
         "id": "90d7f1a1c7f37862",
         "type": "tcp request",
         "z": "ac37a9949da4d9d6",
+        "d": true,
         "g": "103337ebd466ad7c",
         "name": "",
         "server": "192.168.1.2",
