@@ -32,6 +32,14 @@ test('reset clears the buffer', () => {
   assert.equal(fs.flush(), null);
 });
 
+test('terminator "" = idle-gap mode: never splits, flush returns full reassembled burst', () => {
+  const fs = createFrameSplitter({ terminator: '' });
+  assert.deepEqual(fs.push('TM;1;'), []);     // no immediate frames
+  assert.deepEqual(fs.push('PX;2;VX;3;'), []);
+  assert.equal(fs.flush(), 'TM;1;PX;2;VX;3;'); // whole response as one frame on idle flush
+  assert.equal(fs.flush(), null);
+});
+
 test('keeps terminator when stripTerminator=false', () => {
   const fs = createFrameSplitter({ terminator: '\n', stripTerminator: false });
   assert.deepEqual(fs.push('x\n'), ['x\n']);

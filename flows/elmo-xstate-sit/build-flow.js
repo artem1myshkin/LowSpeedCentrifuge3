@@ -89,8 +89,12 @@ if (!nc3 || typeof nc3.createFrameSplitter !== 'function') {
     node.error('global.nc3 not available. Add nc3 to functionGlobalContext in settings.js (see docs/xstate-integration-plan.md §9.1).');
     return;
 }
-// Stand bring-up: terminator '\\r' is the candidate end-of-frame (confirm on stand, §11.1).
-context.set('splitter', nc3.createFrameSplitter({ terminator: '\\r' }));
+// sit-mode: ELMO streams a response token-by-token with no confirmed single end-of-frame
+// marker, so we reassemble a full response by IDLE GAP (like the old 100 ms time poll):
+// terminator:'' => no char-splitting; the idle timer flushes the whole burst as one frame.
+// frameIdleMs trades latency for safety; lower it once the real terminator is confirmed (§11.1).
+context.set('splitter', nc3.createFrameSplitter({ terminator: '' }));
+context.set('frameIdleMs', 80);
 `.trim();
 
 const splitterFunc = `
@@ -106,20 +110,19 @@ if (msg.reset === true) {
     return null;
 }
 
-const frames = splitter.push(msg.payload);
-for (let i = 0; i < frames.length; i++) {
-    node.send({ elmo_raw: true, payload: frames[i] });
-}
+// terminator:'' => accumulate only; no immediate frames.
+splitter.push(msg.payload);
 
-// Idle-gap fallback: if the terminator is wrong/unknown, flush the buffered remainder
-// after a short silence so bring-up still produces frames (single in-flight => safe).
+// Idle-gap flush: emit the full accumulated response once ELMO goes quiet. With single
+// in-flight + a ~1 s gap to the next poll, this delimits exactly one command's response.
 let t = context.get('idleTimer');
 if (t) clearTimeout(t);
+const idleMs = context.get('frameIdleMs') || 80;
 t = setTimeout(function () {
     const s = context.get('splitter');
-    const rem = s && s.flush();
-    if (rem != null && rem.length) node.send({ elmo_raw: true, payload: rem });
-}, 15);
+    const frame = s && s.flush();
+    if (frame != null && frame.length) node.send({ elmo_raw: true, payload: frame });
+}, idleMs);
 context.set('idleTimer', t);
 return null;
 `.trim();
