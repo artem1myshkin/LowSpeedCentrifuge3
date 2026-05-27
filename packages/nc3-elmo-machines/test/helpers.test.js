@@ -8,6 +8,7 @@ const {
   DATA_POLL,
   LEAN_POLL,
   buildStatePoll,
+  buildFullStatePoll,
   buildExtendedPoll,
   buildPollEnvelope,
   shouldExtend,
@@ -59,6 +60,10 @@ test('poll payloads: lean vs extended', () => {
   assert.equal(data.cmd, 'TM');
   assert.deepEqual(data.cmds, ['TM', 'PX', 'VX']);
   assert.deepEqual(data.required, ['tm', 'px', 'vx']);
+  const stateEnv = buildPollEnvelope({ id: 'p', role: 'state' });
+  assert.equal(stateEnv.cmd, 'MO');
+  assert.deepEqual(stateEnv.cmds, ['MO', 'SO', 'SR']);
+  assert.deepEqual(stateEnv.required, ['mo', 'so', 'sr']);
   const extEnv = buildPollEnvelope({ id: 'p', extended: true });
   const ext = buildExtendedPoll();
   assert.equal(extEnv.cmd, 'MS');
@@ -76,7 +81,8 @@ test('poll payloads: lean vs extended', () => {
 });
 
 test('buildExtendedPoll: analog pressure param is opt-in', () => {
-  assert.equal(buildExtendedPoll, buildStatePoll);
+  assert.equal(buildStatePoll({}), 'MO;SO;SR;');
+  assert.equal(buildExtendedPoll, buildFullStatePoll);
   assert.ok(!buildExtendedPoll({}).includes('AN'));
   assert.ok(buildExtendedPoll({ analogParam: 'AN[1]' }).includes('AN[1];'));
 });

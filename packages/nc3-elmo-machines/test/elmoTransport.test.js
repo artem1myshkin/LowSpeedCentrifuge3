@@ -23,6 +23,7 @@ function makeHarness(opts = {}) {
     timeoutMs: 5000,
     connectTimeoutMs: 5000,
     statePeriodMs: 1000,
+    initialFullState: opts.initialFullState === true,
   };
   const actor = createActor(createElmoTransport(effects), { input: { resolution: 'high' } }).start();
   return { actor, calls, setClock: (v) => { clock = v; }, value: () => actor.getSnapshot().value, ctx: () => actor.getSnapshot().context };
@@ -39,6 +40,12 @@ function feedDataPoll(h, opts = {}) {
 }
 
 function feedStatePoll(h, opts = {}) {
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.mo || 'MO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.so || 'SO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.sr || 'SR;100663616;' });
+}
+
+function feedFullStatePoll(h, opts = {}) {
   h.actor.send({ type: 'ELMO.RESP', raw: opts.ms || 'MS;3;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.mo || 'MO;0;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.so || 'SO;0;' });
@@ -62,12 +69,12 @@ test('offline -> connecting (probe) -> connected -> sends first queued cmd', () 
 
   h.actor.send({ type: 'UI.CMD', envelope: { id: 'cmdA', kind: 'cmd', cmd: 'JV=100;BG', meta: { topic: 'set_velocity' } } });
   assert.equal(h.value(), 'connecting');
-  assert.deepEqual(h.calls.sendTcp, ['TM;PX;VX;']); // probe sent on connect
+  assert.deepEqual(h.calls.sendTcp, ['TM']); // single-register probe sent on connect
 
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
   assert.deepEqual(h.value(), { connected: 'awaiting' });
   assert.equal(h.ctx().inFlight.id, 'cmdA');
-  assert.deepEqual(h.calls.sendTcp, ['TM;PX;VX;', 'JV=100;BG']); // first in-flight dispatched
+  assert.deepEqual(h.calls.sendTcp, ['TM', 'JV=100;BG']); // first in-flight dispatched
 });
 
 test('ELMO.RESP acks the in-flight cmd, forwards raw with restored topic', () => {
@@ -120,6 +127,23 @@ test('fault auto-recovers on next good ELMO.RESP', () => {
   assert.deepEqual(h.value(), { connected: 'idle' });
 });
 
+test('connect enqueues one full-state initialization poll when enabled', () => {
+  const h = makeHarness({ initialFullState: true });
+  h.actor.send({ type: 'CONNECT' });
+  assert.deepEqual(h.calls.sendTcp, ['TM']);
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'TM;1;' });
+  assert.deepEqual(h.value(), { connected: 'awaiting' });
+  assert.equal(h.ctx().inFlight.pollRole, 'full_state');
+  assert.equal(h.calls.sendTcp[h.calls.sendTcp.length - 1], 'MS');
+
+  h.calls.forwardResp.length = 0;
+  feedFullStatePoll(h);
+  assert.equal(h.calls.forwardResp.length, 1);
+  assert.equal(h.calls.forwardResp[0].topic, 'poll_state');
+  assert.equal(h.ctx().resolution, 'low');
+});
+
 test('POLL.TICK enqueues a lean poll (no ack on poll response)', () => {
   const h = makeHarness({ startNow: 500 }); // < statePeriodMs since lastExtendedAt=0 -> lean
   h.actor.send({ type: 'CONNECT' });
@@ -148,13 +172,13 @@ test('POLL.TICK enqueues an extended poll past statePeriod and records lastExten
   assert.equal(h.ctx().inFlight.pollRole, 'data');
   assert.equal(h.ctx().queue.length, 1);
   assert.equal(h.ctx().queue[0].pollRole, 'state');
-  assert.equal(h.ctx().queue[0].cmd, 'MS');
-  assert.deepEqual(h.ctx().queue[0].cmds, ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']);
+  assert.equal(h.ctx().queue[0].cmd, 'MO');
+  assert.deepEqual(h.ctx().queue[0].cmds, ['MO', 'SO', 'SR']);
   assert.equal(h.ctx().lastExtendedAt, 2000);
 
   feedDataPoll(h);
   const cmd = h.calls.sendTcp[h.calls.sendTcp.length - 1];
-  assert.equal(cmd, 'MS');
+  assert.equal(cmd, 'MO');
 });
 
 test('poll dedup: only one poll in flight/queue at a time', () => {
@@ -213,9 +237,11 @@ test('forwards valid state poll frames on poll_state topic', () => {
   feedStatePoll(h);
   assert.equal(h.calls.forwardResp.length, 1);
   assert.equal(h.calls.forwardResp[0].topic, 'poll_state');
-  assert.equal(h.calls.forwardResp[0].raw, 'MS;3;MO;0;SO;0;SR;100663616;AF;0;OL[1];1;OL[2];1;');
+  assert.equal(h.calls.forwardResp[0].raw, 'MO;0;SO;0;SR;100663616;');
   assert.equal(badPoll(h.calls).length, 0);
-  assert.equal(h.ctx().resolution, 'low');
+  assert.equal(h.ctx().mo, 0);
+  assert.equal(h.ctx().so, 0);
+  assert.equal(h.ctx().sr, 100663616);
 });
 
 test('ingests observed ELMO CR-separated scalar response and returns to measured speed', () => {
@@ -244,6 +270,35 @@ test('setpoint hint sets omegaSource before first VX poll', () => {
   const c = h.ctx();
   assert.equal(c.omegaSource, 'setpoint');
   assert.equal(c.setpointDegS, 360);
+});
+
+test('MO command ack enqueues a minimal MO/SO/SR confirmation poll', () => {
+  const h = connectedWithCmd();
+  h.calls.forwardResp.length = 0;
+
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'mo', kind: 'cmd', cmd: 'MO=1', meta: { topic: 'motor_on' } } });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
+
+  assert.equal(h.ctx().inFlight.pollRole, 'state');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['MO', 'SO', 'SR']);
+  assert.equal(h.calls.sendTcp[h.calls.sendTcp.length - 1], 'MO');
+
+  h.calls.forwardResp.length = 0;
+  feedStatePoll(h, { mo: 'MO;1;', so: 'SO;1;' });
+  assert.equal(h.calls.forwardResp[0].topic, 'poll_state');
+  assert.equal(h.calls.forwardResp[0].raw, 'MO;1;SO;1;SR;100663616;');
+});
+
+test('OL command ack enqueues full-state confirmation poll', () => {
+  const h = connectedWithCmd();
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'brake', kind: 'cmd', cmd: 'OL[2]=0', meta: { topic: 'bun_brake' } } });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'OL[2];0;' });
+
+  assert.equal(h.ctx().inFlight.pollRole, 'full_state');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']);
+  assert.equal(h.calls.sendTcp[h.calls.sendTcp.length - 1], 'MS');
 });
 
 test('startElmoTransport returns a started actor in offline with given resolution', () => {

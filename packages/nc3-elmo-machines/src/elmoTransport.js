@@ -19,8 +19,9 @@ const { parseElmoScalars } = require('./parse');
 //   now()                   -> clock (defaults to Date.now); injectable for tests
 //   timeoutMs               -> per-request watchdog (default 180)
 //   connectTimeoutMs        -> probe watchdog while connecting (default 1000)
-//   statePeriodMs           -> extended-poll cadence (default 1000)
-//   probeCmd                -> liveness probe sent on connect (default lean poll)
+//   statePeriodMs           -> minimal state-poll cadence (default 1000)
+//   probeCmd                -> liveness probe sent on connect (default single TM read)
+//   initialFullState        -> enqueue full-state poll after connect/recover (default true)
 //   pollOptions             -> { minHz, maxHz, analogParam } for poll scheduling/payload
 
 function createElmoTransport(effects) {
@@ -34,7 +35,8 @@ function createElmoTransport(effects) {
   const timeoutMs = e.timeoutMs == null ? 180 : e.timeoutMs;
   const connectTimeoutMs = e.connectTimeoutMs == null ? 1000 : e.connectTimeoutMs;
   const statePeriodMs = e.statePeriodMs == null ? 1000 : e.statePeriodMs;
-  const probeCmd = e.probeCmd || 'TM;PX;VX;';
+  const probeCmd = e.probeCmd || 'TM';
+  const initialFullState = e.initialFullState !== false;
   const pollOptions = e.pollOptions || {};
 
   let seq = 0;
@@ -55,7 +57,7 @@ function createElmoTransport(effects) {
 
   function topicFor(env) {
     if (env && env.meta && env.meta.topic) return env.meta.topic;
-    if (env && env.kind === 'poll') return 'poll_data';
+    if (env && env.kind === 'poll') return pollRoleOf(env) === 'data' ? 'poll_data' : 'poll_state';
     return undefined;
   }
 
@@ -64,7 +66,7 @@ function createElmoTransport(effects) {
   }
 
   function pollRoleOf(env) {
-    return (env && env.meta && env.meta.pollRole) || (env && env.pollRole) || (env && env.extended ? 'state' : 'data');
+    return (env && env.meta && env.meta.pollRole) || (env && env.pollRole) || (env && env.extended ? 'full_state' : 'data');
   }
 
   function hasPollRole(queue, role) {
@@ -101,11 +103,27 @@ function createElmoTransport(effects) {
     if (!env || env.kind !== 'poll') return { ok: true, role: undefined, missing: [] };
     const role = pollRoleOf(env);
     const parsed = parseElmoScalars(raw);
-    const required = env.required || (role === 'state'
+    const required = env.required || (role === 'full_state'
       ? ['ms', 'mo', 'so', 'sr', 'af', 'ol1', 'ol2']
-      : ['tm', 'px', 'vx']);
+      : (role === 'state' ? ['mo', 'so', 'sr'] : ['tm', 'px', 'vx']));
     const missing = missingFields(parsed, required);
     return { ok: missing.length === 0, role, missing };
+  }
+
+  function commandRequests(cmd, pattern) {
+    return pattern.test(String(cmd || '').toUpperCase());
+  }
+
+  function confirmPollRoleFor(env) {
+    if (!isAckable(env)) return null;
+    const meta = env.meta || {};
+    if (meta.confirmPollRole) return meta.confirmPollRole;
+    const cmd = env.cmd;
+    if (commandRequests(cmd, /\bMO\s*=/)) return 'state';
+    if (commandRequests(cmd, /\bOL\[1\]\s*=/)) return 'full_state';
+    if (commandRequests(cmd, /\bOL\[2\]\s*=/)) return 'full_state';
+    if (commandRequests(cmd, /\bAF\s*=/)) return 'full_state';
+    return null;
   }
 
   function validateCurrentPollPart(env, raw) {
@@ -185,6 +203,29 @@ function createElmoTransport(effects) {
         return {
           queue,
           lastExtendedAt,
+        };
+      }),
+
+      enqueueFullStatePoll: assign(({ context }) => {
+        if (hasPollRole(context.queue, 'full_state') || hasPollRoleInFlight(context, 'full_state')) return {};
+        return {
+          queue: priorityInsert(context.queue, buildPollEnvelope({ id: nextId(), role: 'full_state', options: pollOptions })),
+        };
+      }),
+
+      enqueueInitialFullStatePoll: assign(({ context }) => {
+        if (!initialFullState) return {};
+        if (hasPollRole(context.queue, 'full_state') || hasPollRoleInFlight(context, 'full_state')) return {};
+        return {
+          queue: priorityInsert(context.queue, buildPollEnvelope({ id: nextId(), role: 'full_state', options: pollOptions })),
+        };
+      }),
+
+      enqueueConfirmPoll: assign(({ context }) => {
+        const role = confirmPollRoleFor(context.inFlight);
+        if (!role || hasPollRole(context.queue, role) || hasPollRoleInFlight(context, role)) return {};
+        return {
+          queue: priorityInsert(context.queue, buildPollEnvelope({ id: nextId(), role, options: pollOptions })),
         };
       }),
 
@@ -279,7 +320,7 @@ function createElmoTransport(effects) {
         after: { CONNECT_TIMEOUT: { target: 'offline' } },
         on: {
           'UI.CMD': { actions: 'enqueueCmd' },
-          'ELMO.RESP': '#transport.connected',
+          'ELMO.RESP': { target: '#transport.connected', actions: 'enqueueInitialFullStatePoll' },
           'ELMO.TIMEOUT': 'offline',
         },
       },
@@ -291,6 +332,7 @@ function createElmoTransport(effects) {
         on: {
           'UI.CMD': { actions: 'enqueueCmd' },
           'POLL.TICK': { actions: 'enqueuePoll' },
+          'POLL.FULL_STATE': { actions: 'enqueueFullStatePoll' },
         },
         states: {
           idle: {
@@ -308,7 +350,7 @@ function createElmoTransport(effects) {
             on: {
               'ELMO.RESP': [
                 { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: 'collectPollPart' },
-                { target: 'dispatch', actions: ['ingestResp', 'forwardAndAck'] },
+                { target: 'dispatch', actions: ['ingestResp', 'forwardAndAck', 'enqueueConfirmPoll'] },
               ],
               'ELMO.TIMEOUT': { target: '#transport.fault', actions: 'failInFlight' },
             },
@@ -331,7 +373,7 @@ function createElmoTransport(effects) {
         on: {
           'UI.CMD': { actions: 'enqueueCmd' },
           CLEARED: '#transport.connected',
-          'ELMO.RESP': '#transport.connected',
+          'ELMO.RESP': { target: '#transport.connected', actions: 'enqueueInitialFullStatePoll' },
           LOST: 'offline',
         },
       },

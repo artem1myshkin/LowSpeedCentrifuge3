@@ -89,7 +89,7 @@ typedef struct Stats {
 } Stats;
 
 static const char *LEAN_CMDS[] = {"TM\r", "PX\r", "VX\r"};
-static const char *EXT_CMDS[] = {"MS\r", "MO\r", "SO\r", "SR\r", "AF\r", "OL[1]\r", "OL[2]\r"};
+static const char *EXT_CMDS[] = {"MO\r", "SO\r", "SR\r"};
 static const int LEAN_CMD_COUNT = (int)(sizeof(LEAN_CMDS) / sizeof(LEAN_CMDS[0]));
 static const int EXT_CMD_COUNT = (int)(sizeof(EXT_CMDS) / sizeof(EXT_CMDS[0]));
 
@@ -142,7 +142,7 @@ static void usage(const char *argv0) {
       "  --help                      show this help\n\n"
       "Logical poll commands are sent as single-register TCP reads:\n"
       "  data:  TM, PX, VX\n"
-      "  state: MS, MO, SO, SR, AF, OL[1], OL[2]\n",
+      "  state: MO, SO, SR\n",
       argv0, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_DURATION_SEC, DEFAULT_IDLE_MS,
       DEFAULT_TIMEOUT_MS, DEFAULT_EXTENDED_EVERY_MS);
 }
@@ -443,7 +443,7 @@ static void trim_ascii(char *s) {
 static void analyze_response(const char *raw, int extended, char *missing,
                              size_t missing_cap, char *dups, size_t dups_cap) {
   static const char *lean_fields[] = {"TM", "PX", "VX"};
-  static const char *ext_fields[] = {"MS", "MO", "SO", "SR", "AF", "OL[1]", "OL[2]"};
+  static const char *ext_fields[] = {"MO", "SO", "SR"};
   const char **fields = extended ? ext_fields : lean_fields;
   int field_count = extended ? (int)(sizeof(ext_fields) / sizeof(ext_fields[0]))
                              : (int)(sizeof(lean_fields) / sizeof(lean_fields[0]));

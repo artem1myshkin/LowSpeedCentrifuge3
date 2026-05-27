@@ -24,6 +24,7 @@ module.exports = {
   DATA_POLL: poll.DATA_POLL,
   buildPollEnvelope: poll.buildPollEnvelope,
   buildStatePoll: poll.buildStatePoll,
+  buildFullStatePoll: poll.buildFullStatePoll,
   computePollDelayMs: poll.computePollDelayMs,
   omegaDegPerSec: poll.omegaDegPerSec,
   computeRateHz: poll.computeRateHz,
