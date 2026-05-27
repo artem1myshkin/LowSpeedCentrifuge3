@@ -55,8 +55,15 @@ test('clamp', () => {
 
 test('poll payloads: lean vs extended', () => {
   assert.equal(DATA_POLL, LEAN_POLL);
-  assert.equal(buildPollEnvelope({ id: 'p', extended: false }).cmd, LEAN_POLL);
-  const ext = buildPollEnvelope({ id: 'p', extended: true }).cmd;
+  const data = buildPollEnvelope({ id: 'p', extended: false });
+  assert.equal(data.cmd, 'TM');
+  assert.deepEqual(data.cmds, ['TM', 'PX', 'VX']);
+  assert.deepEqual(data.required, ['tm', 'px', 'vx']);
+  const extEnv = buildPollEnvelope({ id: 'p', extended: true });
+  const ext = buildExtendedPoll();
+  assert.equal(extEnv.cmd, 'MS');
+  assert.deepEqual(extEnv.cmds, ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']);
+  assert.deepEqual(extEnv.required, ['ms', 'mo', 'so', 'sr', 'af', 'ol1', 'ol2']);
   for (const tok of ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']) {
     assert.ok(ext.includes(tok), 'state poll missing ' + tok);
   }

@@ -75,6 +75,24 @@ function createElmoTransport(effects) {
     return context.inFlight && context.inFlight.kind === 'poll' && pollRoleOf(context.inFlight) === role;
   }
 
+  function isBatchPoll(env) {
+    return env && env.kind === 'poll' && Array.isArray(env.cmds) && env.cmds.length > 0;
+  }
+
+  function cursorOf(env) {
+    return Math.max(0, Number(env && env.cursor) || 0);
+  }
+
+  function commandFor(env) {
+    if (isBatchPoll(env)) return env.cmds[Math.min(cursorOf(env), env.cmds.length - 1)];
+    return env && env.cmd;
+  }
+
+  function rawFor(env, raw) {
+    if (!isBatchPoll(env)) return raw;
+    return (env.parts || []).concat([raw]).join('');
+  }
+
   function missingFields(parsed, fields) {
     return fields.filter((field) => parsed[field] === undefined);
   }
@@ -83,16 +101,31 @@ function createElmoTransport(effects) {
     if (!env || env.kind !== 'poll') return { ok: true, role: undefined, missing: [] };
     const role = pollRoleOf(env);
     const parsed = parseElmoScalars(raw);
-    const required = role === 'state'
+    const required = env.required || (role === 'state'
       ? ['ms', 'mo', 'so', 'sr', 'af', 'ol1', 'ol2']
-      : ['tm', 'px', 'vx'];
+      : ['tm', 'px', 'vx']);
     const missing = missingFields(parsed, required);
     return { ok: missing.length === 0, role, missing };
+  }
+
+  function validateCurrentPollPart(env, raw) {
+    if (!isBatchPoll(env)) return validatePollResponse(env, raw);
+    const role = pollRoleOf(env);
+    const idx = cursorOf(env);
+    const required = (env.partRequired && env.partRequired[idx]) || [];
+    const missing = missingFields(parseElmoScalars(raw), required);
+    return { ok: missing.length === 0, role, missing, part: idx, cmd: commandFor(env) };
   }
 
   return setup({
     guards: {
       hasWork: ({ context }) => context.queue.length > 0,
+      hasNextPollPart: ({ context, event }) => {
+        const env = context.inFlight;
+        if (!isBatchPoll(env)) return false;
+        if (!validateCurrentPollPart(env, event.raw).ok) return false;
+        return cursorOf(env) < env.cmds.length - 1;
+      },
     },
     delays: {
       POLL_DELAY: ({ context }) => computePollDelayMs(context, pollOptions),
@@ -115,8 +148,9 @@ function createElmoTransport(effects) {
       // Update only the fields the transport needs for its own decisions (poll rate, range).
       // Does NOT replace ResponseParser — raw is still forwarded downstream (§4.6).
       ingestResp: assign(({ context, event }) => {
-        if (!validatePollResponse(context.inFlight, event.raw).ok) return {};
-        const f = parseElmoScalars(event.raw);
+        const raw = rawFor(context.inFlight, event.raw);
+        if (!validatePollResponse(context.inFlight, raw).ok) return {};
+        const f = parseElmoScalars(raw);
         const patch = {};
         if (f.tm !== undefined) patch.tm = f.tm;
         if (f.px !== undefined) patch.px = f.px;
@@ -159,8 +193,20 @@ function createElmoTransport(effects) {
         return { inFlight, queue };
       }),
 
+      collectPollPart: assign(({ context, event }) => {
+        const env = context.inFlight;
+        if (!isBatchPoll(env)) return {};
+        return {
+          inFlight: {
+            ...env,
+            parts: (env.parts || []).concat([event.raw]),
+            cursor: cursorOf(env) + 1,
+          },
+        };
+      }),
+
       sendInFlight: ({ context }) => {
-        if (context.inFlight) sendTcp(context.inFlight.cmd);
+        if (context.inFlight) sendTcp(commandFor(context.inFlight));
       },
 
       sendProbe: () => {
@@ -169,12 +215,22 @@ function createElmoTransport(effects) {
 
       forwardAndAck: ({ context, event }) => {
         const env = context.inFlight;
-        const validation = validatePollResponse(env, event.raw);
+        const partValidation = validateCurrentPollPart(env, event.raw);
+        const raw = rawFor(env, event.raw);
+        const validation = partValidation.ok ? validatePollResponse(env, raw) : partValidation;
         if (!validation.ok) {
-          emitEvent({ type: 'POLL.BAD_FRAME', id: env.id, role: validation.role, missing: validation.missing, raw: event.raw });
+          emitEvent({
+            type: 'POLL.BAD_FRAME',
+            id: env.id,
+            role: validation.role,
+            missing: validation.missing,
+            part: validation.part,
+            cmd: validation.cmd,
+            raw,
+          });
           return;
         }
-        forwardResp(event.raw, topicFor(env));
+        forwardResp(raw, topicFor(env));
         if (isAckable(env)) emitEvent({ type: 'CMD.ACKED', id: env.id, raw: event.raw });
       },
 
@@ -250,9 +306,16 @@ function createElmoTransport(effects) {
           awaiting: {
             after: { TIMEOUT: { target: '#transport.fault', actions: 'failInFlight' } },
             on: {
-              'ELMO.RESP': { target: 'dispatch', actions: ['ingestResp', 'forwardAndAck'] },
+              'ELMO.RESP': [
+                { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: 'collectPollPart' },
+                { target: 'dispatch', actions: ['ingestResp', 'forwardAndAck'] },
+              ],
               'ELMO.TIMEOUT': { target: '#transport.fault', actions: 'failInFlight' },
             },
+          },
+          sendingNextPart: {
+            entry: 'sendInFlight',
+            always: 'awaiting',
           },
           dispatch: {
             entry: 'freeInFlight',

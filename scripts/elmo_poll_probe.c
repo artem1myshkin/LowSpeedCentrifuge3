@@ -88,8 +88,10 @@ typedef struct Stats {
   double sum_rtt;
 } Stats;
 
-static const char *LEAN_CMD = "TM;PX;VX;\r";
-static const char *EXT_CMD = "MS;MO;SO;SR;AF;OL[1];OL[2];\r";
+static const char *LEAN_CMDS[] = {"TM\r", "PX\r", "VX\r"};
+static const char *EXT_CMDS[] = {"MS\r", "MO\r", "SO\r", "SR\r", "AF\r", "OL[1]\r", "OL[2]\r"};
+static const int LEAN_CMD_COUNT = (int)(sizeof(LEAN_CMDS) / sizeof(LEAN_CMDS[0]));
+static const int EXT_CMD_COUNT = (int)(sizeof(EXT_CMDS) / sizeof(EXT_CMDS[0]));
 
 static void die(const char *fmt, ...) {
   va_list ap;
@@ -138,9 +140,9 @@ static void usage(const char *argv0) {
       "  --all-extended              send state poll every tick\n"
       "  --quiet-raw                 do not print escaped raw response\n"
       "  --help                      show this help\n\n"
-      "Poll commands:\n"
-      "  lean:     TM;PX;VX;\n"
-      "  extended/state: MS;MO;SO;SR;AF;OL[1];OL[2];\n",
+      "Logical poll commands are sent as single-register TCP reads:\n"
+      "  data:  TM, PX, VX\n"
+      "  state: MS, MO, SO, SR, AF, OL[1], OL[2]\n",
       argv0, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_DURATION_SEC, DEFAULT_IDLE_MS,
       DEFAULT_TIMEOUT_MS, DEFAULT_EXTENDED_EVERY_MS);
 }
@@ -359,6 +361,48 @@ static int recv_idle_frame(socket_t s, char *out, size_t cap, int timeout_ms,
   }
 }
 
+static int recv_poll_sequence(socket_t s, const char **cmds, int cmd_count,
+                              char *out, size_t cap, int timeout_ms,
+                              int idle_ms, int *chunks, int *truncated) {
+  int i;
+  size_t total = 0;
+  *chunks = 0;
+  *truncated = 0;
+  if (cap == 0) return -3;
+  out[0] = '\0';
+
+  for (i = 0; i < cmd_count; i++) {
+    char part[MAX_RESPONSE];
+    int part_chunks = 0;
+    int part_truncated = 0;
+    int rc;
+
+    if (send_all(s, cmds[i], strlen(cmds[i])) != 0) return -5;
+
+    rc = recv_idle_frame(s, part, sizeof(part), timeout_ms, idle_ms,
+                         &part_chunks, &part_truncated);
+    *chunks += part_chunks;
+    if (part_truncated) *truncated = 1;
+    if (rc < 0) return rc;
+
+    if (total + (size_t)rc >= cap) {
+      size_t room = cap - 1 - total;
+      if (room > 0) {
+        memcpy(out + total, part, room);
+        total += room;
+      }
+      out[total] = '\0';
+      *truncated = 1;
+    } else {
+      memcpy(out + total, part, (size_t)rc);
+      total += (size_t)rc;
+      out[total] = '\0';
+    }
+  }
+
+  return (int)total;
+}
+
 static void append_text(char *dst, size_t cap, const char *fmt, ...) {
   size_t len = strlen(dst);
   va_list ap;
@@ -524,7 +568,8 @@ int main(int argc, char **argv) {
     long long rtt;
     long long overrun;
     int extended;
-    const char *cmd;
+    const char **cmds;
+    int cmd_count;
     const char *kind;
     char response[MAX_RESPONSE];
     int chunks = 0;
@@ -539,19 +584,21 @@ int main(int argc, char **argv) {
     if (late < 0) late = 0;
 
     extended = should_send_extended(&opt, before_send, &last_extended);
-    cmd = extended ? EXT_CMD : LEAN_CMD;
-    kind = extended ? "extended" : "lean";
+    cmds = extended ? EXT_CMDS : LEAN_CMDS;
+    cmd_count = extended ? EXT_CMD_COUNT : LEAN_CMD_COUNT;
+    kind = extended ? "state" : "data";
 
     seq++;
     stats.sent++;
 
-    if (send_all(sock, cmd, strlen(cmd)) != 0) {
+    rc = recv_poll_sequence(sock, cmds, cmd_count, response, sizeof(response),
+                            opt.timeout_ms, opt.idle_ms, &chunks, &truncated);
+    if (rc == -5) {
       stats.socket_errors++;
       fprintf(stderr, "send failed at seq=%ld socket_errno=%d\n", seq, SOCKERRNO);
       break;
     }
 
-    rc = recv_idle_frame(sock, response, sizeof(response), opt.timeout_ms, opt.idle_ms, &chunks, &truncated);
     after_recv = now_ms();
     rtt = after_recv - before_send;
     overrun = rtt - (long long)(period_ms + 0.5);

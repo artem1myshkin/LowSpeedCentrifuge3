@@ -7,15 +7,27 @@ const { ticksPerRev } = require('./res');
 // Lean poll: data point (TM;PX) + live speed (VX) for the "ready" criterion (§4.4.4).
 const DATA_POLL = 'TM;PX;VX;';
 const LEAN_POLL = DATA_POLL;
+const DATA_POLL_FIELDS = ['TM', 'PX', 'VX'];
+const STATE_POLL_FIELDS = ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]'];
+const FIELD_KEYS = {
+  TM: 'tm',
+  PX: 'px',
+  VX: 'vx',
+  MS: 'ms',
+  MO: 'mo',
+  SO: 'so',
+  SR: 'sr',
+  AF: 'af',
+  'OL[1]': 'ol1',
+  'OL[2]': 'ol2',
+};
 
 // State poll: critical health/state fields, emitted ~once per second (§4.4.4).
 // AN[?] (analog pressure input) index is unconfirmed on the stand (§11.7), so it is
 // opt-in via options.analogParam rather than baked in.
 function buildStatePoll(options) {
   const opts = options || {};
-  let cmd = 'MS;MO;SO;SR;AF;OL[1];OL[2];';
-  if (opts.analogParam) cmd += opts.analogParam + ';';
-  return cmd;
+  return buildPollFields('state', opts).map((field) => field + ';').join('');
 }
 
 const buildExtendedPoll = buildStatePoll;
@@ -25,15 +37,34 @@ function shouldExtend(lastExtendedAt, now, statePeriodMs) {
   return (now - lastExtendedAt) >= statePeriodMs;
 }
 
+function buildPollFields(role, options) {
+  const opts = options || {};
+  const fields = role === 'state' ? STATE_POLL_FIELDS.slice() : DATA_POLL_FIELDS.slice();
+  if (role === 'state' && opts.analogParam) fields.push(String(opts.analogParam));
+  return fields;
+}
+
+function requiredKeysFor(fields) {
+  return fields.map((field) => FIELD_KEYS[field]).filter(Boolean);
+}
+
 function buildPollEnvelope(args) {
   const a = args || {};
   const role = a.role || (a.extended ? 'state' : 'data');
   const isState = role === 'state';
+  const fields = buildPollFields(role, a.options);
+  const cmds = fields.map((field) => field);
+  const required = requiredKeysFor(fields);
   return {
     id: a.id,
     kind: 'poll',
     priority: PRIORITY.poll,
-    cmd: isState ? buildStatePoll(a.options) : DATA_POLL,
+    cmd: cmds[0],
+    cmds,
+    cursor: 0,
+    parts: [],
+    required,
+    partRequired: fields.map((field) => requiredKeysFor([field])),
     extended: isState,
     pollRole: isState ? 'state' : 'data',
     expect: 'parse',
@@ -71,8 +102,11 @@ function computePollDelayMs(context, options) {
 module.exports = {
   DATA_POLL,
   LEAN_POLL,
+  DATA_POLL_FIELDS,
+  STATE_POLL_FIELDS,
   buildStatePoll,
   buildExtendedPoll,
+  buildPollFields,
   shouldExtend,
   buildPollEnvelope,
   omegaDegPerSec,
