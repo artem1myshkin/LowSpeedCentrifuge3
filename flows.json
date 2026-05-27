@@ -3533,6 +3533,7 @@
         "id": "elmoxs-transport",
         "type": "function",
         "z": "elmoxs-tab",
+        "d": true,
         "name": "ElmoTransport",
         "func": "const actor = context.get('elmoActor');\nif (!actor) { node.error('ElmoTransport actor not initialized', msg); return null; }\n\nfunction shortValue(value) {\n    const s = String(value == null ? '' : value);\n    return s.length > 300 ? s.slice(0, 300) + '...<truncated>' : s;\n}\n\nfunction debugTransport(evt) {\n    if (context.get('transportDebug') === true) node.warn(evt);\n}\n\nfunction finiteNumber(value, fallback) {\n    const n = Number(value);\n    return Number.isFinite(n) ? n : fallback;\n}\nfunction clamp(value, min, max) {\n    return Math.min(max, Math.max(min, value));\n}\nfunction readPollConfigFromGlobals() {\n    const settings = global.get('settings') || {};\n    const advanced = settings.advanced || {};\n    return {\n        isRecording: !!global.get('is_recording'),\n        isRecordingRaw: !!global.get('is_recording_raw'),\n        rawDataEnabled: !!global.get('recording_save_raw_data'),\n        fastRawPollingEnabled: advanced.fastRawPollingEnabled !== false,\n        fastRawPollHz: clamp(finiteNumber(advanced.rawDataPollHz, 30), 1, 30),\n        fastStableSamples: Math.round(clamp(finiteNumber(advanced.fastStableSamples, 3), 1, 50)),\n        fastStableToleranceTicks: Math.max(0, finiteNumber(advanced.fastStableToleranceTicks, 1000))\n    };\n}\nfunction activePollConfig() {\n    return context.get('pollConfigOverride') || readPollConfigFromGlobals();\n}\nfunction syncPollConfig(force) {\n    const cfg = activePollConfig();\n    const json = JSON.stringify(cfg);\n    if (force || context.get('pollConfigJson') !== json) {\n        actor.send({ type: 'POLL.CONFIG', config: cfg });\n        context.set('pollConfigJson', json);\n    }\n}\n\nif (msg.topic === 'POLL.CONFIG') {\n    const cfg = (msg.payload && typeof msg.payload === 'object') ? msg.payload : {};\n    if (cfg.clearOverride === true) context.set('pollConfigOverride', null);\n    else context.set('pollConfigOverride', cfg);\n    syncPollConfig(true);\n    actor.send({ type: 'POLL.TICK' });\n    return null;\n}\n\nsyncPollConfig(false);\n\nif (msg.elmo_raw === true) { actor.send({ type: 'ELMO.RESP', raw: msg.payload }); return null; }\nif (msg.topic === 'CONNECT') { actor.send({ type: 'CONNECT' }); return null; }\nif (msg.topic === 'POLL.TICK') { actor.send({ type: 'POLL.TICK' }); return null; }\nif (msg.topic === 'POLL.FULL_STATE') { actor.send({ type: 'POLL.FULL_STATE' }); return null; }\n\n// Diagnostic: any remaining string input here becomes a UI.CMD and can explain CMD.ACKED.\nif (typeof msg.payload === 'string' && msg.payload.length) {\n    debugTransport({ tag: 'INTO_TRANSPORT_UI_CMD', topic: msg.topic, payload: shortValue(msg.payload), _msgid: msg._msgid });\n    actor.send({ type: 'UI.CMD', envelope: { kind: 'cmd', cmd: msg.payload, meta: { topic: msg.topic || 'manual' } } });\n    return null;\n}\n\ndebugTransport({ tag: 'INTO_TRANSPORT_IGNORED_NON_RAW', topic: msg.topic, payloadType: typeof msg.payload, payload: shortValue(msg.payload), _msgid: msg._msgid });\nreturn null;",
         "outputs": 4,
@@ -3887,6 +3888,82 @@
         "wires": [
             [
                 "elmoxs-transport"
+            ]
+        ]
+    },
+    {
+        "id": "9eebec7a9fcbd4c5",
+        "type": "udp out",
+        "z": "elmoxs-tab",
+        "name": "",
+        "addr": "192.168.1.2",
+        "iface": "",
+        "port": "5001",
+        "ipv": "udp4",
+        "outport": "5005",
+        "base64": false,
+        "multicast": "false",
+        "x": 380,
+        "y": 640,
+        "wires": []
+    },
+    {
+        "id": "9dcb69eb8ba2c5f5",
+        "type": "udp in",
+        "z": "elmoxs-tab",
+        "name": "",
+        "iface": "",
+        "port": "5005",
+        "ipv": "udp4",
+        "multicast": "false",
+        "group": "",
+        "datatype": "utf8",
+        "x": 800,
+        "y": 640,
+        "wires": [
+            [
+                "b4399f4aa8d41151"
+            ]
+        ]
+    },
+    {
+        "id": "b4399f4aa8d41151",
+        "type": "debug",
+        "z": "elmoxs-tab",
+        "name": "debug 4",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "false",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 940,
+        "y": 640,
+        "wires": []
+    },
+    {
+        "id": "4c61de8018676d41",
+        "type": "inject",
+        "z": "elmoxs-tab",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "0.033",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "TM;",
+        "payloadType": "str",
+        "x": 190,
+        "y": 640,
+        "wires": [
+            [
+                "9eebec7a9fcbd4c5"
             ]
         ]
     }
