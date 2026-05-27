@@ -826,7 +826,7 @@
         "type": "function",
         "z": "f5735fc042f6e9a2",
         "name": "SettingsBootstrap",
-        "func": "// Normalize settings loaded by the file-in node and seed global context.\n// Normalize settings, compute derived angle fields, and update global context.\nvar settings = msg.payload || {};\nif (typeof settings === 'string') {\n    try { settings = JSON.parse(settings); }\n    catch (e) {\n        node.warn('settings JSON parse failed: ' + e.message);\n        settings = {};\n    }\n}\n\nvar DEFAULTS = {\n    general: {\n        remoteControl: false,\n        angleCorrectionEnabled: false,\n        language: 'Russian',\n        angleSavingMode: 'header'\n    },\n    advanced: {\n        readPeriodRotation: 100,\n        readPeriodTilt: 1000,\n        readPeriodBEP: 100,\n        dataDurationSec: 60,\n        rotationSpeedRanges: {\n            high: {\n                min: { deg: 0, min: 0, sec: 1.000001, decimalDeg: 0.000277778, rad: 0.000004848141 },\n                max: { deg: 20, min: 0, sec: 0, decimalDeg: 20, rad: 0.349065850399 }\n            },\n            low: {\n                min: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n                max: { deg: 360, min: 0, sec: 0, decimalDeg: 360, rad: 6.28318530718 }\n            }\n        },\n        rotationSpeed: null,\n        tiltAngle: {\n            min: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 },\n            max: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }\n        },\n        encoderSwitchSpeed: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n        BEPcoeffs: [0, 0, 0, 0, 0],\n        aerostaticSupportDiagram: '',\n        encoderCalibrationLines: ''\n    }\n};\n\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction merge(base, patch) {\n    var out = clone(base);\n    patch = patch && typeof patch === 'object' ? patch : {};\n    Object.keys(patch).forEach(function(k) {\n        if (patch[k] && typeof patch[k] === 'object' && !Array.isArray(patch[k]) && out[k] && typeof out[k] === 'object' && !Array.isArray(out[k])) {\n            out[k] = merge(out[k], patch[k]);\n        } else {\n            out[k] = patch[k];\n        }\n    });\n    return out;\n}\nfunction number(v, fallback) {\n    var x = Number(v);\n    return isFinite(x) ? x : fallback;\n}\nfunction languageName(v) {\n    var s = String(v || '').toLowerCase();\n    return (s === 'english' || s === 'en') ? 'English' : 'Russian';\n}\nfunction dmsToDecimal(v) {\n    v = v || {};\n    var sign = number(v.deg, 0) < 0 ? -1 : 1;\n    return sign * (Math.abs(number(v.deg, 0)) + number(v.min, 0) / 60 + number(v.sec, 0) / 3600);\n}\nfunction fillDms(v, decimalDeg) {\n    var sign = decimalDeg < 0 ? -1 : 1;\n    var abs = Math.abs(decimalDeg);\n    var deg = Math.floor(abs);\n    var minutesFloat = (abs - deg) * 60;\n    var min = Math.floor(minutesFloat);\n    var sec = (minutesFloat - min) * 60;\n    v.deg = sign * deg;\n    v.min = min;\n    v.sec = Number(sec.toFixed(6));\n}\nfunction normalizeAngle(v, fallback) {\n    v = merge(fallback || { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }, v || {});\n    var decimalDeg;\n    if (v.decimalDeg !== undefined && v.decimalDeg !== null && v.decimalDeg !== '') {\n        decimalDeg = number(v.decimalDeg, dmsToDecimal(v));\n    } else if (v.rad !== undefined && v.rad !== null && v.rad !== '') {\n        decimalDeg = number(v.rad, 0) * 180 / Math.PI;\n    } else {\n        decimalDeg = dmsToDecimal(v);\n    }\n    v.decimalDeg = Number(decimalDeg.toFixed(9));\n    v.rad = Number((decimalDeg * Math.PI / 180).toFixed(12));\n    fillDms(v, decimalDeg);\n    return v;\n}\nfunction normalizeRange(range, fallback) {\n    return {\n        min: normalizeAngle(range && range.min, fallback.min),\n        max: normalizeAngle(range && range.max, fallback.max)\n    };\n}\nfunction ticksPerDeg(res) { return (res === 'high') ? (262144000 / 360) : (6553600 / 360); }\nfunction rangeLimits(range, res) {\n    var tpd = ticksPerDeg(res);\n    return {\n        resolution: res,\n        ticks_per_deg: tpd,\n        speed_min_deg: range.min.decimalDeg,\n        speed_max_deg: range.max.decimalDeg,\n        speed_min_ticks: Math.ceil(Math.abs(range.min.decimalDeg) * tpd),\n        speed_max_ticks: Math.floor(Math.abs(range.max.decimalDeg) * tpd)\n    };\n}\n\nsettings = merge(DEFAULTS, settings);\nsettings.general.language = languageName(settings.general.language);\nsettings.general.angleSavingMode = settings.general.angleSavingMode === 'none' ? 'none' : 'header';\nsettings.advanced.dataDurationSec = Math.max(1, number(settings.advanced.dataDurationSec, 60));\nsettings.advanced.readPeriodRotation = Math.max(1, number(settings.advanced.readPeriodRotation, 100));\nsettings.advanced.readPeriodTilt = Math.max(1, number(settings.advanced.readPeriodTilt, 1000));\nsettings.advanced.readPeriodBEP = Math.max(1, number(settings.advanced.readPeriodBEP, 100));\n\nif (!settings.advanced.rotationSpeedRanges && settings.advanced.rotationSpeed) {\n    settings.advanced.rotationSpeedRanges = { high: settings.advanced.rotationSpeed, low: DEFAULTS.advanced.rotationSpeedRanges.low };\n}\nsettings.advanced.rotationSpeedRanges = {\n    high: normalizeRange(settings.advanced.rotationSpeedRanges.high, DEFAULTS.advanced.rotationSpeedRanges.high),\n    low: normalizeRange(settings.advanced.rotationSpeedRanges.low, DEFAULTS.advanced.rotationSpeedRanges.low)\n};\nsettings.advanced.rotationSpeed = settings.advanced.rotationSpeedRanges.high;\nsettings.advanced.tiltAngle = normalizeRange(settings.advanced.tiltAngle, DEFAULTS.advanced.tiltAngle);\nsettings.advanced.encoderSwitchSpeed = normalizeAngle(settings.advanced.encoderSwitchSpeed, DEFAULTS.advanced.encoderSwitchSpeed);\nif (!Array.isArray(settings.advanced.BEPcoeffs)) settings.advanced.BEPcoeffs = [0, 0, 0, 0, 0];\nwhile (settings.advanced.BEPcoeffs.length < 5) settings.advanced.BEPcoeffs.push(0);\nsettings.advanced.BEPcoeffs = settings.advanced.BEPcoeffs.slice(0, 5).map(function(v) { return number(v, 0); });\n\nglobal.set('settings', settings);\nglobal.set('ui_language', settings.general.language === 'English' ? 'english' : 'russian');\nglobal.set('drive_speed_ranges', settings.advanced.rotationSpeedRanges);\nglobal.set('recording_duration_sec', settings.advanced.dataDurationSec);\nvar currentRange = global.get('current_range') || 'high';\nglobal.set('drive_limits_override', rangeLimits(settings.advanced.rotationSpeedRanges[currentRange] || settings.advanced.rotationSpeedRanges.high, currentRange));\n\nmsg.settings = settings;\nmsg.payload = settings;\nreturn msg;",
+        "func": "// Normalize settings loaded by the file-in node and seed global context.\n// Normalize settings, compute derived angle fields, and update global context.\nvar settings = msg.payload || {};\nif (typeof settings === 'string') {\n    try { settings = JSON.parse(settings); }\n    catch (e) {\n        node.warn('settings JSON parse failed: ' + e.message);\n        settings = {};\n    }\n}\n\nvar DEFAULTS = {\n    general: {\n        remoteControl: false,\n        angleCorrectionEnabled: false,\n        language: 'Russian',\n        angleSavingMode: 'header'\n    },\n    advanced: {\n        readPeriodRotation: 100,\n        readPeriodTilt: 1000,\n        readPeriodBEP: 100,\n        dataDurationSec: 60,\n        rawDataPollHz: 30,\n        fastRawPollingEnabled: true,\n        fastStableSamples: 3,\n        fastStableToleranceTicks: 1000,\n        rotationSpeedRanges: {\n            high: {\n                min: { deg: 0, min: 0, sec: 1.000001, decimalDeg: 0.000277778, rad: 0.000004848141 },\n                max: { deg: 20, min: 0, sec: 0, decimalDeg: 20, rad: 0.349065850399 }\n            },\n            low: {\n                min: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n                max: { deg: 360, min: 0, sec: 0, decimalDeg: 360, rad: 6.28318530718 }\n            }\n        },\n        rotationSpeed: null,\n        tiltAngle: {\n            min: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 },\n            max: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }\n        },\n        encoderSwitchSpeed: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n        BEPcoeffs: [0, 0, 0, 0, 0],\n        aerostaticSupportDiagram: '',\n        encoderCalibrationLines: ''\n    }\n};\n\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction merge(base, patch) {\n    var out = clone(base);\n    patch = patch && typeof patch === 'object' ? patch : {};\n    Object.keys(patch).forEach(function(k) {\n        if (patch[k] && typeof patch[k] === 'object' && !Array.isArray(patch[k]) && out[k] && typeof out[k] === 'object' && !Array.isArray(out[k])) {\n            out[k] = merge(out[k], patch[k]);\n        } else {\n            out[k] = patch[k];\n        }\n    });\n    return out;\n}\nfunction number(v, fallback) {\n    var x = Number(v);\n    return isFinite(x) ? x : fallback;\n}\nfunction languageName(v) {\n    var s = String(v || '').toLowerCase();\n    return (s === 'english' || s === 'en') ? 'English' : 'Russian';\n}\nfunction dmsToDecimal(v) {\n    v = v || {};\n    var sign = number(v.deg, 0) < 0 ? -1 : 1;\n    return sign * (Math.abs(number(v.deg, 0)) + number(v.min, 0) / 60 + number(v.sec, 0) / 3600);\n}\nfunction fillDms(v, decimalDeg) {\n    var sign = decimalDeg < 0 ? -1 : 1;\n    var abs = Math.abs(decimalDeg);\n    var deg = Math.floor(abs);\n    var minutesFloat = (abs - deg) * 60;\n    var min = Math.floor(minutesFloat);\n    var sec = (minutesFloat - min) * 60;\n    v.deg = sign * deg;\n    v.min = min;\n    v.sec = Number(sec.toFixed(6));\n}\nfunction normalizeAngle(v, fallback) {\n    v = merge(fallback || { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }, v || {});\n    var decimalDeg;\n    if (v.decimalDeg !== undefined && v.decimalDeg !== null && v.decimalDeg !== '') {\n        decimalDeg = number(v.decimalDeg, dmsToDecimal(v));\n    } else if (v.rad !== undefined && v.rad !== null && v.rad !== '') {\n        decimalDeg = number(v.rad, 0) * 180 / Math.PI;\n    } else {\n        decimalDeg = dmsToDecimal(v);\n    }\n    v.decimalDeg = Number(decimalDeg.toFixed(9));\n    v.rad = Number((decimalDeg * Math.PI / 180).toFixed(12));\n    fillDms(v, decimalDeg);\n    return v;\n}\nfunction normalizeRange(range, fallback) {\n    return {\n        min: normalizeAngle(range && range.min, fallback.min),\n        max: normalizeAngle(range && range.max, fallback.max)\n    };\n}\nfunction ticksPerDeg(res) { return (res === 'high') ? (262144000 / 360) : (6553600 / 360); }\nfunction rangeLimits(range, res) {\n    var tpd = ticksPerDeg(res);\n    return {\n        resolution: res,\n        ticks_per_deg: tpd,\n        speed_min_deg: range.min.decimalDeg,\n        speed_max_deg: range.max.decimalDeg,\n        speed_min_ticks: Math.ceil(Math.abs(range.min.decimalDeg) * tpd),\n        speed_max_ticks: Math.floor(Math.abs(range.max.decimalDeg) * tpd)\n    };\n}\n\nsettings = merge(DEFAULTS, settings);\nsettings.general.language = languageName(settings.general.language);\nsettings.general.angleSavingMode = settings.general.angleSavingMode === 'none' ? 'none' : 'header';\nsettings.advanced.dataDurationSec = Math.max(1, number(settings.advanced.dataDurationSec, 60));\nsettings.advanced.rawDataPollHz = Math.min(30, Math.max(1, number(settings.advanced.rawDataPollHz, 30)));\nsettings.advanced.fastRawPollingEnabled = settings.advanced.fastRawPollingEnabled !== false;\nsettings.advanced.fastStableSamples = Math.min(50, Math.max(1, Math.round(number(settings.advanced.fastStableSamples, 3))));\nsettings.advanced.fastStableToleranceTicks = Math.max(0, number(settings.advanced.fastStableToleranceTicks, 1000));\nsettings.advanced.readPeriodRotation = Math.max(1, number(settings.advanced.readPeriodRotation, 100));\nsettings.advanced.readPeriodTilt = Math.max(1, number(settings.advanced.readPeriodTilt, 1000));\nsettings.advanced.readPeriodBEP = Math.max(1, number(settings.advanced.readPeriodBEP, 100));\n\nif (!settings.advanced.rotationSpeedRanges && settings.advanced.rotationSpeed) {\n    settings.advanced.rotationSpeedRanges = { high: settings.advanced.rotationSpeed, low: DEFAULTS.advanced.rotationSpeedRanges.low };\n}\nsettings.advanced.rotationSpeedRanges = {\n    high: normalizeRange(settings.advanced.rotationSpeedRanges.high, DEFAULTS.advanced.rotationSpeedRanges.high),\n    low: normalizeRange(settings.advanced.rotationSpeedRanges.low, DEFAULTS.advanced.rotationSpeedRanges.low)\n};\nsettings.advanced.rotationSpeed = settings.advanced.rotationSpeedRanges.high;\nsettings.advanced.tiltAngle = normalizeRange(settings.advanced.tiltAngle, DEFAULTS.advanced.tiltAngle);\nsettings.advanced.encoderSwitchSpeed = normalizeAngle(settings.advanced.encoderSwitchSpeed, DEFAULTS.advanced.encoderSwitchSpeed);\nif (!Array.isArray(settings.advanced.BEPcoeffs)) settings.advanced.BEPcoeffs = [0, 0, 0, 0, 0];\nwhile (settings.advanced.BEPcoeffs.length < 5) settings.advanced.BEPcoeffs.push(0);\nsettings.advanced.BEPcoeffs = settings.advanced.BEPcoeffs.slice(0, 5).map(function(v) { return number(v, 0); });\n\nglobal.set('settings', settings);\nglobal.set('ui_language', settings.general.language === 'English' ? 'english' : 'russian');\nglobal.set('drive_speed_ranges', settings.advanced.rotationSpeedRanges);\nglobal.set('recording_duration_sec', settings.advanced.dataDurationSec);\nglobal.set('raw_data_poll_hz', settings.advanced.rawDataPollHz);\nvar currentRange = global.get('current_range') || 'high';\nglobal.set('drive_limits_override', rangeLimits(settings.advanced.rotationSpeedRanges[currentRange] || settings.advanced.rotationSpeedRanges.high, currentRange));\n\nmsg.settings = settings;\nmsg.payload = settings;\nreturn msg;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
@@ -3298,7 +3298,7 @@
         "z": "3e07d83af7348f65",
         "g": "65aa9b618869d533",
         "name": "SettingsNormalize",
-        "func": "// Normalize settings, compute derived angle fields, and update global context.\nvar settings = msg.payload || {};\n\nvar DEFAULTS = {\n    general: {\n        remoteControl: false,\n        angleCorrectionEnabled: false,\n        language: 'Russian',\n        angleSavingMode: 'header'\n    },\n    advanced: {\n        readPeriodRotation: 100,\n        readPeriodTilt: 1000,\n        readPeriodBEP: 100,\n        dataDurationSec: 60,\n        rotationSpeedRanges: {\n            high: {\n                min: { deg: 0, min: 0, sec: 1.000001, decimalDeg: 0.000277778, rad: 0.000004848141 },\n                max: { deg: 20, min: 0, sec: 0, decimalDeg: 20, rad: 0.349065850399 }\n            },\n            low: {\n                min: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n                max: { deg: 360, min: 0, sec: 0, decimalDeg: 360, rad: 6.28318530718 }\n            }\n        },\n        rotationSpeed: null,\n        tiltAngle: {\n            min: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 },\n            max: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }\n        },\n        encoderSwitchSpeed: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n        BEPcoeffs: [0, 0, 0, 0, 0],\n        aerostaticSupportDiagram: '',\n        encoderCalibrationLines: ''\n    }\n};\n\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction merge(base, patch) {\n    var out = clone(base);\n    patch = patch && typeof patch === 'object' ? patch : {};\n    Object.keys(patch).forEach(function(k) {\n        if (patch[k] && typeof patch[k] === 'object' && !Array.isArray(patch[k]) && out[k] && typeof out[k] === 'object' && !Array.isArray(out[k])) {\n            out[k] = merge(out[k], patch[k]);\n        } else {\n            out[k] = patch[k];\n        }\n    });\n    return out;\n}\nfunction number(v, fallback) {\n    var x = Number(v);\n    return isFinite(x) ? x : fallback;\n}\nfunction languageName(v) {\n    var s = String(v || '').toLowerCase();\n    return (s === 'english' || s === 'en') ? 'English' : 'Russian';\n}\nfunction dmsToDecimal(v) {\n    v = v || {};\n    var sign = number(v.deg, 0) < 0 ? -1 : 1;\n    return sign * (Math.abs(number(v.deg, 0)) + number(v.min, 0) / 60 + number(v.sec, 0) / 3600);\n}\nfunction fillDms(v, decimalDeg) {\n    var sign = decimalDeg < 0 ? -1 : 1;\n    var abs = Math.abs(decimalDeg);\n    var deg = Math.floor(abs);\n    var minutesFloat = (abs - deg) * 60;\n    var min = Math.floor(minutesFloat);\n    var sec = (minutesFloat - min) * 60;\n    v.deg = sign * deg;\n    v.min = min;\n    v.sec = Number(sec.toFixed(6));\n}\nfunction normalizeAngle(v, fallback) {\n    v = merge(fallback || { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }, v || {});\n    var decimalDeg;\n    if (v.decimalDeg !== undefined && v.decimalDeg !== null && v.decimalDeg !== '') {\n        decimalDeg = number(v.decimalDeg, dmsToDecimal(v));\n    } else if (v.rad !== undefined && v.rad !== null && v.rad !== '') {\n        decimalDeg = number(v.rad, 0) * 180 / Math.PI;\n    } else {\n        decimalDeg = dmsToDecimal(v);\n    }\n    v.decimalDeg = Number(decimalDeg.toFixed(9));\n    v.rad = Number((decimalDeg * Math.PI / 180).toFixed(12));\n    fillDms(v, decimalDeg);\n    return v;\n}\nfunction normalizeRange(range, fallback) {\n    return {\n        min: normalizeAngle(range && range.min, fallback.min),\n        max: normalizeAngle(range && range.max, fallback.max)\n    };\n}\nfunction ticksPerDeg(res) { return (res === 'high') ? (262144000 / 360) : (6553600 / 360); }\nfunction rangeLimits(range, res) {\n    var tpd = ticksPerDeg(res);\n    return {\n        resolution: res,\n        ticks_per_deg: tpd,\n        speed_min_deg: range.min.decimalDeg,\n        speed_max_deg: range.max.decimalDeg,\n        speed_min_ticks: Math.ceil(Math.abs(range.min.decimalDeg) * tpd),\n        speed_max_ticks: Math.floor(Math.abs(range.max.decimalDeg) * tpd)\n    };\n}\n\nsettings = merge(DEFAULTS, settings);\nsettings.general.language = languageName(settings.general.language);\nsettings.general.angleSavingMode = settings.general.angleSavingMode === 'none' ? 'none' : 'header';\nsettings.advanced.dataDurationSec = Math.max(1, number(settings.advanced.dataDurationSec, 60));\nsettings.advanced.readPeriodRotation = Math.max(1, number(settings.advanced.readPeriodRotation, 100));\nsettings.advanced.readPeriodTilt = Math.max(1, number(settings.advanced.readPeriodTilt, 1000));\nsettings.advanced.readPeriodBEP = Math.max(1, number(settings.advanced.readPeriodBEP, 100));\n\nif (!settings.advanced.rotationSpeedRanges && settings.advanced.rotationSpeed) {\n    settings.advanced.rotationSpeedRanges = { high: settings.advanced.rotationSpeed, low: DEFAULTS.advanced.rotationSpeedRanges.low };\n}\nsettings.advanced.rotationSpeedRanges = {\n    high: normalizeRange(settings.advanced.rotationSpeedRanges.high, DEFAULTS.advanced.rotationSpeedRanges.high),\n    low: normalizeRange(settings.advanced.rotationSpeedRanges.low, DEFAULTS.advanced.rotationSpeedRanges.low)\n};\nsettings.advanced.rotationSpeed = settings.advanced.rotationSpeedRanges.high;\nsettings.advanced.tiltAngle = normalizeRange(settings.advanced.tiltAngle, DEFAULTS.advanced.tiltAngle);\nsettings.advanced.encoderSwitchSpeed = normalizeAngle(settings.advanced.encoderSwitchSpeed, DEFAULTS.advanced.encoderSwitchSpeed);\nif (!Array.isArray(settings.advanced.BEPcoeffs)) settings.advanced.BEPcoeffs = [0, 0, 0, 0, 0];\nwhile (settings.advanced.BEPcoeffs.length < 5) settings.advanced.BEPcoeffs.push(0);\nsettings.advanced.BEPcoeffs = settings.advanced.BEPcoeffs.slice(0, 5).map(function(v) { return number(v, 0); });\n\nglobal.set('settings', settings);\nglobal.set('ui_language', settings.general.language === 'English' ? 'english' : 'russian');\nglobal.set('drive_speed_ranges', settings.advanced.rotationSpeedRanges);\nglobal.set('recording_duration_sec', settings.advanced.dataDurationSec);\nvar currentRange = global.get('current_range') || 'high';\nglobal.set('drive_limits_override', rangeLimits(settings.advanced.rotationSpeedRanges[currentRange] || settings.advanced.rotationSpeedRanges.high, currentRange));\n\nmsg.settings = settings;\nmsg.payload = settings;\nreturn msg;",
+        "func": "// Normalize settings, compute derived angle fields, and update global context.\nvar settings = msg.payload || {};\n\nvar DEFAULTS = {\n    general: {\n        remoteControl: false,\n        angleCorrectionEnabled: false,\n        language: 'Russian',\n        angleSavingMode: 'header'\n    },\n    advanced: {\n        readPeriodRotation: 100,\n        readPeriodTilt: 1000,\n        readPeriodBEP: 100,\n        dataDurationSec: 60,\n        rawDataPollHz: 30,\n        fastRawPollingEnabled: true,\n        fastStableSamples: 3,\n        fastStableToleranceTicks: 1000,\n        rotationSpeedRanges: {\n            high: {\n                min: { deg: 0, min: 0, sec: 1.000001, decimalDeg: 0.000277778, rad: 0.000004848141 },\n                max: { deg: 20, min: 0, sec: 0, decimalDeg: 20, rad: 0.349065850399 }\n            },\n            low: {\n                min: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n                max: { deg: 360, min: 0, sec: 0, decimalDeg: 360, rad: 6.28318530718 }\n            }\n        },\n        rotationSpeed: null,\n        tiltAngle: {\n            min: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 },\n            max: { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }\n        },\n        encoderSwitchSpeed: { deg: 10, min: 0, sec: 0, decimalDeg: 10, rad: 0.174532925199 },\n        BEPcoeffs: [0, 0, 0, 0, 0],\n        aerostaticSupportDiagram: '',\n        encoderCalibrationLines: ''\n    }\n};\n\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction merge(base, patch) {\n    var out = clone(base);\n    patch = patch && typeof patch === 'object' ? patch : {};\n    Object.keys(patch).forEach(function(k) {\n        if (patch[k] && typeof patch[k] === 'object' && !Array.isArray(patch[k]) && out[k] && typeof out[k] === 'object' && !Array.isArray(out[k])) {\n            out[k] = merge(out[k], patch[k]);\n        } else {\n            out[k] = patch[k];\n        }\n    });\n    return out;\n}\nfunction number(v, fallback) {\n    var x = Number(v);\n    return isFinite(x) ? x : fallback;\n}\nfunction languageName(v) {\n    var s = String(v || '').toLowerCase();\n    return (s === 'english' || s === 'en') ? 'English' : 'Russian';\n}\nfunction dmsToDecimal(v) {\n    v = v || {};\n    var sign = number(v.deg, 0) < 0 ? -1 : 1;\n    return sign * (Math.abs(number(v.deg, 0)) + number(v.min, 0) / 60 + number(v.sec, 0) / 3600);\n}\nfunction fillDms(v, decimalDeg) {\n    var sign = decimalDeg < 0 ? -1 : 1;\n    var abs = Math.abs(decimalDeg);\n    var deg = Math.floor(abs);\n    var minutesFloat = (abs - deg) * 60;\n    var min = Math.floor(minutesFloat);\n    var sec = (minutesFloat - min) * 60;\n    v.deg = sign * deg;\n    v.min = min;\n    v.sec = Number(sec.toFixed(6));\n}\nfunction normalizeAngle(v, fallback) {\n    v = merge(fallback || { deg: 0, min: 0, sec: 0, decimalDeg: 0, rad: 0 }, v || {});\n    var decimalDeg;\n    if (v.decimalDeg !== undefined && v.decimalDeg !== null && v.decimalDeg !== '') {\n        decimalDeg = number(v.decimalDeg, dmsToDecimal(v));\n    } else if (v.rad !== undefined && v.rad !== null && v.rad !== '') {\n        decimalDeg = number(v.rad, 0) * 180 / Math.PI;\n    } else {\n        decimalDeg = dmsToDecimal(v);\n    }\n    v.decimalDeg = Number(decimalDeg.toFixed(9));\n    v.rad = Number((decimalDeg * Math.PI / 180).toFixed(12));\n    fillDms(v, decimalDeg);\n    return v;\n}\nfunction normalizeRange(range, fallback) {\n    return {\n        min: normalizeAngle(range && range.min, fallback.min),\n        max: normalizeAngle(range && range.max, fallback.max)\n    };\n}\nfunction ticksPerDeg(res) { return (res === 'high') ? (262144000 / 360) : (6553600 / 360); }\nfunction rangeLimits(range, res) {\n    var tpd = ticksPerDeg(res);\n    return {\n        resolution: res,\n        ticks_per_deg: tpd,\n        speed_min_deg: range.min.decimalDeg,\n        speed_max_deg: range.max.decimalDeg,\n        speed_min_ticks: Math.ceil(Math.abs(range.min.decimalDeg) * tpd),\n        speed_max_ticks: Math.floor(Math.abs(range.max.decimalDeg) * tpd)\n    };\n}\n\nsettings = merge(DEFAULTS, settings);\nsettings.general.language = languageName(settings.general.language);\nsettings.general.angleSavingMode = settings.general.angleSavingMode === 'none' ? 'none' : 'header';\nsettings.advanced.dataDurationSec = Math.max(1, number(settings.advanced.dataDurationSec, 60));\nsettings.advanced.rawDataPollHz = Math.min(30, Math.max(1, number(settings.advanced.rawDataPollHz, 30)));\nsettings.advanced.fastRawPollingEnabled = settings.advanced.fastRawPollingEnabled !== false;\nsettings.advanced.fastStableSamples = Math.min(50, Math.max(1, Math.round(number(settings.advanced.fastStableSamples, 3))));\nsettings.advanced.fastStableToleranceTicks = Math.max(0, number(settings.advanced.fastStableToleranceTicks, 1000));\nsettings.advanced.readPeriodRotation = Math.max(1, number(settings.advanced.readPeriodRotation, 100));\nsettings.advanced.readPeriodTilt = Math.max(1, number(settings.advanced.readPeriodTilt, 1000));\nsettings.advanced.readPeriodBEP = Math.max(1, number(settings.advanced.readPeriodBEP, 100));\n\nif (!settings.advanced.rotationSpeedRanges && settings.advanced.rotationSpeed) {\n    settings.advanced.rotationSpeedRanges = { high: settings.advanced.rotationSpeed, low: DEFAULTS.advanced.rotationSpeedRanges.low };\n}\nsettings.advanced.rotationSpeedRanges = {\n    high: normalizeRange(settings.advanced.rotationSpeedRanges.high, DEFAULTS.advanced.rotationSpeedRanges.high),\n    low: normalizeRange(settings.advanced.rotationSpeedRanges.low, DEFAULTS.advanced.rotationSpeedRanges.low)\n};\nsettings.advanced.rotationSpeed = settings.advanced.rotationSpeedRanges.high;\nsettings.advanced.tiltAngle = normalizeRange(settings.advanced.tiltAngle, DEFAULTS.advanced.tiltAngle);\nsettings.advanced.encoderSwitchSpeed = normalizeAngle(settings.advanced.encoderSwitchSpeed, DEFAULTS.advanced.encoderSwitchSpeed);\nif (!Array.isArray(settings.advanced.BEPcoeffs)) settings.advanced.BEPcoeffs = [0, 0, 0, 0, 0];\nwhile (settings.advanced.BEPcoeffs.length < 5) settings.advanced.BEPcoeffs.push(0);\nsettings.advanced.BEPcoeffs = settings.advanced.BEPcoeffs.slice(0, 5).map(function(v) { return number(v, 0); });\n\nglobal.set('settings', settings);\nglobal.set('ui_language', settings.general.language === 'English' ? 'english' : 'russian');\nglobal.set('drive_speed_ranges', settings.advanced.rotationSpeedRanges);\nglobal.set('recording_duration_sec', settings.advanced.dataDurationSec);\nglobal.set('raw_data_poll_hz', settings.advanced.rawDataPollHz);\nvar currentRange = global.get('current_range') || 'high';\nglobal.set('drive_limits_override', rangeLimits(settings.advanced.rotationSpeedRanges[currentRange] || settings.advanced.rotationSpeedRanges.high, currentRange));\n\nmsg.settings = settings;\nmsg.payload = settings;\nreturn msg;",
         "outputs": 1,
         "noerr": 0,
         "initialize": "",
@@ -3534,12 +3534,12 @@
         "type": "function",
         "z": "elmoxs-tab",
         "name": "ElmoTransport",
-        "func": "const actor = context.get('elmoActor');\nif (!actor) { node.error('ElmoTransport actor not initialized', msg); return null; }\n\nfunction shortValue(value) {\n    const s = String(value == null ? '' : value);\n    return s.length > 300 ? s.slice(0, 300) + '...<truncated>' : s;\n}\n\nfunction debugTransport(evt) {\n    if (context.get('transportDebug') !== false) node.warn(evt);\n}\n\nif (msg.elmo_raw === true) { actor.send({ type: 'ELMO.RESP', raw: msg.payload }); return null; }\nif (msg.topic === 'CONNECT') { actor.send({ type: 'CONNECT' }); return null; }\nif (msg.topic === 'POLL.TICK') { actor.send({ type: 'POLL.TICK' }); return null; }\n\n// Diagnostic: any remaining string input here becomes a UI.CMD and can explain CMD.ACKED.\nif (typeof msg.payload === 'string' && msg.payload.length) {\n    debugTransport({ tag: 'INTO_TRANSPORT_UI_CMD', topic: msg.topic, payload: shortValue(msg.payload), _msgid: msg._msgid });\n    actor.send({ type: 'UI.CMD', envelope: { kind: 'cmd', cmd: msg.payload, meta: { topic: msg.topic || 'manual' } } });\n    return null;\n}\n\ndebugTransport({ tag: 'INTO_TRANSPORT_IGNORED_NON_RAW', topic: msg.topic, payloadType: typeof msg.payload, payload: shortValue(msg.payload), _msgid: msg._msgid });\nreturn null;",
+        "func": "const actor = context.get('elmoActor');\nif (!actor) { node.error('ElmoTransport actor not initialized', msg); return null; }\n\nfunction shortValue(value) {\n    const s = String(value == null ? '' : value);\n    return s.length > 300 ? s.slice(0, 300) + '...<truncated>' : s;\n}\n\nfunction debugTransport(evt) {\n    if (context.get('transportDebug') === true) node.warn(evt);\n}\n\nfunction finiteNumber(value, fallback) {\n    const n = Number(value);\n    return Number.isFinite(n) ? n : fallback;\n}\nfunction clamp(value, min, max) {\n    return Math.min(max, Math.max(min, value));\n}\nfunction readPollConfigFromGlobals() {\n    const settings = global.get('settings') || {};\n    const advanced = settings.advanced || {};\n    return {\n        isRecording: !!global.get('is_recording'),\n        isRecordingRaw: !!global.get('is_recording_raw'),\n        rawDataEnabled: !!global.get('recording_save_raw_data'),\n        fastRawPollingEnabled: advanced.fastRawPollingEnabled !== false,\n        fastRawPollHz: clamp(finiteNumber(advanced.rawDataPollHz, 30), 1, 30),\n        fastStableSamples: Math.round(clamp(finiteNumber(advanced.fastStableSamples, 3), 1, 50)),\n        fastStableToleranceTicks: Math.max(0, finiteNumber(advanced.fastStableToleranceTicks, 1000))\n    };\n}\nfunction activePollConfig() {\n    return context.get('pollConfigOverride') || readPollConfigFromGlobals();\n}\nfunction syncPollConfig(force) {\n    const cfg = activePollConfig();\n    const json = JSON.stringify(cfg);\n    if (force || context.get('pollConfigJson') !== json) {\n        actor.send({ type: 'POLL.CONFIG', config: cfg });\n        context.set('pollConfigJson', json);\n    }\n}\n\nif (msg.topic === 'POLL.CONFIG') {\n    const cfg = (msg.payload && typeof msg.payload === 'object') ? msg.payload : {};\n    if (cfg.clearOverride === true) context.set('pollConfigOverride', null);\n    else context.set('pollConfigOverride', cfg);\n    syncPollConfig(true);\n    actor.send({ type: 'POLL.TICK' });\n    return null;\n}\n\nsyncPollConfig(false);\n\nif (msg.elmo_raw === true) { actor.send({ type: 'ELMO.RESP', raw: msg.payload }); return null; }\nif (msg.topic === 'CONNECT') { actor.send({ type: 'CONNECT' }); return null; }\nif (msg.topic === 'POLL.TICK') { actor.send({ type: 'POLL.TICK' }); return null; }\nif (msg.topic === 'POLL.FULL_STATE') { actor.send({ type: 'POLL.FULL_STATE' }); return null; }\n\n// Diagnostic: any remaining string input here becomes a UI.CMD and can explain CMD.ACKED.\nif (typeof msg.payload === 'string' && msg.payload.length) {\n    debugTransport({ tag: 'INTO_TRANSPORT_UI_CMD', topic: msg.topic, payload: shortValue(msg.payload), _msgid: msg._msgid });\n    actor.send({ type: 'UI.CMD', envelope: { kind: 'cmd', cmd: msg.payload, meta: { topic: msg.topic || 'manual' } } });\n    return null;\n}\n\ndebugTransport({ tag: 'INTO_TRANSPORT_IGNORED_NON_RAW', topic: msg.topic, payloadType: typeof msg.payload, payload: shortValue(msg.payload), _msgid: msg._msgid });\nreturn null;",
         "outputs": 4,
         "timeout": 0,
         "noerr": 0,
-        "initialize": "// nc3-elmo-machines is exposed via functionGlobalContext in settings.js (README rule 8),\n// NOT as a Function external module — it is a local package, not on the npm registry, so\n// the external-module loader would 404 on a fresh machine. xstate stays internal to nc3.\nconst nc3 = global.get('nc3');\nif (!nc3 || typeof nc3.startElmoTransport !== 'function') {\n    node.error('global.nc3 not available. Add nc3 to functionGlobalContext in settings.js (see docs/xstate-integration-plan.md §9.1).');\n    return;\n}\n\nfunction ensureCr(c) { const t = String(c == null ? '' : c); return t.endsWith('\\r') ? t : t + '\\r'; }\nfunction debugTransport(evt) { if (context.get('transportDebug') !== false) node.warn(evt); }\n\n// Default (in-memory) context store — no file contextStorage needed in settings.js.\n// The checkpoint is only a pre-first-poll UI hint; the real range is re-derived from OL[1].\nconst ckpt = context.get('elmo_checkpoint') || {};\n\nconst actor = nc3.startElmoTransport({\n    // out0 -> tcp request (sit). resetTcp uses msg.reset to force reconnect AND clears the\n    // FrameSplitter buffer via out3 (so stale partial bytes do not leak into the next frame).\n    sendTcp: function (cmd) { debugTransport({ tag: 'ELMO_TX', cmd: String(cmd == null ? '' : cmd) }); node.send([{ payload: ensureCr(cmd) }, null, null, null]); },\n    resetTcp: function () { debugTransport({ tag: 'ELMO_RESET' }); node.send([{ reset: true }, null, null, { reset: true }]); },\n    // out1 -> ResponseParser (here: debug). Restore logical topic (poll -> poll_data).\n    forwardResp: function (raw, topic) { node.send([null, { topic: topic || 'poll_data', payload: raw }, null, null]); },\n    // out2 -> domain events (CMD.ACKED/FAILED, ...).\n    emitEvent: function (evt) { node.send([null, null, { topic: evt.type, payload: evt }, null]); },\n    setStatus: function (st) { node.status(st); },\n    timeoutMs: 1000,\n    connectTimeoutMs: 2000,\n    statePeriodMs: 1000,\n    pollOptions: { minHz: 1, maxHz: 1 }\n}, { resolution: ckpt.resolution || 'high' });\n\nlet lastRes = ckpt.resolution || null;\nactor.subscribe(function (snap) {\n    context.set('transport_state', snap.value);\n    const r = snap.context.resolution;\n    if (r && r !== lastRes) { context.set('elmo_checkpoint', { resolution: r }); lastRes = r; }\n});\n\ncontext.set('elmoActor', actor);\n\n// Kick connect + self-clocked poll AFTER On Start completes.\nconst ct = setTimeout(function () {\n    const a = context.get('elmoActor');\n    if (a) a.send({ type: 'CONNECT' });\n}, 0);\ncontext.set('connectTimer', ct);",
-        "finalize": "const actor = context.get('elmoActor');\nif (actor) actor.stop();\nconst ct = context.get('connectTimer');\nif (ct) clearTimeout(ct);",
+        "initialize": "// nc3-elmo-machines is exposed via functionGlobalContext in settings.js (README rule 8),\n// NOT as a Function external module; it is a local package, not on the npm registry, so\n// the external-module loader would 404 on a fresh machine. xstate stays internal to nc3.\nconst nc3 = global.get('nc3');\nif (!nc3 || typeof nc3.startElmoTransport !== 'function') {\n    node.error('global.nc3 not available. Add nc3 to functionGlobalContext in settings.js (see docs/xstate-integration-plan.md section 9.1).');\n    return;\n}\n\nfunction ensureCr(c) { const t = String(c == null ? '' : c); return t.endsWith('\\r') ? t : t + '\\r'; }\nfunction debugTransport(evt) { if (context.get('transportDebug') === true) node.warn(evt); }\nfunction finiteNumber(value, fallback) { const n = Number(value); return Number.isFinite(n) ? n : fallback; }\nfunction clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }\nfunction readPollConfigFromGlobals() {\n    const settings = global.get('settings') || {};\n    const advanced = settings.advanced || {};\n    return {\n        isRecording: !!global.get('is_recording'),\n        isRecordingRaw: !!global.get('is_recording_raw'),\n        rawDataEnabled: !!global.get('recording_save_raw_data'),\n        fastRawPollingEnabled: advanced.fastRawPollingEnabled !== false,\n        fastRawPollHz: clamp(finiteNumber(advanced.rawDataPollHz, 30), 1, 30),\n        fastStableSamples: Math.round(clamp(finiteNumber(advanced.fastStableSamples, 3), 1, 50)),\n        fastStableToleranceTicks: Math.max(0, finiteNumber(advanced.fastStableToleranceTicks, 1000))\n    };\n}\nfunction syncPollConfig(actor, force) {\n    const cfg = context.get('pollConfigOverride') || readPollConfigFromGlobals();\n    const json = JSON.stringify(cfg);\n    if (force || context.get('pollConfigJson') !== json) {\n        actor.send({ type: 'POLL.CONFIG', config: cfg });\n        context.set('pollConfigJson', json);\n    }\n}\n\n// Default (in-memory) context store; no file contextStorage needed in settings.js.\n// The checkpoint is only a pre-first-poll UI hint; the real range is re-derived from OL[1].\nconst ckpt = context.get('elmo_checkpoint') || {};\nconst initialPollConfig = readPollConfigFromGlobals();\n\nconst actor = nc3.startElmoTransport({\n    // out0 -> tcp request (sit). resetTcp uses msg.reset to force reconnect AND clears the\n    // FrameSplitter buffer via out3 (so stale partial bytes do not leak into the next frame).\n    sendTcp: function (cmd) { debugTransport({ tag: 'ELMO_TX', cmd: String(cmd == null ? '' : cmd) }); node.send([{ payload: ensureCr(cmd) }, null, null, null]); },\n    resetTcp: function () { debugTransport({ tag: 'ELMO_RESET' }); node.send([{ reset: true }, null, null, { reset: true }]); },\n    // out1 -> ResponseParser/debug. Restore logical topic (poll -> poll_data/poll_state/poll_fast).\n    forwardResp: function (raw, topic) { node.send([null, { topic: topic || 'poll_data', payload: raw }, null, null]); },\n    // out2 -> domain events (CMD.ACKED/FAILED, ...).\n    emitEvent: function (evt) { node.send([null, null, { topic: evt.type, payload: evt }, null]); },\n    setStatus: function (st) { node.status(st); },\n    timeoutMs: 1000,\n    connectTimeoutMs: 2000,\n    statePeriodMs: 1000,\n    pollOptions: { minHz: 1, maxHz: 1 }\n}, { resolution: ckpt.resolution || 'high', pollConfig: initialPollConfig });\n\nlet lastRes = ckpt.resolution || null;\nactor.subscribe(function (snap) {\n    context.set('transport_state', snap.value);\n    const r = snap.context.resolution;\n    if (r && r !== lastRes) { context.set('elmo_checkpoint', { resolution: r }); lastRes = r; }\n});\n\ncontext.set('elmoActor', actor);\nsyncPollConfig(actor, true);\n\nconst pct = setInterval(function () {\n    const a = context.get('elmoActor');\n    if (a) syncPollConfig(a, false);\n}, 500);\ncontext.set('pollConfigTimer', pct);\n\n// Kick connect + self-clocked poll AFTER On Start completes.\nconst ct = setTimeout(function () {\n    const a = context.get('elmoActor');\n    if (a) a.send({ type: 'CONNECT' });\n}, 0);\ncontext.set('connectTimer', ct);",
+        "finalize": "const actor = context.get('elmoActor');\nif (actor) actor.stop();\nconst ct = context.get('connectTimer');\nif (ct) clearTimeout(ct);\nconst pct = context.get('pollConfigTimer');\nif (pct) clearInterval(pct);",
         "libs": [],
         "x": 470,
         "y": 160,
@@ -3548,7 +3548,8 @@
                 "elmoxs-tcp"
             ],
             [
-                "elmoxs-dbg-resp"
+                "elmoxs-dbg-resp",
+                "elmoxs-rate-meter"
             ],
             [
                 "elmoxs-dbg-evt"
@@ -3584,7 +3585,7 @@
         "type": "function",
         "z": "elmoxs-tab",
         "name": "FrameSplitter",
-        "func": "const splitter = context.get('splitter');\nif (!splitter) { node.error('FrameSplitter not initialized', msg); return null; }\n\nfunction dumpPayload(value) {\n    const s = String(value == null ? '' : value);\n    return {\n        len: s.length,\n        json: JSON.stringify(s),\n        codes: Array.from(s).map(function (c) { return c.charCodeAt(0); }).slice(0, 200)\n    };\n}\n\nfunction debugFrame(evt) {\n    if (context.get('frameDebug') !== false) node.warn(evt);\n}\n\n// Reset signal from ElmoTransport (out3) on timeout/fault: drop any stale partial buffer\n// so it cannot leak into the next frame after the socket reconnects.\nif (msg.reset === true) {\n    debugFrame({ tag: 'SPLITTER_RESET', pending: dumpPayload(splitter.pending || '') });\n    splitter.reset();\n    const rt = context.get('idleTimer');\n    if (rt) clearTimeout(rt);\n    return null;\n}\n\ndebugFrame({ tag: 'TCP_CHUNK', data: dumpPayload(msg.payload) });\n\n// terminator:'' => accumulate only; no immediate frames. If a terminator is configured\n// later, keep the frame logging path active as well.\nconst frames = splitter.push(msg.payload);\nfor (let i = 0; i < frames.length; i++) {\n    debugFrame({ tag: 'FRAME', data: dumpPayload(frames[i]) });\n    node.send({ elmo_raw: true, payload: frames[i] });\n}\n\n// Idle-gap flush: emit the full accumulated response once ELMO goes quiet. With single\n// in-flight + a ~1 s gap to the next poll, this delimits exactly one command's response.\nlet t = context.get('idleTimer');\nif (t) clearTimeout(t);\nconst idleMs = context.get('frameIdleMs') || 80;\nt = setTimeout(function () {\n    const s = context.get('splitter');\n    const frame = s && s.flush();\n    if (frame != null && frame.length) {\n        debugFrame({ tag: 'FLUSH_FRAME', idleMs: idleMs, data: dumpPayload(frame) });\n        node.send({ elmo_raw: true, payload: frame });\n    }\n}, idleMs);\ncontext.set('idleTimer', t);\nreturn null;",
+        "func": "const splitter = context.get('splitter');\nif (!splitter) { node.error('FrameSplitter not initialized', msg); return null; }\n\nfunction dumpPayload(value) {\n    const s = String(value == null ? '' : value);\n    return {\n        len: s.length,\n        json: JSON.stringify(s),\n        codes: Array.from(s).map(function (c) { return c.charCodeAt(0); }).slice(0, 200)\n    };\n}\n\nfunction debugFrame(evt) {\n    if (context.get('frameDebug') === true) node.warn(evt);\n}\n\n// Reset signal from ElmoTransport (out3) on timeout/fault: drop any stale partial buffer\n// so it cannot leak into the next frame after the socket reconnects.\nif (msg.reset === true) {\n    debugFrame({ tag: 'SPLITTER_RESET', pending: dumpPayload(splitter.pending || '') });\n    splitter.reset();\n    const rt = context.get('idleTimer');\n    if (rt) clearTimeout(rt);\n    return null;\n}\n\ndebugFrame({ tag: 'TCP_CHUNK', data: dumpPayload(msg.payload) });\n\n// terminator:'' => accumulate only; no immediate frames. If a terminator is configured\n// later, keep the frame logging path active as well.\nconst frames = splitter.push(msg.payload);\nfor (let i = 0; i < frames.length; i++) {\n    debugFrame({ tag: 'FRAME', data: dumpPayload(frames[i]) });\n    node.send({ elmo_raw: true, payload: frames[i] });\n}\n\n// Idle-gap flush: emit the full accumulated response once ELMO goes quiet. With single\n// in-flight + a ~1 s gap to the next poll, this delimits exactly one command's response.\nlet t = context.get('idleTimer');\nif (t) clearTimeout(t);\nconst idleMs = context.get('frameIdleMs') || 80;\nt = setTimeout(function () {\n    const s = context.get('splitter');\n    const frame = s && s.flush();\n    if (frame != null && frame.length) {\n        debugFrame({ tag: 'FLUSH_FRAME', idleMs: idleMs, data: dumpPayload(frame) });\n        node.send({ elmo_raw: true, payload: frame });\n    }\n}, idleMs);\ncontext.set('idleTimer', t);\nreturn null;",
         "outputs": 1,
         "timeout": 0,
         "noerr": 0,
@@ -3633,7 +3634,7 @@
         "type": "debug",
         "z": "elmoxs-tab",
         "name": "forwarded resp (out1)",
-        "active": true,
+        "active": false,
         "tosidebar": true,
         "console": false,
         "complete": "true",
@@ -3659,5 +3660,234 @@
         "x": 730,
         "y": 420,
         "wires": []
+    },
+    {
+        "id": "elmoxs-rate-meter",
+        "type": "function",
+        "z": "elmoxs-tab",
+        "name": "PollRateMeter",
+        "func": "const now = Date.now();\nconst bucket = context.get('poll_rate_bucket') || { startedAt: now, counts: {} };\nconst topic = String(msg.topic || 'unknown');\nbucket.counts[topic] = (bucket.counts[topic] || 0) + 1;\nconst elapsed = now - bucket.startedAt;\ncontext.set('poll_rate_bucket', bucket);\nif (elapsed < 1000) return null;\n\nconst counts = bucket.counts;\nconst total = Object.keys(counts).reduce(function (sum, key) { return sum + counts[key]; }, 0);\ncontext.set('poll_rate_bucket', { startedAt: now, counts: {} });\nreturn {\n    topic: 'poll_rate',\n    payload: {\n        windowMs: elapsed,\n        total: total,\n        hz: Number((total * 1000 / elapsed).toFixed(2)),\n        counts: counts\n    }\n};",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 970,
+        "y": 360,
+        "wires": [
+            [
+                "elmoxs-dbg-rate"
+            ]
+        ]
+    },
+    {
+        "id": "elmoxs-dbg-rate",
+        "type": "debug",
+        "z": "elmoxs-tab",
+        "name": "poll rate (valid frames/sec)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1230,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "elmoxs-inject-poll-normal",
+        "type": "inject",
+        "z": "elmoxs-tab",
+        "name": "poll mode: normal override",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "POLL.CONFIG",
+        "payload": "{\"isRecording\":false,\"isRecordingRaw\":false,\"rawDataEnabled\":false,\"fastRawPollingEnabled\":true,\"fastRawPollHz\":1,\"fastStableSamples\":3,\"fastStableToleranceTicks\":1000}",
+        "payloadType": "json",
+        "x": 210,
+        "y": 40,
+        "wires": [
+            [
+                "elmoxs-transport"
+            ]
+        ]
+    },
+    {
+        "id": "elmoxs-inject-poll-fast1",
+        "type": "inject",
+        "z": "elmoxs-tab",
+        "name": "poll mode: raw fast 1Hz",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "POLL.CONFIG",
+        "payload": "{\"isRecording\":true,\"isRecordingRaw\":true,\"rawDataEnabled\":true,\"fastRawPollingEnabled\":true,\"fastRawPollHz\":1,\"fastStableSamples\":3,\"fastStableToleranceTicks\":1000}",
+        "payloadType": "json",
+        "x": 210,
+        "y": 80,
+        "wires": [
+            [
+                "elmoxs-transport"
+            ]
+        ]
+    },
+    {
+        "id": "elmoxs-inject-poll-fast10",
+        "type": "inject",
+        "z": "elmoxs-tab",
+        "name": "poll mode: raw fast 10Hz",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "POLL.CONFIG",
+        "payload": "{\"isRecording\":true,\"isRecordingRaw\":true,\"rawDataEnabled\":true,\"fastRawPollingEnabled\":true,\"fastRawPollHz\":10,\"fastStableSamples\":3,\"fastStableToleranceTicks\":1000}",
+        "payloadType": "json",
+        "x": 210,
+        "y": 120,
+        "wires": [
+            [
+                "elmoxs-transport"
+            ]
+        ]
+    },
+    {
+        "id": "elmoxs-inject-poll-fast30",
+        "type": "inject",
+        "z": "elmoxs-tab",
+        "name": "poll mode: raw fast 30Hz",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "POLL.CONFIG",
+        "payload": "{\"isRecording\":true,\"isRecordingRaw\":true,\"rawDataEnabled\":true,\"fastRawPollingEnabled\":true,\"fastRawPollHz\":30,\"fastStableSamples\":3,\"fastStableToleranceTicks\":1000}",
+        "payloadType": "json",
+        "x": 210,
+        "y": 200,
+        "wires": [
+            [
+                "elmoxs-transport"
+            ]
+        ]
+    },
+    {
+        "id": "elmoxs-inject-poll-settings",
+        "type": "inject",
+        "z": "elmoxs-tab",
+        "name": "poll mode: settings/global",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "POLL.CONFIG",
+        "payload": "{\"clearOverride\":true}",
+        "payloadType": "json",
+        "x": 210,
+        "y": 240,
+        "wires": [
+            [
+                "elmoxs-transport"
+            ]
+        ]
+    },
+    {
+        "id": "elmoxs-inject-poll-tick",
+        "type": "inject",
+        "z": "elmoxs-tab",
+        "name": "poll tick now",
+        "props": [
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "POLL.TICK",
+        "x": 230,
+        "y": 280,
+        "wires": [
+            [
+                "elmoxs-transport"
+            ]
+        ]
+    },
+    {
+        "id": "elmoxs-inject-fullstate",
+        "type": "inject",
+        "z": "elmoxs-tab",
+        "name": "poll full state once",
+        "props": [
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "POLL.FULL_STATE",
+        "x": 230,
+        "y": 320,
+        "wires": [
+            [
+                "elmoxs-transport"
+            ]
+        ]
     }
 ]

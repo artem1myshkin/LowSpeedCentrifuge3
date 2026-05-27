@@ -78,6 +78,17 @@ test('poll payloads: lean vs extended', () => {
   assert.equal(buildPollEnvelope({ id: 'p' }).meta.topic, 'poll_data');
   assert.equal(buildPollEnvelope({ id: 'p', role: 'state' }).meta.topic, 'poll_state');
   assert.equal(buildPollEnvelope({ id: 'p', role: 'state' }).pollRole, 'state');
+
+  const fastSeek = buildPollEnvelope({ id: 'fast-seek', role: 'fast_seek' });
+  assert.deepEqual(fastSeek.cmds, ['VX', 'PX']);
+  assert.deepEqual(fastSeek.required, ['vx', 'px']);
+  assert.equal(fastSeek.priority, PRIORITY.fastPoll);
+  assert.equal(fastSeek.meta.topic, 'poll_fast');
+
+  const fastData = buildPollEnvelope({ id: 'fast-data', role: 'fast_data' });
+  assert.deepEqual(fastData.cmds, ['VX', 'PX', 'TM']);
+  assert.deepEqual(fastData.required, ['vx', 'px', 'tm']);
+  assert.equal(fastData.meta.topic, 'poll_data');
 });
 
 test('buildExtendedPoll: analog pressure param is opt-in', () => {
@@ -120,6 +131,11 @@ test('computePollDelayMs: measured vs setpoint source', () => {
   );
   // setpoint fallback before first VX poll
   assert.equal(computePollDelayMs({ omegaSource: 'setpoint', setpointDegS: 120 }), 100);
+  // fast raw recording mode uses configured fixed rate, not velocity-derived rate
+  assert.equal(
+    computePollDelayMs({ fastRawActive: true, pollConfig: { fastRawPollHz: 30 }, vx: 0, resolution: 'high' }),
+    Math.round(1000 / 30)
+  );
 });
 
 test('ticksPerRev matches CA[18]', () => {

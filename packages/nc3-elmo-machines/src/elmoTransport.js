@@ -4,6 +4,7 @@ const { setup, assign, createActor } = require('xstate');
 const { priorityInsert, dequeue: queueDequeue, PRIORITY } = require('./queue');
 const { buildPollEnvelope, shouldExtend, computePollDelayMs } = require('./poll');
 const { parseElmoScalars } = require('./parse');
+const { clamp } = require('./util');
 
 // ElmoTransport — single serialized owner of the ELMO TCP socket (plan §4).
 // The machine is pure: all I/O is delegated to injected `effects` so it can be unit-tested
@@ -23,6 +24,9 @@ const { parseElmoScalars } = require('./parse');
 //   probeCmd                -> liveness probe sent on connect (default single TM read)
 //   initialFullState        -> enqueue full-state poll after connect/recover (default true)
 //   pollOptions             -> { minHz, maxHz, analogParam } for poll scheduling/payload
+// input.pollConfig:
+//   { isRecording, isRecordingRaw, rawDataEnabled, fastRawPollHz, ... } toggles
+//   the fast raw-recording poll path without coupling the machine to Node-RED globals.
 
 function createElmoTransport(effects) {
   const e = effects || {};
@@ -41,6 +45,37 @@ function createElmoTransport(effects) {
 
   let seq = 0;
   const nextId = () => 'e' + (++seq);
+
+  function finiteNumber(value, fallback) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function normalizePollConfig(config) {
+    const cfg = config || {};
+    return {
+      isRecording: cfg.isRecording === true,
+      isRecordingRaw: cfg.isRecordingRaw === true,
+      rawDataEnabled: cfg.rawDataEnabled === true,
+      fastRawPollingEnabled: cfg.fastRawPollingEnabled !== false,
+      fastRawPollHz: clamp(finiteNumber(cfg.fastRawPollHz, 30), 1, 30),
+      fastStableSamples: Math.round(clamp(finiteNumber(cfg.fastStableSamples, 3), 1, 50)),
+      fastStableToleranceTicks: Math.max(0, finiteNumber(cfg.fastStableToleranceTicks, 1000)),
+    };
+  }
+
+  function shouldFastPoll(config) {
+    const cfg = normalizePollConfig(config);
+    return cfg.fastRawPollingEnabled && cfg.isRecording && (cfg.isRecordingRaw || cfg.rawDataEnabled);
+  }
+
+  function isFastPollRole(role) {
+    return role === 'fast_seek' || role === 'fast_data';
+  }
+
+  function fastPollRoleFor(context) {
+    return context.fastStable ? 'fast_data' : 'fast_seek';
+  }
 
   function normalizeEnvelope(env) {
     const src = env || {};
@@ -73,8 +108,16 @@ function createElmoTransport(effects) {
     return queue.some((env) => env && env.kind === 'poll' && pollRoleOf(env) === role);
   }
 
+  function hasAnyFastPoll(queue) {
+    return queue.some((env) => env && env.kind === 'poll' && isFastPollRole(pollRoleOf(env)));
+  }
+
   function hasPollRoleInFlight(context, role) {
     return context.inFlight && context.inFlight.kind === 'poll' && pollRoleOf(context.inFlight) === role;
+  }
+
+  function hasAnyFastPollInFlight(context) {
+    return context.inFlight && context.inFlight.kind === 'poll' && isFastPollRole(pollRoleOf(context.inFlight));
   }
 
   function isBatchPoll(env) {
@@ -135,6 +178,25 @@ function createElmoTransport(effects) {
     return { ok: missing.length === 0, role, missing, part: idx, cmd: commandFor(env) };
   }
 
+  function responseValidation(env, rawEvent) {
+    const partValidation = validateCurrentPollPart(env, rawEvent);
+    const raw = rawFor(env, rawEvent);
+    const validation = partValidation.ok ? validatePollResponse(env, raw) : partValidation;
+    return { raw, validation };
+  }
+
+  function fastStabilityPatch(context, vx) {
+    const cfg = context.pollConfig || normalizePollConfig();
+    const prev = context.lastFastVx;
+    const delta = prev == null ? Infinity : Math.abs(Number(vx) - Number(prev));
+    const count = delta <= cfg.fastStableToleranceTicks ? (Number(context.fastStableCount) || 0) + 1 : 1;
+    return {
+      lastFastVx: Number(vx),
+      fastStableCount: count,
+      fastStable: count >= cfg.fastStableSamples,
+    };
+  }
+
   return setup({
     guards: {
       hasWork: ({ context }) => context.queue.length > 0,
@@ -151,6 +213,18 @@ function createElmoTransport(effects) {
       CONNECT_TIMEOUT: () => connectTimeoutMs,
     },
     actions: {
+      configurePoll: assign(({ context, event }) => {
+        const pollConfig = normalizePollConfig(event.config);
+        const fastRawActive = shouldFastPoll(pollConfig);
+        const patch = { pollConfig, fastRawActive };
+        if (fastRawActive !== context.fastRawActive || !fastRawActive) {
+          patch.fastStable = false;
+          patch.fastStableCount = 0;
+          patch.lastFastVx = undefined;
+        }
+        return patch;
+      }),
+
       enqueueCmd: assign(({ context, event }) => {
         const env = normalizeEnvelope(event.envelope);
         const patch = { queue: priorityInsert(context.queue, env) };
@@ -181,6 +255,9 @@ function createElmoTransport(effects) {
         if (f.ms !== undefined) patch.ms = f.ms;
         if (f.sr !== undefined) patch.sr = f.sr;
         if (f.af !== undefined) patch.af = f.af;
+        if (isFastPollRole(pollRoleOf(context.inFlight)) && f.vx !== undefined) {
+          Object.assign(patch, fastStabilityPatch(context, f.vx));
+        }
         return patch;
       }),
 
@@ -189,6 +266,14 @@ function createElmoTransport(effects) {
         const t = now();
         let queue = context.queue;
         let lastExtendedAt = context.lastExtendedAt;
+        if (context.fastRawActive) {
+          const role = fastPollRoleFor(context);
+          const hasDiagnostic = hasPollRole(queue, 'full_state') || hasPollRoleInFlight(context, 'full_state');
+          if (!hasDiagnostic && !hasAnyFastPoll(queue) && !hasAnyFastPollInFlight(context)) {
+            queue = priorityInsert(queue, buildPollEnvelope({ id: nextId(), role, options: pollOptions }));
+          }
+          return { queue, lastExtendedAt };
+        }
         if (!hasPollRole(queue, 'data') && !hasPollRoleInFlight(context, 'data')) {
           queue = priorityInsert(queue, buildPollEnvelope({ id: nextId(), role: 'data', options: pollOptions }));
         }
@@ -229,6 +314,22 @@ function createElmoTransport(effects) {
         };
       }),
 
+      enqueueDiagnosticOnBadPoll: assign(({ context, event }) => {
+        const env = context.inFlight;
+        if (!env || env.kind !== 'poll' || !isFastPollRole(pollRoleOf(env))) return {};
+        const { validation } = responseValidation(env, event.raw);
+        if (validation.ok || hasPollRole(context.queue, 'full_state') || hasPollRoleInFlight(context, 'full_state')) return {};
+        return {
+          queue: priorityInsert(
+            context.queue,
+            buildPollEnvelope({ id: nextId(), role: 'full_state', options: pollOptions, priority: PRIORITY.init })
+          ),
+          fastStable: false,
+          fastStableCount: 0,
+          lastFastVx: undefined,
+        };
+      }),
+
       takeNext: assign(({ context }) => {
         const { inFlight, queue } = queueDequeue(context.queue);
         return { inFlight, queue };
@@ -256,9 +357,7 @@ function createElmoTransport(effects) {
 
       forwardAndAck: ({ context, event }) => {
         const env = context.inFlight;
-        const partValidation = validateCurrentPollPart(env, event.raw);
-        const raw = rawFor(env, event.raw);
-        const validation = partValidation.ok ? validatePollResponse(env, raw) : partValidation;
+        const { raw, validation } = responseValidation(env, event.raw);
         if (!validation.ok) {
           emitEvent({
             type: 'POLL.BAD_FRAME',
@@ -294,16 +393,27 @@ function createElmoTransport(effects) {
     },
   }).createMachine({
     id: 'transport',
-    context: ({ input }) => ({
-      queue: [],
-      inFlight: null,
-      resolution: (input && input.resolution) || 'high',
-      vx: 0,
-      omegaSource: 'measured', // 'setpoint' right after a speed command (§4.4 fallback)
-      setpointDegS: 0,
-      lastExtendedAt: 0,
-    }),
+    context: ({ input }) => {
+      const pollConfig = normalizePollConfig(input && input.pollConfig);
+      return {
+        queue: [],
+        inFlight: null,
+        resolution: (input && input.resolution) || 'high',
+        vx: 0,
+        omegaSource: 'measured', // 'setpoint' right after a speed command (§4.4 fallback)
+        setpointDegS: 0,
+        lastExtendedAt: 0,
+        pollConfig,
+        fastRawActive: shouldFastPoll(pollConfig),
+        fastStable: false,
+        fastStableCount: 0,
+        lastFastVx: undefined,
+      };
+    },
     initial: 'offline',
+    on: {
+      'POLL.CONFIG': { actions: 'configurePoll' },
+    },
     states: {
       offline: {
         entry: 'statusOffline',
@@ -350,7 +460,7 @@ function createElmoTransport(effects) {
             on: {
               'ELMO.RESP': [
                 { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: 'collectPollPart' },
-                { target: 'dispatch', actions: ['ingestResp', 'forwardAndAck', 'enqueueConfirmPoll'] },
+                { target: 'dispatch', actions: ['ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'] },
               ],
               'ELMO.TIMEOUT': { target: '#transport.fault', actions: 'failInFlight' },
             },

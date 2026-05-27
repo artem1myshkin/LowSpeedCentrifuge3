@@ -1,9 +1,10 @@
 'use strict';
 
-// Single serialized request queue (§4.2). Priority: cmd(3) > tilt(2) > poll(1).
+// Single serialized request queue (§4.2).
+// Priority: cmd/init(3) > fast raw poll(2.5) > tilt(2) > regular poll(1).
 // Stable FIFO within the same priority.
 
-const PRIORITY = { cmd: 3, init: 3, tilt: 2, poll: 1 };
+const PRIORITY = { cmd: 3, init: 3, fastPoll: 2.5, tilt: 2, poll: 1 };
 
 function priorityOf(envelope) {
   if (envelope && typeof envelope.priority === 'number') return envelope.priority;

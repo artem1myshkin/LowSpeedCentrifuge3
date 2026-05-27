@@ -25,7 +25,9 @@ function makeHarness(opts = {}) {
     statePeriodMs: 1000,
     initialFullState: opts.initialFullState === true,
   };
-  const actor = createActor(createElmoTransport(effects), { input: { resolution: 'high' } }).start();
+  const input = { resolution: 'high' };
+  if (opts.pollConfig) input.pollConfig = opts.pollConfig;
+  const actor = createActor(createElmoTransport(effects), { input }).start();
   return { actor, calls, setClock: (v) => { clock = v; }, value: () => actor.getSnapshot().value, ctx: () => actor.getSnapshot().context };
 }
 
@@ -37,6 +39,17 @@ function feedDataPoll(h, opts = {}) {
   h.actor.send({ type: 'ELMO.RESP', raw: opts.tm || 'TM;1;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.px || 'PX;2;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.vx || 'VX;0;' });
+}
+
+function feedFastSeekPoll(h, opts = {}) {
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.vx || 'VX;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.px || 'PX;2;' });
+}
+
+function feedFastDataPoll(h, opts = {}) {
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.vx || 'VX;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.px || 'PX;2;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.tm || 'TM;1;' });
 }
 
 function feedStatePoll(h, opts = {}) {
@@ -179,6 +192,87 @@ test('POLL.TICK enqueues an extended poll past statePeriod and records lastExten
   feedDataPoll(h);
   const cmd = h.calls.sendTcp[h.calls.sendTcp.length - 1];
   assert.equal(cmd, 'MO');
+});
+
+test('fast raw polling uses VX/PX seek poll and suppresses periodic state poll', () => {
+  const h = makeHarness({
+    startNow: 2000,
+    pollConfig: {
+      isRecording: true,
+      isRecordingRaw: true,
+      rawDataEnabled: true,
+      fastRawPollHz: 30,
+    },
+  });
+  h.actor.send({ type: 'CONNECT' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
+
+  h.actor.send({ type: 'POLL.TICK' });
+  assert.equal(h.ctx().inFlight.pollRole, 'fast_seek');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['VX', 'PX']);
+  assert.equal(h.ctx().inFlight.priority, 2.5);
+  assert.equal(h.ctx().queue.length, 0); // no MO/SO/SR while fast raw poll is healthy
+  assert.equal(h.calls.sendTcp[h.calls.sendTcp.length - 1], 'VX');
+
+  h.calls.forwardResp.length = 0;
+  feedFastSeekPoll(h, { vx: 'VX;9;', px: 'PX;-10;' });
+  assert.equal(h.calls.forwardResp.length, 1);
+  assert.equal(h.calls.forwardResp[0].topic, 'poll_fast');
+  assert.equal(h.ctx().fastStableCount, 1);
+});
+
+test('fast raw polling switches to VX/PX/TM poll_data after stable speed', () => {
+  const h = makeHarness({
+    startNow: 2000,
+    pollConfig: {
+      isRecording: true,
+      isRecordingRaw: true,
+      rawDataEnabled: true,
+      fastRawPollHz: 30,
+      fastStableSamples: 2,
+      fastStableToleranceTicks: 0,
+    },
+  });
+  h.actor.send({ type: 'CONNECT' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
+
+  h.actor.send({ type: 'POLL.TICK' });
+  feedFastSeekPoll(h, { vx: 'VX;9;', px: 'PX;1;' });
+  h.actor.send({ type: 'POLL.TICK' });
+  feedFastSeekPoll(h, { vx: 'VX;9;', px: 'PX;2;' });
+  assert.equal(h.ctx().fastStable, true);
+
+  h.calls.forwardResp.length = 0;
+  h.actor.send({ type: 'POLL.TICK' });
+  assert.equal(h.ctx().inFlight.pollRole, 'fast_data');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['VX', 'PX', 'TM']);
+  feedFastDataPoll(h, { vx: 'VX;9;', px: 'PX;3;', tm: 'TM;100;' });
+  assert.equal(h.calls.forwardResp.length, 1);
+  assert.equal(h.calls.forwardResp[0].topic, 'poll_data');
+  assert.equal(h.calls.forwardResp[0].raw, 'VX;9;PX;3;TM;100;');
+});
+
+test('invalid fast poll emits bad frame and schedules full-state diagnostics', () => {
+  const h = makeHarness({
+    startNow: 2000,
+    pollConfig: {
+      isRecording: true,
+      isRecordingRaw: true,
+      rawDataEnabled: true,
+      fastRawPollHz: 30,
+    },
+  });
+  h.actor.send({ type: 'CONNECT' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
+  h.actor.send({ type: 'POLL.TICK' });
+  assert.equal(h.ctx().inFlight.pollRole, 'fast_seek');
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PX;2;' });
+  assert.equal(badPoll(h.calls).length, 1);
+  assert.equal(badPoll(h.calls)[0].role, 'fast_seek');
+  assert.deepEqual(badPoll(h.calls)[0].missing, ['vx']);
+  assert.equal(h.ctx().inFlight.pollRole, 'full_state');
+  assert.equal(h.calls.sendTcp[h.calls.sendTcp.length - 1], 'MS');
 });
 
 test('poll dedup: only one poll in flight/queue at a time', () => {

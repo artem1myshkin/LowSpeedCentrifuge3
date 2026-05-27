@@ -8,6 +8,8 @@ const { ticksPerRev } = require('./res');
 const DATA_POLL = 'TM;PX;VX;';
 const LEAN_POLL = DATA_POLL;
 const DATA_POLL_FIELDS = ['TM', 'PX', 'VX'];
+const FAST_SEEK_POLL_FIELDS = ['VX', 'PX'];
+const FAST_DATA_POLL_FIELDS = ['VX', 'PX', 'TM'];
 const STATE_POLL_FIELDS = ['MO', 'SO', 'SR'];
 const FULL_STATE_POLL_FIELDS = ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]'];
 const FIELD_KEYS = {
@@ -45,9 +47,12 @@ function shouldExtend(lastExtendedAt, now, statePeriodMs) {
 
 function buildPollFields(role, options) {
   const opts = options || {};
-  const fields = role === 'full_state'
-    ? FULL_STATE_POLL_FIELDS.slice()
-    : (role === 'state' ? STATE_POLL_FIELDS.slice() : DATA_POLL_FIELDS.slice());
+  let fields;
+  if (role === 'full_state') fields = FULL_STATE_POLL_FIELDS.slice();
+  else if (role === 'state') fields = STATE_POLL_FIELDS.slice();
+  else if (role === 'fast_seek') fields = FAST_SEEK_POLL_FIELDS.slice();
+  else if (role === 'fast_data') fields = FAST_DATA_POLL_FIELDS.slice();
+  else fields = DATA_POLL_FIELDS.slice();
   if (role === 'full_state' && opts.analogParam) fields.push(String(opts.analogParam));
   return fields;
 }
@@ -60,13 +65,15 @@ function buildPollEnvelope(args) {
   const a = args || {};
   const role = a.role || (a.extended ? 'full_state' : 'data');
   const isNonData = role !== 'data';
+  const isFast = role === 'fast_seek' || role === 'fast_data';
   const fields = buildPollFields(role, a.options);
   const cmds = fields.map((field) => field);
   const required = requiredKeysFor(fields);
+  const topic = role === 'fast_seek' ? 'poll_fast' : (isNonData && role !== 'fast_data' ? 'poll_state' : 'poll_data');
   return {
     id: a.id,
     kind: 'poll',
-    priority: PRIORITY.poll,
+    priority: typeof a.priority === 'number' ? a.priority : (isFast ? PRIORITY.fastPoll : PRIORITY.poll),
     cmd: cmds[0],
     cmds,
     cursor: 0,
@@ -76,7 +83,7 @@ function buildPollEnvelope(args) {
     extended: isNonData,
     pollRole: role,
     expect: 'parse',
-    meta: { topic: isNonData ? 'poll_state' : 'poll_data', origin: 'transport', pollRole: role },
+    meta: { topic, origin: 'transport', pollRole: role },
   };
 }
 
@@ -100,6 +107,11 @@ function computeRateHz(omegaDegSec, options) {
 // the first poll has reported the new VX (§4.4 fallback).
 function computePollDelayMs(context, options) {
   const ctx = context || {};
+  if (ctx.fastRawActive) {
+    const cfg = ctx.pollConfig || {};
+    const hz = clamp(Number(cfg.fastRawPollHz) || 30, 1, 30);
+    return Math.max(1, Math.round(1000 / hz));
+  }
   const omega = ctx.omegaSource === 'setpoint'
     ? Math.abs(Number(ctx.setpointDegS) || 0)
     : omegaDegPerSec(ctx.vx, ctx.resolution);
@@ -111,6 +123,8 @@ module.exports = {
   DATA_POLL,
   LEAN_POLL,
   DATA_POLL_FIELDS,
+  FAST_SEEK_POLL_FIELDS,
+  FAST_DATA_POLL_FIELDS,
   STATE_POLL_FIELDS,
   FULL_STATE_POLL_FIELDS,
   buildStatePoll,
