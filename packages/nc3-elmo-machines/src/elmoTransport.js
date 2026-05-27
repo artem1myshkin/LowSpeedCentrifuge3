@@ -1,7 +1,7 @@
 'use strict';
 
 const { setup, assign, createActor } = require('xstate');
-const { priorityInsert, dequeue: queueDequeue, hasKind, PRIORITY } = require('./queue');
+const { priorityInsert, dequeue: queueDequeue, PRIORITY } = require('./queue');
 const { buildPollEnvelope, shouldExtend, computePollDelayMs } = require('./poll');
 const { parseElmoScalars } = require('./parse');
 
@@ -63,6 +63,33 @@ function createElmoTransport(effects) {
     return env && (env.kind === 'cmd' || env.kind === 'tilt');
   }
 
+  function pollRoleOf(env) {
+    return (env && env.meta && env.meta.pollRole) || (env && env.pollRole) || (env && env.extended ? 'state' : 'data');
+  }
+
+  function hasPollRole(queue, role) {
+    return queue.some((env) => env && env.kind === 'poll' && pollRoleOf(env) === role);
+  }
+
+  function hasPollRoleInFlight(context, role) {
+    return context.inFlight && context.inFlight.kind === 'poll' && pollRoleOf(context.inFlight) === role;
+  }
+
+  function missingFields(parsed, fields) {
+    return fields.filter((field) => parsed[field] === undefined);
+  }
+
+  function validatePollResponse(env, raw) {
+    if (!env || env.kind !== 'poll') return { ok: true, role: undefined, missing: [] };
+    const role = pollRoleOf(env);
+    const parsed = parseElmoScalars(raw);
+    const required = role === 'state'
+      ? ['ms', 'mo', 'so', 'sr', 'af', 'ol1', 'ol2']
+      : ['tm', 'px', 'vx'];
+    const missing = missingFields(parsed, required);
+    return { ok: missing.length === 0, role, missing };
+  }
+
   return setup({
     guards: {
       hasWork: ({ context }) => context.queue.length > 0,
@@ -88,27 +115,42 @@ function createElmoTransport(effects) {
       // Update only the fields the transport needs for its own decisions (poll rate, range).
       // Does NOT replace ResponseParser — raw is still forwarded downstream (§4.6).
       ingestResp: assign(({ context, event }) => {
+        if (!validatePollResponse(context.inFlight, event.raw).ok) return {};
         const f = parseElmoScalars(event.raw);
         const patch = {};
+        if (f.tm !== undefined) patch.tm = f.tm;
+        if (f.px !== undefined) patch.px = f.px;
         if (f.vx !== undefined) { patch.vx = f.vx; patch.omegaSource = 'measured'; }
         if (f.resolution) patch.resolution = f.resolution;
+        if (f.ol1 !== undefined) patch.ol1 = f.ol1;
+        if (f.ol2 !== undefined) patch.ol2 = f.ol2;
+        if (f.mo !== undefined) patch.mo = f.mo;
         if (f.so !== undefined) patch.so = f.so;
         if (f.ms !== undefined) patch.ms = f.ms;
         if (f.sr !== undefined) patch.sr = f.sr;
+        if (f.af !== undefined) patch.af = f.af;
         return patch;
       }),
 
       enqueuePoll: assign(({ context }) => {
-        // Single poll in flight/queue at a time (§4.4.4 dedup).
-        if (hasKind(context.queue, 'poll') || (context.inFlight && context.inFlight.kind === 'poll')) {
-          return {};
-        }
+        // Keep data and state polls as separate serialized requests; dedup by role.
         const t = now();
-        const extended = shouldExtend(context.lastExtendedAt, t, statePeriodMs);
-        const env = buildPollEnvelope({ id: nextId(), extended, options: pollOptions });
+        let queue = context.queue;
+        let lastExtendedAt = context.lastExtendedAt;
+        if (!hasPollRole(queue, 'data') && !hasPollRoleInFlight(context, 'data')) {
+          queue = priorityInsert(queue, buildPollEnvelope({ id: nextId(), role: 'data', options: pollOptions }));
+        }
+        if (
+          shouldExtend(context.lastExtendedAt, t, statePeriodMs)
+          && !hasPollRole(queue, 'state')
+          && !hasPollRoleInFlight(context, 'state')
+        ) {
+          queue = priorityInsert(queue, buildPollEnvelope({ id: nextId(), role: 'state', options: pollOptions }));
+          lastExtendedAt = t;
+        }
         return {
-          queue: priorityInsert(context.queue, env),
-          lastExtendedAt: extended ? t : context.lastExtendedAt,
+          queue,
+          lastExtendedAt,
         };
       }),
 
@@ -127,6 +169,11 @@ function createElmoTransport(effects) {
 
       forwardAndAck: ({ context, event }) => {
         const env = context.inFlight;
+        const validation = validatePollResponse(env, event.raw);
+        if (!validation.ok) {
+          emitEvent({ type: 'POLL.BAD_FRAME', id: env.id, role: validation.role, missing: validation.missing, raw: event.raw });
+          return;
+        }
         forwardResp(event.raw, topicFor(env));
         if (isAckable(env)) emitEvent({ type: 'CMD.ACKED', id: env.id, raw: event.raw });
       },

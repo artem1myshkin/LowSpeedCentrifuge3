@@ -89,7 +89,7 @@ typedef struct Stats {
 } Stats;
 
 static const char *LEAN_CMD = "TM;PX;VX;\r";
-static const char *EXT_CMD = "TM;PX;VX;MS;MO;SO;SR;AF;OL[1];OL[2];\r";
+static const char *EXT_CMD = "MS;MO;SO;SR;AF;OL[1];OL[2];\r";
 
 static void die(const char *fmt, ...) {
   va_list ap;
@@ -134,13 +134,13 @@ static void usage(const char *argv0) {
       "  --duration <sec>            run duration, default %d, 0 = forever\n"
       "  --idle-ms <ms>              response idle-gap framing, default %d\n"
       "  --timeout-ms <ms>           response timeout per request, default %d\n"
-      "  --extended-every-ms <ms>    send extended poll at this period, default %d, 0 = never\n"
-      "  --all-extended              send extended poll every tick\n"
+      "  --extended-every-ms <ms>    send state poll at this period, default %d, 0 = never\n"
+      "  --all-extended              send state poll every tick\n"
       "  --quiet-raw                 do not print escaped raw response\n"
       "  --help                      show this help\n\n"
       "Poll commands:\n"
       "  lean:     TM;PX;VX;\n"
-      "  extended: TM;PX;VX;MS;MO;SO;SR;AF;OL[1];OL[2];\n",
+      "  extended/state: MS;MO;SO;SR;AF;OL[1];OL[2];\n",
       argv0, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_DURATION_SEC, DEFAULT_IDLE_MS,
       DEFAULT_TIMEOUT_MS, DEFAULT_EXTENDED_EVERY_MS);
 }
@@ -399,8 +399,7 @@ static void trim_ascii(char *s) {
 static void analyze_response(const char *raw, int extended, char *missing,
                              size_t missing_cap, char *dups, size_t dups_cap) {
   static const char *lean_fields[] = {"TM", "PX", "VX"};
-  static const char *ext_fields[] = {"TM",  "PX", "VX",    "MS",    "MO",
-                                     "SO",  "SR", "AF",    "OL[1]", "OL[2]"};
+  static const char *ext_fields[] = {"MS", "MO", "SO", "SR", "AF", "OL[1]", "OL[2]"};
   const char **fields = extended ? ext_fields : lean_fields;
   int field_count = extended ? (int)(sizeof(ext_fields) / sizeof(ext_fields[0]))
                              : (int)(sizeof(lean_fields) / sizeof(lean_fields[0]));

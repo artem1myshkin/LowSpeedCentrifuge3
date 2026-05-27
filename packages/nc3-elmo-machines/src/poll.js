@@ -5,33 +5,39 @@ const { PRIORITY } = require('./queue');
 const { ticksPerRev } = require('./res');
 
 // Lean poll: data point (TM;PX) + live speed (VX) for the "ready" criterion (§4.4.4).
-const LEAN_POLL = 'TM;PX;VX;';
+const DATA_POLL = 'TM;PX;VX;';
+const LEAN_POLL = DATA_POLL;
 
-// Extended poll: lean + critical health/state fields, emitted ~once per second (§4.4.4).
+// State poll: critical health/state fields, emitted ~once per second (§4.4.4).
 // AN[?] (analog pressure input) index is unconfirmed on the stand (§11.7), so it is
 // opt-in via options.analogParam rather than baked in.
-function buildExtendedPoll(options) {
+function buildStatePoll(options) {
   const opts = options || {};
-  let cmd = 'TM;PX;VX;MS;MO;SO;SR;AF;OL[1];OL[2];';
+  let cmd = 'MS;MO;SO;SR;AF;OL[1];OL[2];';
   if (opts.analogParam) cmd += opts.analogParam + ';';
   return cmd;
 }
 
-// Whether the next poll should carry the extended payload.
+const buildExtendedPoll = buildStatePoll;
+
+// Whether the next scheduler tick should enqueue the slower state payload.
 function shouldExtend(lastExtendedAt, now, statePeriodMs) {
   return (now - lastExtendedAt) >= statePeriodMs;
 }
 
 function buildPollEnvelope(args) {
   const a = args || {};
+  const role = a.role || (a.extended ? 'state' : 'data');
+  const isState = role === 'state';
   return {
     id: a.id,
     kind: 'poll',
     priority: PRIORITY.poll,
-    cmd: a.extended ? buildExtendedPoll(a.options) : LEAN_POLL,
-    extended: !!a.extended,
+    cmd: isState ? buildStatePoll(a.options) : DATA_POLL,
+    extended: isState,
+    pollRole: isState ? 'state' : 'data',
     expect: 'parse',
-    meta: { topic: 'poll_data', origin: 'transport' },
+    meta: { topic: isState ? 'poll_state' : 'poll_data', origin: 'transport', pollRole: isState ? 'state' : 'data' },
   };
 }
 
@@ -63,7 +69,9 @@ function computePollDelayMs(context, options) {
 }
 
 module.exports = {
+  DATA_POLL,
   LEAN_POLL,
+  buildStatePoll,
   buildExtendedPoll,
   shouldExtend,
   buildPollEnvelope,

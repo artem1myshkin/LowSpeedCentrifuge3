@@ -5,7 +5,9 @@ const assert = require('node:assert/strict');
 
 const { priorityInsert, dequeue, PRIORITY } = require('../src/queue');
 const {
+  DATA_POLL,
   LEAN_POLL,
+  buildStatePoll,
   buildExtendedPoll,
   buildPollEnvelope,
   shouldExtend,
@@ -52,15 +54,22 @@ test('clamp', () => {
 });
 
 test('poll payloads: lean vs extended', () => {
+  assert.equal(DATA_POLL, LEAN_POLL);
   assert.equal(buildPollEnvelope({ id: 'p', extended: false }).cmd, LEAN_POLL);
   const ext = buildPollEnvelope({ id: 'p', extended: true }).cmd;
-  for (const tok of ['TM', 'PX', 'VX', 'MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']) {
-    assert.ok(ext.includes(tok), 'extended poll missing ' + tok);
+  for (const tok of ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']) {
+    assert.ok(ext.includes(tok), 'state poll missing ' + tok);
+  }
+  for (const tok of ['TM', 'PX', 'VX']) {
+    assert.ok(!ext.includes(tok), 'state poll should not include data field ' + tok);
   }
   assert.equal(buildPollEnvelope({ id: 'p' }).meta.topic, 'poll_data');
+  assert.equal(buildPollEnvelope({ id: 'p', role: 'state' }).meta.topic, 'poll_state');
+  assert.equal(buildPollEnvelope({ id: 'p', role: 'state' }).pollRole, 'state');
 });
 
 test('buildExtendedPoll: analog pressure param is opt-in', () => {
+  assert.equal(buildExtendedPoll, buildStatePoll);
   assert.ok(!buildExtendedPoll({}).includes('AN'));
   assert.ok(buildExtendedPoll({ analogParam: 'AN[1]' }).includes('AN[1];'));
 });

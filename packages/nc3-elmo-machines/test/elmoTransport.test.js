@@ -30,6 +30,7 @@ function makeHarness(opts = {}) {
 
 function acked(calls) { return calls.emitEvent.filter((e) => e.type === 'CMD.ACKED'); }
 function failed(calls) { return calls.emitEvent.filter((e) => e.type === 'CMD.FAILED'); }
+function badPoll(calls) { return calls.emitEvent.filter((e) => e.type === 'POLL.BAD_FRAME'); }
 
 // Drive to connected.awaiting with one command in flight.
 function connectedWithCmd(opts) {
@@ -127,11 +128,20 @@ test('POLL.TICK enqueues an extended poll past statePeriod and records lastExten
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
 
   h.actor.send({ type: 'POLL.TICK' });
+  assert.equal(h.ctx().inFlight.pollRole, 'data');
+  assert.equal(h.ctx().queue.length, 1);
+  assert.equal(h.ctx().queue[0].pollRole, 'state');
+  assert.equal(h.ctx().queue[0].cmd, 'MS;MO;SO;SR;AF;OL[1];OL[2];');
+  assert.equal(h.ctx().lastExtendedAt, 2000);
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'TM=1;PX=2;VX=0;' });
   const cmd = h.calls.sendTcp[h.calls.sendTcp.length - 1];
   for (const tok of ['SO', 'SR', 'OL[1]', 'OL[2]', 'AF', 'MS', 'MO']) {
-    assert.ok(cmd.includes(tok), 'extended poll missing ' + tok);
+    assert.ok(cmd.includes(tok), 'state poll missing ' + tok);
   }
-  assert.equal(h.ctx().lastExtendedAt, 2000);
+  for (const tok of ['TM', 'PX', 'VX']) {
+    assert.ok(!cmd.includes(tok), 'state poll should not include data field ' + tok);
+  }
 });
 
 test('poll dedup: only one poll in flight/queue at a time', () => {
@@ -163,6 +173,36 @@ test('ingests VX/OL[1] from a poll response (drives dynamic poll rate)', () => {
   assert.equal(computePollDelayMs(c), Math.round(1000 / 15));
 });
 
+test('drops invalid data poll frames and emits POLL.BAD_FRAME', () => {
+  const h = makeHarness({ startNow: 500 });
+  h.actor.send({ type: 'CONNECT' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
+  h.actor.send({ type: 'POLL.TICK' });
+  assert.equal(h.ctx().inFlight.pollRole, 'data');
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'TM;123;\r;' });
+  assert.equal(h.calls.forwardResp.length, 0);
+  assert.equal(badPoll(h.calls).length, 1);
+  assert.deepEqual(badPoll(h.calls)[0].missing, ['px', 'vx']);
+  assert.equal(h.ctx().tm, undefined);
+});
+
+test('forwards valid state poll frames on poll_state topic', () => {
+  const h = makeHarness({ startNow: 2000 });
+  h.actor.send({ type: 'CONNECT' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
+  h.actor.send({ type: 'POLL.TICK' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'TM;1;PX;2;VX;0;' });
+  assert.equal(h.ctx().inFlight.pollRole, 'state');
+
+  h.calls.forwardResp.length = 0;
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MS;3;MO;0;SO;0;SR;100663616;AF;0;OL[1];1;OL[2];1;\r;' });
+  assert.equal(h.calls.forwardResp.length, 1);
+  assert.equal(h.calls.forwardResp[0].topic, 'poll_state');
+  assert.equal(badPoll(h.calls).length, 0);
+  assert.equal(h.ctx().resolution, 'low');
+});
+
 test('ingests observed ELMO CR-separated scalar response and returns to measured speed', () => {
   const h = makeHarness({ startNow: 500 });
   h.actor.send({ type: 'CONNECT' });
@@ -172,7 +212,7 @@ test('ingests observed ELMO CR-separated scalar response and returns to measured
 
   h.actor.send({ type: 'ELMO.RESP', raw: 'ok' }); // command ack -> dispatch -> poll can run
   h.actor.send({ type: 'POLL.TICK' });
-  h.actor.send({ type: 'ELMO.RESP', raw: 'VX\r0.000000e+00;OL[1]\r1;MS\r0;SO\r1;SR\r105120016;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'TM;1;PX;2;VX\r0.000000e+00;OL[1]\r1;MS\r0;SO\r1;SR\r105120016;' });
 
   const c = h.ctx();
   assert.equal(c.vx, 0);

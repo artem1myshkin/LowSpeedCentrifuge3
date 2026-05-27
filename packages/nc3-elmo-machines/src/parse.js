@@ -6,34 +6,55 @@
 // is still forwarded downstream to ResponseParser unchanged (plan §4.6).
 //
 // ELMO answers in `PARAM=VALUE`, `PARAM;VALUE`, or observed `PARAM\rVALUE` form.
+// The parser tokenizes the whole response and uses the last value for duplicate fields.
 
-function matchScalar(raw, name) {
-  // name may contain regex-special chars like OL[1]
-  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(esc + '(?:\\s*[=;]\\s*|\\s+)(-?[0-9][0-9.eE+-]*)');
-  const m = re.exec(raw);
-  if (!m) return undefined;
-  const v = Number(m[1]);
+function parseNumber(value) {
+  const v = Number(String(value == null ? '' : value).trim());
   return Number.isFinite(v) ? v : undefined;
+}
+
+function setScalar(out, param, value) {
+  const p = String(param || '').trim().toUpperCase();
+  const v = parseNumber(value);
+  if (v === undefined) return false;
+  switch (p) {
+    case 'TM': out.tm = v; return true;
+    case 'PX': out.px = v; return true;
+    case 'VX': out.vx = v; return true;
+    case 'MS': out.ms = v; return true;
+    case 'MO': out.mo = v; return true;
+    case 'SO': out.so = v; return true;
+    case 'SR': out.sr = v; return true;
+    case 'AF': out.af = v; return true;
+    case 'OL[1]':
+      out.ol1 = v;
+      out.resolution = v === 1 ? 'low' : 'high';
+      return true;
+    case 'OL[2]': out.ol2 = v; return true;
+    default:
+      return false;
+  }
 }
 
 // Returns only the keys that were present in the response.
 function parseElmoScalars(raw) {
-  const text = String(raw == null ? '' : raw);
+  const text = String(raw == null ? '' : raw)
+    .replace(/\u0000/g, '')
+    .replace(/^"+|"+$/g, '')
+    .replace(/[\r\n]+/g, ';');
+  const tokens = text.split(';').map((s) => s.trim()).filter(Boolean);
   const out = {};
-  const vx = matchScalar(text, 'VX');
-  if (vx !== undefined) out.vx = vx;
-  const ol1 = matchScalar(text, 'OL[1]');
-  if (ol1 !== undefined) {
-    out.ol1 = ol1;
-    out.resolution = ol1 === 1 ? 'low' : 'high';
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const eq = token.indexOf('=');
+    if (eq !== -1) {
+      setScalar(out, token.slice(0, eq), token.slice(eq + 1));
+      continue;
+    }
+    if (i + 1 < tokens.length && tokens[i + 1].indexOf('=') === -1) {
+      if (setScalar(out, token, tokens[i + 1])) i++;
+    }
   }
-  const so = matchScalar(text, 'SO');
-  if (so !== undefined) out.so = so;
-  const ms = matchScalar(text, 'MS');
-  if (ms !== undefined) out.ms = ms;
-  const sr = matchScalar(text, 'SR');
-  if (sr !== undefined) out.sr = sr;
   return out;
 }
 
