@@ -12,6 +12,11 @@ test('parses PARAM;VALUE form', () => {
   assert.deepEqual(parseElmoScalars('VX;-3640888;'), { vx: -3640888 });
 });
 
+test('parses observed PARAM CR VALUE form', () => {
+  assert.deepEqual(parseElmoScalars('VX\r0.000000e+00;'), { vx: 0 });
+  assert.deepEqual(parseElmoScalars('OL[1]\r1;'), { ol1: 1, resolution: 'low' });
+});
+
 test('OL[1] maps to resolution', () => {
   assert.deepEqual(parseElmoScalars('OL[1]=1;'), { ol1: 1, resolution: 'low' });
   assert.deepEqual(parseElmoScalars('OL[1];0;'), { ol1: 0, resolution: 'high' });

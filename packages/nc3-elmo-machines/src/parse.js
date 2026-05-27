@@ -5,12 +5,12 @@
 // replacement for ResponseParser (which builds the full UI drive_state) — the raw response
 // is still forwarded downstream to ResponseParser unchanged (plan §4.6).
 //
-// ELMO answers in either `PARAM=VALUE` or `PARAM;VALUE` form (both handled).
+// ELMO answers in `PARAM=VALUE`, `PARAM;VALUE`, or observed `PARAM\rVALUE` form.
 
 function matchScalar(raw, name) {
   // name may contain regex-special chars like OL[1]
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(esc + '\\s*[=;]\\s*(-?[0-9][0-9.eE+-]*)');
+  const re = new RegExp(esc + '(?:\\s*[=;]\\s*|\\s+)(-?[0-9][0-9.eE+-]*)');
   const m = re.exec(raw);
   if (!m) return undefined;
   const v = Number(m[1]);

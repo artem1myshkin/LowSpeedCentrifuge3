@@ -163,6 +163,26 @@ test('ingests VX/OL[1] from a poll response (drives dynamic poll rate)', () => {
   assert.equal(computePollDelayMs(c), Math.round(1000 / 15));
 });
 
+test('ingests observed ELMO CR-separated scalar response and returns to measured speed', () => {
+  const h = makeHarness({ startNow: 500 });
+  h.actor.send({ type: 'CONNECT' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'jv', kind: 'cmd', cmd: 'JV=1;BG', meta: { setpointDegS: 360 } } });
+  assert.equal(h.ctx().omegaSource, 'setpoint');
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'ok' }); // command ack -> dispatch -> poll can run
+  h.actor.send({ type: 'POLL.TICK' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'VX\r0.000000e+00;OL[1]\r1;MS\r0;SO\r1;SR\r105120016;' });
+
+  const c = h.ctx();
+  assert.equal(c.vx, 0);
+  assert.equal(c.resolution, 'low');
+  assert.equal(c.ms, 0);
+  assert.equal(c.so, 1);
+  assert.equal(c.sr, 105120016);
+  assert.equal(c.omegaSource, 'measured');
+});
+
 test('setpoint hint sets omegaSource before first VX poll', () => {
   const h = connectedWithCmd();
   h.actor.send({ type: 'UI.CMD', envelope: { id: 'jv', kind: 'cmd', cmd: 'JV=1;BG', meta: { topic: 'set_velocity', setpointDegS: 360 } } });
