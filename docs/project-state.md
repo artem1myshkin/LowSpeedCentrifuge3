@@ -1,5 +1,9 @@
 # Состояние проекта LowSpeedCentrifuge3
 
+## Актуализация 2026-05-27
+
+Актуальное состояние `ElmoTransport`/XStateMachine, fast raw polling и выводы по ограничению частоты TCP-опроса описаны в `docs/xstate-machine-current-state.md`. Для самостоятельного измерения предела ELMO TCP см. `docs/elmo-poll-probe.md`.
+
 Актуально на: 2026-05-25
 Проект: `C:\Users\Артём\.node-red\projects\LowSpeedCentrifuge3`
 Runtime-окружение: `C:\NC3`

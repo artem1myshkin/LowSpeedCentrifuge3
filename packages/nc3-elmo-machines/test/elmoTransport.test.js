@@ -211,6 +211,7 @@ test('fast raw polling uses VX/PX seek poll and suppresses periodic state poll',
   assert.equal(h.ctx().inFlight.pollRole, 'fast_seek');
   assert.deepEqual(h.ctx().inFlight.cmds, ['VX', 'PX']);
   assert.equal(h.ctx().inFlight.priority, 2.5);
+  assert.equal(h.ctx().lastFastPollStartedAt, 2000);
   assert.equal(h.ctx().queue.length, 0); // no MO/SO/SR while fast raw poll is healthy
   assert.equal(h.calls.sendTcp[h.calls.sendTcp.length - 1], 'VX');
 

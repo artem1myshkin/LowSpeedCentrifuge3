@@ -208,7 +208,7 @@ function createElmoTransport(effects) {
       },
     },
     delays: {
-      POLL_DELAY: ({ context }) => computePollDelayMs(context, pollOptions),
+      POLL_DELAY: ({ context }) => computePollDelayMs({ ...context, nowMs: now() }, pollOptions),
       TIMEOUT: () => timeoutMs,
       CONNECT_TIMEOUT: () => connectTimeoutMs,
     },
@@ -221,6 +221,7 @@ function createElmoTransport(effects) {
           patch.fastStable = false;
           patch.fastStableCount = 0;
           patch.lastFastVx = undefined;
+          patch.lastFastPollStartedAt = 0;
         }
         return patch;
       }),
@@ -332,7 +333,11 @@ function createElmoTransport(effects) {
 
       takeNext: assign(({ context }) => {
         const { inFlight, queue } = queueDequeue(context.queue);
-        return { inFlight, queue };
+        const patch = { inFlight, queue };
+        if (inFlight && inFlight.kind === 'poll' && isFastPollRole(pollRoleOf(inFlight))) {
+          patch.lastFastPollStartedAt = now();
+        }
+        return patch;
       }),
 
       collectPollPart: assign(({ context, event }) => {
@@ -408,6 +413,7 @@ function createElmoTransport(effects) {
         fastStable: false,
         fastStableCount: 0,
         lastFastVx: undefined,
+        lastFastPollStartedAt: 0,
       };
     },
     initial: 'offline',

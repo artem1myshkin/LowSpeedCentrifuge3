@@ -110,7 +110,11 @@ function computePollDelayMs(context, options) {
   if (ctx.fastRawActive) {
     const cfg = ctx.pollConfig || {};
     const hz = clamp(Number(cfg.fastRawPollHz) || 30, 1, 30);
-    return Math.max(1, Math.round(1000 / hz));
+    const targetMs = 1000 / hz;
+    const startedAt = Number(ctx.lastFastPollStartedAt) || 0;
+    const nowMs = Number(ctx.nowMs) || 0;
+    const elapsedMs = startedAt > 0 && nowMs > 0 ? Math.max(0, nowMs - startedAt) : 0;
+    return Math.max(1, Math.round(targetMs - elapsedMs));
   }
   const omega = ctx.omegaSource === 'setpoint'
     ? Math.abs(Number(ctx.setpointDegS) || 0)

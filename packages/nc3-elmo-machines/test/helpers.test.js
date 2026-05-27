@@ -136,6 +136,26 @@ test('computePollDelayMs: measured vs setpoint source', () => {
     computePollDelayMs({ fastRawActive: true, pollConfig: { fastRawPollHz: 30 }, vx: 0, resolution: 'high' }),
     Math.round(1000 / 30)
   );
+  // If the logical fast poll already spent time on serialized TCP reads, do not add
+  // another full period after it finishes.
+  assert.equal(
+    computePollDelayMs({
+      fastRawActive: true,
+      pollConfig: { fastRawPollHz: 30 },
+      lastFastPollStartedAt: 1000,
+      nowMs: 1240,
+    }),
+    1
+  );
+  assert.equal(
+    computePollDelayMs({
+      fastRawActive: true,
+      pollConfig: { fastRawPollHz: 1 },
+      lastFastPollStartedAt: 1000,
+      nowMs: 1240,
+    }),
+    760
+  );
 });
 
 test('ticksPerRev matches CA[18]', () => {

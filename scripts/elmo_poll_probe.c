@@ -65,9 +65,19 @@ typedef int socket_t;
 #define MAX_RESPONSE 65536
 #define MAX_FIELD_REPORT 512
 
+typedef enum PollMode {
+  MODE_DATA,
+  MODE_FAST_SEEK,
+  MODE_FAST_DATA,
+  MODE_VX,
+  MODE_BATCH_SEEK,
+  MODE_BATCH_DATA
+} PollMode;
+
 typedef struct Options {
   const char *host;
   const char *port;
+  PollMode mode;
   double hz;
   int duration_sec;
   int idle_ms;
@@ -90,6 +100,16 @@ typedef struct Stats {
 
 static const char *LEAN_CMDS[] = {"TM\r", "PX\r", "VX\r"};
 static const char *EXT_CMDS[] = {"MO\r", "SO\r", "SR\r"};
+static const char *FAST_SEEK_CMDS[] = {"VX\r", "PX\r"};
+static const char *FAST_DATA_CMDS[] = {"VX\r", "PX\r", "TM\r"};
+static const char *VX_CMDS[] = {"VX\r"};
+static const char *BATCH_SEEK_CMDS[] = {"VX;PX;\r"};
+static const char *BATCH_DATA_CMDS[] = {"VX;PX;TM;\r"};
+static const char *DATA_FIELDS[] = {"TM", "PX", "VX"};
+static const char *STATE_FIELDS[] = {"MO", "SO", "SR"};
+static const char *FAST_SEEK_FIELDS[] = {"VX", "PX"};
+static const char *FAST_DATA_FIELDS[] = {"VX", "PX", "TM"};
+static const char *VX_FIELDS[] = {"VX"};
 static const int LEAN_CMD_COUNT = (int)(sizeof(LEAN_CMDS) / sizeof(LEAN_CMDS[0]));
 static const int EXT_CMD_COUNT = (int)(sizeof(EXT_CMDS) / sizeof(EXT_CMDS[0]));
 
@@ -125,6 +145,29 @@ static void sleep_ms(long long ms) {
 #endif
 }
 
+static const char *mode_name(PollMode mode) {
+  switch (mode) {
+    case MODE_DATA: return "data";
+    case MODE_FAST_SEEK: return "fast-seek";
+    case MODE_FAST_DATA: return "fast-data";
+    case MODE_VX: return "vx";
+    case MODE_BATCH_SEEK: return "batch-seek";
+    case MODE_BATCH_DATA: return "batch-data";
+    default: return "data";
+  }
+}
+
+static PollMode parse_mode_arg(const char *value) {
+  if (strcmp(value, "data") == 0) return MODE_DATA;
+  if (strcmp(value, "fast-seek") == 0) return MODE_FAST_SEEK;
+  if (strcmp(value, "fast-data") == 0) return MODE_FAST_DATA;
+  if (strcmp(value, "vx") == 0) return MODE_VX;
+  if (strcmp(value, "batch-seek") == 0) return MODE_BATCH_SEEK;
+  if (strcmp(value, "batch-data") == 0) return MODE_BATCH_DATA;
+  die("Invalid --mode: %s (expected data|fast-seek|fast-data|vx|batch-seek|batch-data)", value);
+  return MODE_DATA;
+}
+
 static void usage(const char *argv0) {
   printf(
       "Usage:\n"
@@ -132,6 +175,7 @@ static void usage(const char *argv0) {
       "Options:\n"
       "  --host <ip>                 ELMO host, default %s\n"
       "  --port <port>               ELMO TCP port, default %s\n"
+      "  --mode <name>               data|fast-seek|fast-data|vx|batch-seek|batch-data, default data\n"
       "  --hz <freq>                 poll frequency, 1..30 Hz\n"
       "  --duration <sec>            run duration, default %d, 0 = forever\n"
       "  --idle-ms <ms>              response idle-gap framing, default %d\n"
@@ -142,7 +186,13 @@ static void usage(const char *argv0) {
       "  --help                      show this help\n\n"
       "Logical poll commands are sent as single-register TCP reads:\n"
       "  data:  TM, PX, VX\n"
-      "  state: MO, SO, SR\n",
+      "  fast-seek: VX, PX\n"
+      "  fast-data: VX, PX, TM\n"
+      "  vx: VX\n"
+      "  state: MO, SO, SR\n"
+      "Batch test modes send one multi-register request per logical poll:\n"
+      "  batch-seek: VX;PX;\n"
+      "  batch-data: VX;PX;TM;\n",
       argv0, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_DURATION_SEC, DEFAULT_IDLE_MS,
       DEFAULT_TIMEOUT_MS, DEFAULT_EXTENDED_EVERY_MS);
 }
@@ -174,6 +224,7 @@ static Options parse_args(int argc, char **argv) {
   int i;
   opt.host = DEFAULT_HOST;
   opt.port = DEFAULT_PORT;
+  opt.mode = MODE_DATA;
   opt.hz = DEFAULT_HZ;
   opt.duration_sec = DEFAULT_DURATION_SEC;
   opt.idle_ms = DEFAULT_IDLE_MS;
@@ -190,6 +241,8 @@ static Options parse_args(int argc, char **argv) {
       opt.host = argv[++i];
     } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
       opt.port = argv[++i];
+    } else if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
+      opt.mode = parse_mode_arg(argv[++i]);
     } else if (strcmp(argv[i], "--hz") == 0 && i + 1 < argc) {
       opt.hz = parse_double_arg("--hz", argv[++i], 1.0, 30.0);
     } else if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
@@ -440,13 +493,9 @@ static void trim_ascii(char *s) {
   }
 }
 
-static void analyze_response(const char *raw, int extended, char *missing,
-                             size_t missing_cap, char *dups, size_t dups_cap) {
-  static const char *lean_fields[] = {"TM", "PX", "VX"};
-  static const char *ext_fields[] = {"MO", "SO", "SR"};
-  const char **fields = extended ? ext_fields : lean_fields;
-  int field_count = extended ? (int)(sizeof(ext_fields) / sizeof(ext_fields[0]))
-                             : (int)(sizeof(lean_fields) / sizeof(lean_fields[0]));
+static void analyze_response(const char *raw, const char **fields, int field_count,
+                             char *missing, size_t missing_cap,
+                             char *dups, size_t dups_cap) {
   int counts[16];
   char buf[MAX_RESPONSE];
   char *tok;
@@ -532,6 +581,56 @@ static int should_send_extended(const Options *opt, long long now, long long *la
   return 0;
 }
 
+static void select_data_sequence(const Options *opt, const char ***cmds, int *cmd_count,
+                                 const char **kind, const char ***fields,
+                                 int *field_count) {
+  switch (opt->mode) {
+    case MODE_FAST_SEEK:
+      *cmds = FAST_SEEK_CMDS;
+      *cmd_count = (int)(sizeof(FAST_SEEK_CMDS) / sizeof(FAST_SEEK_CMDS[0]));
+      *kind = "fast-seek";
+      *fields = FAST_SEEK_FIELDS;
+      *field_count = (int)(sizeof(FAST_SEEK_FIELDS) / sizeof(FAST_SEEK_FIELDS[0]));
+      return;
+    case MODE_FAST_DATA:
+      *cmds = FAST_DATA_CMDS;
+      *cmd_count = (int)(sizeof(FAST_DATA_CMDS) / sizeof(FAST_DATA_CMDS[0]));
+      *kind = "fast-data";
+      *fields = FAST_DATA_FIELDS;
+      *field_count = (int)(sizeof(FAST_DATA_FIELDS) / sizeof(FAST_DATA_FIELDS[0]));
+      return;
+    case MODE_VX:
+      *cmds = VX_CMDS;
+      *cmd_count = (int)(sizeof(VX_CMDS) / sizeof(VX_CMDS[0]));
+      *kind = "vx";
+      *fields = VX_FIELDS;
+      *field_count = (int)(sizeof(VX_FIELDS) / sizeof(VX_FIELDS[0]));
+      return;
+    case MODE_BATCH_SEEK:
+      *cmds = BATCH_SEEK_CMDS;
+      *cmd_count = (int)(sizeof(BATCH_SEEK_CMDS) / sizeof(BATCH_SEEK_CMDS[0]));
+      *kind = "batch-seek";
+      *fields = FAST_SEEK_FIELDS;
+      *field_count = (int)(sizeof(FAST_SEEK_FIELDS) / sizeof(FAST_SEEK_FIELDS[0]));
+      return;
+    case MODE_BATCH_DATA:
+      *cmds = BATCH_DATA_CMDS;
+      *cmd_count = (int)(sizeof(BATCH_DATA_CMDS) / sizeof(BATCH_DATA_CMDS[0]));
+      *kind = "batch-data";
+      *fields = FAST_DATA_FIELDS;
+      *field_count = (int)(sizeof(FAST_DATA_FIELDS) / sizeof(FAST_DATA_FIELDS[0]));
+      return;
+    case MODE_DATA:
+    default:
+      *cmds = LEAN_CMDS;
+      *cmd_count = LEAN_CMD_COUNT;
+      *kind = "data";
+      *fields = DATA_FIELDS;
+      *field_count = (int)(sizeof(DATA_FIELDS) / sizeof(DATA_FIELDS[0]));
+      return;
+  }
+}
+
 int main(int argc, char **argv) {
   Options opt = parse_args(argc, argv);
   socket_t sock;
@@ -550,9 +649,9 @@ int main(int argc, char **argv) {
   sock = connect_tcp(opt.host, opt.port);
 
   printf("# ELMO poll probe connected to %s:%s\n", opt.host, opt.port);
-  printf("# hz=%.3f period_ms=%.3f duration_sec=%d idle_ms=%d timeout_ms=%d extended_every_ms=%d all_extended=%d\n",
-         opt.hz, period_ms, opt.duration_sec, opt.idle_ms, opt.timeout_ms,
-         opt.extended_every_ms, opt.all_extended);
+  printf("# mode=%s hz=%.3f period_ms=%.3f duration_sec=%d idle_ms=%d timeout_ms=%d extended_every_ms=%d all_extended=%d\n",
+         mode_name(opt.mode), opt.hz, period_ms, opt.duration_sec, opt.idle_ms,
+         opt.timeout_ms, opt.extended_every_ms, opt.all_extended);
   printf("# csv: seq,kind,scheduled_ms,late_ms,rtt_ms,period_overrun_ms,bytes,chunks,truncated,status,missing,dups,raw\n");
   fflush(stdout);
 
@@ -569,7 +668,9 @@ int main(int argc, char **argv) {
     long long overrun;
     int extended;
     const char **cmds;
+    const char **fields;
     int cmd_count;
+    int field_count;
     const char *kind;
     char response[MAX_RESPONSE];
     int chunks = 0;
@@ -584,9 +685,15 @@ int main(int argc, char **argv) {
     if (late < 0) late = 0;
 
     extended = should_send_extended(&opt, before_send, &last_extended);
-    cmds = extended ? EXT_CMDS : LEAN_CMDS;
-    cmd_count = extended ? EXT_CMD_COUNT : LEAN_CMD_COUNT;
-    kind = extended ? "state" : "data";
+    if (extended) {
+      cmds = EXT_CMDS;
+      cmd_count = EXT_CMD_COUNT;
+      fields = STATE_FIELDS;
+      field_count = (int)(sizeof(STATE_FIELDS) / sizeof(STATE_FIELDS[0]));
+      kind = "state";
+    } else {
+      select_data_sequence(&opt, &cmds, &cmd_count, &kind, &fields, &field_count);
+    }
 
     seq++;
     stats.sent++;
@@ -613,7 +720,7 @@ int main(int argc, char **argv) {
       if ((double)rtt < stats.min_rtt) stats.min_rtt = (double)rtt;
       if ((double)rtt > stats.max_rtt) stats.max_rtt = (double)rtt;
       stats.sum_rtt += (double)rtt;
-      analyze_response(response, extended, missing, sizeof(missing), dups, sizeof(dups));
+      analyze_response(response, fields, field_count, missing, sizeof(missing), dups, sizeof(dups));
 
       printf("%ld,%s,%lld,%lld,%lld,%lld,%d,%d,%d,OK,%s,%s,",
              seq, kind, scheduled - start_ms, late, rtt, overrun, rc, chunks, truncated,

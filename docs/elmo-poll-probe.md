@@ -1,114 +1,44 @@
-# ELMO poll probe: независимый TCP-тестер опроса
+# ELMO TCP poll probe
 
-Актуально на: 2026-05-26.
+Актуально на: 2026-05-27.
 
-Файл программы:
+Файл программы: `scripts/elmo_poll_probe.c`.
 
-```text
-scripts/elmo_poll_probe.c
-```
+Назначение: проверить реальный предел TCP-опроса ELMO вне Node-RED и вне XStateMachine. Утилита открывает один TCP socket к `192.168.1.2:2000`, последовательно отправляет команды с заданной частотой `1..30 Hz`, собирает ответы по idle-gap и печатает CSV-подобный лог с RTT, пропусками полей, дублями и overruns.
 
-Назначение: проверить гипотезу, что проблема находится не в Node-RED/XState, а в самом ELMO, TCP-ответах ELMO или допустимой частоте опроса. Программа работает полностью вне Node-RED: открывает один TCP socket к ELMO, отправляет poll-команды с заданной частотой 1..30 Гц и печатает сырые ответы, RTT, пропуски, дубликаты полей и overruns.
+## Почему этот тест нужен
 
----
-
-## 1. Какая частота опроса сейчас в XState transport
-
-Текущая XStateMachine не опрашивает ELMO на фиксированной частоте. Частота считается в `packages/nc3-elmo-machines/src/poll.js`:
+В Node-RED сейчас используется `tcp request` в режиме `sit` и `FrameSplitter`, который завершает кадр после периода тишины. Если один логический poll состоит из нескольких физических TCP read-команд, то минимальное время такого poll ограничено:
 
 ```text
-rate_hz = clamp(abs(omega_deg_s) / 12, 1, 30)
-delay_ms = round(1000 / rate_hz)
+logical_poll_time >= command_count * idle_gap_ms + TCP/ELMO overhead
 ```
 
-Источник `omega_deg_s`:
+При текущем idle gap `80 ms`:
 
-- обычно `VX`, пересчитанный из ticks/s в deg/s через текущее разрешение `high/low`;
-- сразу после команды скорости может использоваться `meta.setpointDegS`, если producer его передал.
+| Режим | Команд в poll | Теоретический потолок без overhead |
+|---|---:|---:|
+| `vx` | 1 | около `12.5 Hz` |
+| `fast-seek` (`VX/PX`) | 2 | около `6.25 Hz` |
+| `fast-data` (`VX/PX/TM`) | 3 | около `4.16 Hz` |
 
-Границы:
+Поэтому наблюдение `30 Hz -> ~3.2 valid frames/sec` соответствует текущей физической схеме и не доказывает баг ELMO само по себе. Для 30 Hz нужно либо надежно уменьшать idle gap, либо читать несколько регистров одним batch-запросом, либо иметь другой признак конца ответа вместо ожидания тишины.
 
-```text
-минимум: 1 Гц
-максимум: 30 Гц
-```
+## Сборка
 
-State poll выполняется примерно раз в:
-
-```text
-statePeriodMs = 1000 ms
-```
-
-То есть при покое или очень малой скорости фактический self-poll будет около `1 Гц`. По твоему логу `ELMO_TX` с state poll шел примерно раз в секунду, а `VX` был около `0` / `9 ticks/s`, поэтому на тот момент транспорт реально опрашивал ELMO примерно на нижней границе, то есть около `1 Гц`.
-
----
-
-## 2. Что именно симулирует программа
-
-Программа симулирует poll из текущей XStateMachine. Логический poll теперь отправляется как серия одиночных TCP read-команд и затем анализируется как один агрегированный ответ:
-
-Data poll, отправляется на большинстве тиков:
-
-```text
-TM
-PX
-VX
-```
-
-State poll, по умолчанию раз в 1000 ms:
-
-```text
-MO
-SO
-SR
-```
-
-Это соответствует идее сценарного data poll:
-
-- `TM` - время ELMO;
-- `PX` - позиция;
-- `VX` - скорость;
-- `MO/SO/SR` - минимальные живые регистры состояния/готовности/ошибок для регулярного state poll.
-
-Полный снимок `MS/MO/SO/SR/AF/OL[1]/OL[2]` больше не гоняется регулярно. Он нужен при инициализации transport и после команд, которые меняют стабильные состояния (`OL[1]`, `OL[2]`, `AF`).
-
-Каждая физическая read-команда завершается `\r`.
-
-Ответ собирается по idle gap: программа читает TCP chunks, пока после последнего chunk не наступит тишина `--idle-ms` миллисекунд. По умолчанию:
-
-```text
---idle-ms 80
-```
-
-Это похоже на текущую схему `FrameSplitter` в режиме `sit`.
-
----
-
-## 3. Сборка на Windows
-
-Перед сборкой перейди в каталог проекта:
+На удаленном Windows-хосте перейди в каталог проекта после `git pull`:
 
 ```bat
 cd C:\Users\user\.node-red\projects\LowSpeedCentrifuge3
 ```
 
-### Вариант A: MSVC Build Tools
-
-Открой `Developer Command Prompt for VS` и выполни:
+MSVC Build Tools:
 
 ```bat
 cl /nologo /W4 /O2 scripts\elmo_poll_probe.c /Fe:elmo_poll_probe.exe ws2_32.lib
 ```
 
-Результат:
-
-```text
-elmo_poll_probe.exe
-```
-
-### Вариант B: MinGW-w64
-
-Если установлен `gcc` из MinGW-w64:
+MinGW-w64:
 
 ```bat
 gcc -O2 -Wall -Wextra -std=c11 scripts\elmo_poll_probe.c -o elmo_poll_probe.exe -lws2_32
@@ -120,219 +50,140 @@ gcc -O2 -Wall -Wextra -std=c11 scripts\elmo_poll_probe.c -o elmo_poll_probe.exe 
 elmo_poll_probe.exe --help
 ```
 
----
-
-## 4. Сборка на Linux
-
-Если нужно собрать с Linux-машины:
-
-```bash
-gcc -O2 -Wall -Wextra -std=c11 scripts/elmo_poll_probe.c -o elmo_poll_probe
-```
-
----
-
-## 5. Подготовка стенда перед запуском
+## Подготовка стенда
 
 Перед тестом нужно исключить конкуренцию за ELMO TCP:
 
-1. Остановить или отключить Node-RED flows, которые ходят в `192.168.1.2:2000`.
-2. Остановить сторонние программы, которые могут держать ELMO socket.
-3. Проверить, что нет активных TCP-сессий:
+1. Остановить Node-RED или выключить flows/nodes, которые ходят в `192.168.1.2:2000`.
+2. Остановить сторонний софт, который может держать ELMO socket.
+3. Проверить активные соединения:
 
 ```bat
 netstat -ano | findstr 192.168.1.2:2000
 ```
 
-Перед запуском тестера желательно не видеть `ESTABLISHED` к `192.168.1.2:2000`.
+До запуска пробника желательно не видеть `ESTABLISHED` к `192.168.1.2:2000`. Во время теста должна быть одна TCP-сессия от `elmo_poll_probe.exe`.
 
-После запуска тестера должна быть ровно одна TCP-сессия:
+## Режимы утилиты
 
-```bat
-netstat -ano | findstr 192.168.1.2:2000
-```
+Режим задается через `--mode`.
 
----
+| Режим | Что отправляется | Зачем нужен |
+|---|---|---|
+| `data` | `TM`, `PX`, `VX` отдельными read-командами | Обычный data poll транспорта |
+| `fast-seek` | `VX`, `PX` отдельными read-командами | Быстрый poll до устойчивой скорости |
+| `fast-data` | `VX`, `PX`, `TM` отдельными read-командами | Быстрый raw poll после устойчивой скорости |
+| `vx` | только `VX` | Проверка максимума для одного регистра |
+| `batch-seek` | один запрос `VX;PX;` | Проверить, выдерживает ли ELMO batch для seek |
+| `batch-data` | один запрос `VX;PX;TM;` | Проверить, выдерживает ли ELMO batch для raw data |
 
-## 6. Примеры запуска
+По умолчанию используется `--mode data`.
 
-### 1 Гц, 60 секунд
-
-```bat
-elmo_poll_probe.exe --host 192.168.1.2 --port 2000 --hz 1 --duration 60
-```
-
-### 5 Гц, 60 секунд
-
-```bat
-elmo_poll_probe.exe --host 192.168.1.2 --port 2000 --hz 5 --duration 60
-```
-
-### 10 Гц, 60 секунд
+State poll (`MO`, `SO`, `SR`) можно добавлять периодически:
 
 ```bat
-elmo_poll_probe.exe --host 192.168.1.2 --port 2000 --hz 10 --duration 60
+--extended-every-ms 1000
 ```
 
-### 30 Гц, 60 секунд
+Для теста чистого data/fast пути state poll лучше выключать:
 
 ```bat
-elmo_poll_probe.exe --host 192.168.1.2 --port 2000 --hz 30 --duration 60
+--extended-every-ms 0
 ```
 
-### Бесконечный тест 30 Гц
+## Базовая матрица тестов
 
-Остановить можно через `Ctrl+C`.
+Сначала проверить один регистр. Это верхний предел для TCP/ELMO при текущем framing:
 
 ```bat
-elmo_poll_probe.exe --host 192.168.1.2 --port 2000 --hz 30 --duration 0
+elmo_poll_probe.exe --mode vx --hz 1 --duration 30 --extended-every-ms 0
+elmo_poll_probe.exe --mode vx --hz 10 --duration 30 --extended-every-ms 0
+elmo_poll_probe.exe --mode vx --hz 30 --duration 30 --extended-every-ms 0
 ```
 
-### Worst-case: state poll на каждом тике
-
-Это тяжелее, чем текущая XStateMachine, потому что информативные регистры читаются каждый poll.
+Потом проверить текущий быстрый seek:
 
 ```bat
-elmo_poll_probe.exe --host 192.168.1.2 --port 2000 --hz 30 --duration 60 --all-extended
+elmo_poll_probe.exe --mode fast-seek --hz 10 --duration 30 --extended-every-ms 0
+elmo_poll_probe.exe --mode fast-seek --hz 30 --duration 30 --extended-every-ms 0
 ```
 
-### Поменять idle gap
-
-Если ответы склеиваются или режутся, проверь несколько значений:
+Потом проверить текущий быстрый raw data:
 
 ```bat
-elmo_poll_probe.exe --hz 10 --duration 60 --idle-ms 30
-elmo_poll_probe.exe --hz 10 --duration 60 --idle-ms 80
-elmo_poll_probe.exe --hz 10 --duration 60 --idle-ms 150
+elmo_poll_probe.exe --mode fast-data --hz 10 --duration 30 --extended-every-ms 0
+elmo_poll_probe.exe --mode fast-data --hz 30 --duration 30 --extended-every-ms 0
 ```
 
-### Убрать raw из вывода
+После этого проверить batch-гипотезу:
 
 ```bat
-elmo_poll_probe.exe --hz 30 --duration 60 --quiet-raw
+elmo_poll_probe.exe --mode batch-seek --hz 30 --duration 30 --extended-every-ms 0
+elmo_poll_probe.exe --mode batch-data --hz 30 --duration 30 --extended-every-ms 0
 ```
 
----
+Если batch-режимы дают `missing=-`, `dups=-`, `timeouts=0`, `socket_errors=0` и мало/нет `overruns`, это сильный аргумент переходить с серии одиночных read-команд на batch для быстрых данных. Если batch дает пропуски/дубли, значит ELMO или текущий framing ненадежно держит такой формат.
 
-## 7. Формат вывода
+## Проверка влияния idle gap
 
-Программа печатает CSV-подобные строки:
+Текущий Node-RED `FrameSplitter` использует idle-gap framing. Чтобы понять предел, прогони одинаковый режим с разными `--idle-ms`:
+
+```bat
+elmo_poll_probe.exe --mode fast-data --hz 30 --duration 30 --idle-ms 80 --extended-every-ms 0
+elmo_poll_probe.exe --mode fast-data --hz 30 --duration 30 --idle-ms 40 --extended-every-ms 0
+elmo_poll_probe.exe --mode fast-data --hz 30 --duration 30 --idle-ms 20 --extended-every-ms 0
+elmo_poll_probe.exe --mode fast-data --hz 30 --duration 30 --idle-ms 10 --extended-every-ms 0
+```
+
+Интерпретация:
+
+- если при меньшем `idle-ms` растет `missing`, кадр режется слишком рано;
+- если при большем `idle-ms` растет `overruns`, задержка framing слишком большая;
+- если при batch-режимах появляются `dups`, ELMO может повторять часть ответа или ответы склеиваются;
+- если `rtt_ms_avg` стабильно выше периода poll, заданная частота физически недостижима.
+
+## Формат вывода
+
+Заголовок:
 
 ```text
-seq,kind,scheduled_ms,late_ms,rtt_ms,period_overrun_ms,bytes,chunks,truncated,status,missing,dups,raw
+# mode=fast-data hz=30.000 period_ms=33.333 duration_sec=30 idle_ms=80 ...
+# csv: seq,kind,scheduled_ms,late_ms,rtt_ms,period_overrun_ms,bytes,chunks,truncated,status,missing,dups,raw
 ```
 
 Поля:
 
 | Поле | Значение |
 |---|---|
-| `seq` | номер poll-запроса |
-| `kind` | `data` или `state` |
-| `scheduled_ms` | плановое время отправки от старта теста |
-| `late_ms` | насколько отправка опоздала относительно графика |
-| `rtt_ms` | время от send до завершения idle-gap ответа |
-| `period_overrun_ms` | насколько RTT превысил период опроса |
-| `bytes` | размер собранного ответа |
-| `chunks` | сколько TCP chunks пришло на один ответ |
-| `truncated` | `1`, если ответ не поместился в буфер |
+| `seq` | номер логического poll |
+| `kind` | режим текущего poll |
+| `scheduled_ms` | плановое время старта от начала теста |
+| `late_ms` | насколько поздно стартовал poll |
+| `rtt_ms` | время от отправки первой команды до завершения ответа по idle gap |
+| `period_overrun_ms` | насколько `rtt_ms` превышает целевой период |
+| `bytes` | байт в собранном ответе |
+| `chunks` | сколько TCP chunks было получено |
+| `truncated` | был ли переполнен буфер ответа |
 | `status` | `OK`, `TIMEOUT` или `ERR` |
-| `missing` | ожидаемые поля, которых нет в ответе |
-| `dups` | поля, которые встретились больше одного раза |
-| `raw` | raw-ответ с escaped `\r`, `\n` |
+| `missing` | отсутствующие ожидаемые поля |
+| `dups` | дубли ожидаемых полей |
+| `raw` | escaped raw-ответ, можно скрыть через `--quiet-raw` |
 
-В конце печатается summary:
+Итог:
 
 ```text
 # summary sent=... ok=... timeouts=... socket_errors=... overruns=... rtt_ms_min=... rtt_ms_avg=... rtt_ms_max=...
 ```
 
----
+## Критерии результата
 
-## 8. Как интерпретировать результат
+Режим можно считать устойчивым, если:
 
-### Нормально
-
-Для выбранной частоты:
-
-- `status=OK`;
 - `timeouts=0`;
 - `socket_errors=0`;
-- `period_overrun_ms=0` или редко небольшое значение;
-- `missing=-`;
-- `dups=-` или объяснимые повторы, если ELMO реально так отвечает;
-- `rtt_ms` заметно меньше периода.
+- `missing=-` почти во всех строках;
+- `dups=-` почти во всех строках;
+- `overruns` отсутствуют или редкие и маленькие;
+- `rtt_ms_avg` заметно меньше целевого периода.
 
-Периоды:
-
-| Частота | Период |
-|---:|---:|
-| 1 Гц | 1000 ms |
-| 5 Гц | 200 ms |
-| 10 Гц | 100 ms |
-| 20 Гц | 50 ms |
-| 30 Гц | 33.3 ms |
-
-Для 30 Гц полный цикл `send + response + idle gap` должен укладываться примерно в 33 ms. Если `--idle-ms 80`, то 30 Гц физически не получится без overruns, потому что один только idle gap больше периода. Для 30 Гц нужно тестировать меньший idle gap или подтвердить реальный terminator ответа ELMO.
-
-### Признак ограничения ELMO или TCP
-
-- На 1 Гц все хорошо, на 10/20/30 Гц появляются `TIMEOUT`.
-- Растет `period_overrun_ms`.
-- Ответы приходят с `missing` полями.
-- Появляются странные `dups` вроде `PX:2|VX:2` на одном запросе.
-- `chunks` сильно растет и ответ не успевает собираться до следующего периода.
-
-### Признак проблемы framing/idle-gap
-
-- При большом `--idle-ms` ответы склеиваются.
-- При слишком маленьком `--idle-ms` ответы режутся на неполные куски.
-- Изменение `--idle-ms` резко меняет `missing/dups`.
-
-В этом случае проблема может быть не в ELMO как таковом, а в отсутствии подтвержденного end-of-frame marker.
-
----
-
-## 9. Рекомендуемая серия тестов
-
-Сначала проверить baseline:
-
-```bat
-elmo_poll_probe.exe --hz 1 --duration 30
-```
-
-Затем ступенями:
-
-```bat
-elmo_poll_probe.exe --hz 5 --duration 30
-elmo_poll_probe.exe --hz 10 --duration 30
-elmo_poll_probe.exe --hz 20 --duration 30
-elmo_poll_probe.exe --hz 30 --duration 30
-```
-
-Если на 30 Гц есть overruns, проверить влияние idle gap:
-
-```bat
-elmo_poll_probe.exe --hz 30 --duration 30 --idle-ms 10
-elmo_poll_probe.exe --hz 30 --duration 30 --idle-ms 20
-elmo_poll_probe.exe --hz 30 --duration 30 --idle-ms 30
-```
-
-Потом worst-case:
-
-```bat
-elmo_poll_probe.exe --hz 30 --duration 30 --all-extended --idle-ms 20
-```
-
-Сохранять вывод в файл:
-
-```bat
-elmo_poll_probe.exe --hz 30 --duration 60 > elmo_30hz_probe.csv
-```
-
----
-
-## 10. Важное ограничение тестера
-
-Тестер не управляет приводом и не посылает команды движения. Он только читает регистры.
-
-Если нужно проверить динамический режим при реальной скорости, сначала нужно безопасно вывести привод на нужную скорость другим штатным способом, затем остановить конкурирующие TCP-клиенты и запустить тестер. Делать это нужно только в безопасной стендовой процедуре.
+Пример: для `30 Hz` период `33.3 ms`. Если `fast-data` с `idle-ms 80` показывает `rtt_ms_avg` около `250..320 ms`, это не проблема счетчика частоты, а следствие трех последовательных read-команд и ожидания тишины после каждой.
