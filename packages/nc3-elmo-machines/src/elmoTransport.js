@@ -6,38 +6,48 @@ const { buildPollEnvelope, shouldExtend, computePollDelayMs } = require('./poll'
 const { parseElmoScalars } = require('./parse');
 const { clamp } = require('./util');
 
-// ElmoTransport — single serialized owner of the ELMO TCP socket (plan §4).
-// The machine is pure: all I/O is delegated to injected `effects` so it can be unit-tested
-// outside Node-RED. The Node-RED Function node wires these effects to one `tcp request`
-// node and the loopback (§4.6).
+// ElmoTransport — single serialized owner of the ELMO UDP link (plan §4, reworked for UDP).
+//
+// UDP model: ELMO listens on a UDP port and answers each command datagram with exactly one
+// reply datagram. Node-RED `udp out` / `udp in` are NOT a correlated request/response pair,
+// so the transport keeps a SINGLE in-flight request and batches each logical poll into ONE
+// datagram (`TM;PX;VX;`); every reply then maps 1:1 to the outstanding request. A received
+// datagram is already a complete frame — there is no FrameSplitter / idle-gap reassembly,
+// which is what capped the old TCP `sit` path at ~4 Hz.
+//
+// UDP is connectionless: a lost datagram is just a missed reply, so a request timeout frees
+// the in-flight slot and polling continues; only after `maxMisses` consecutive timeouts is the
+// link declared offline (which then self-heals by re-probing). There is no socket to reset.
 //
 // effects:
-//   sendTcp(cmd)            -> emit a command string to the single tcp request (out0)
-//   resetTcp()              -> force socket reset (sit mode: msg.reset) on timeout/fault
-//   forwardResp(raw, topic) -> forward a raw response to ResponseParser with restored topic (out1)
-//   emitEvent(evt)          -> emit a domain event (CMD.ACKED/FAILED, ...) to consumers (out2)
+//   sendCmd(cmd)            -> emit one command datagram to `udp out` (out0)
+//   forwardResp(raw, topic) -> forward a raw reply to ResponseParser with restored topic (out1)
+//   emitEvent(evt)          -> emit a domain event (CMD.ACKED/FAILED, POLL.BAD_FRAME, ...) (out2)
 //   setStatus(status)       -> node.status({fill,shape,text})
 //   now()                   -> clock (defaults to Date.now); injectable for tests
-//   timeoutMs               -> per-request watchdog (default 180)
-//   connectTimeoutMs        -> probe watchdog while connecting (default 1000)
+//   timeoutMs               -> per-request reply watchdog (default 1000)
+//   connectTimeoutMs        -> probe watchdog while connecting (default 2000)
+//   reconnectMs             -> delay before re-probing after going offline (default 1000)
+//   maxMisses               -> consecutive reply timeouts before the link is offline (default 3)
 //   statePeriodMs           -> minimal state-poll cadence (default 1000)
 //   probeCmd                -> liveness probe sent on connect (default single TM read)
 //   initialFullState        -> enqueue full-state poll after connect/recover (default true)
 //   pollOptions             -> { minHz, maxHz, analogParam } for poll scheduling/payload
 // input.pollConfig:
-//   { isRecording, isRecordingRaw, rawDataEnabled, fastRawPollHz, ... } toggles
-//   the fast raw-recording poll path without coupling the machine to Node-RED globals.
+//   { isRecording, isRecordingRaw, rawDataEnabled, fastRawPollHz, ... } toggles the fast raw
+//   recording poll path without coupling the machine to Node-RED globals.
 
 function createElmoTransport(effects) {
   const e = effects || {};
-  const sendTcp = e.sendTcp || (() => {});
-  const resetTcp = e.resetTcp || (() => {});
+  const sendCmd = e.sendCmd || (() => {});
   const forwardResp = e.forwardResp || (() => {});
   const emitEvent = e.emitEvent || (() => {});
   const setStatus = e.setStatus || (() => {});
   const now = e.now || (() => Date.now());
-  const timeoutMs = e.timeoutMs == null ? 180 : e.timeoutMs;
-  const connectTimeoutMs = e.connectTimeoutMs == null ? 1000 : e.connectTimeoutMs;
+  const timeoutMs = e.timeoutMs == null ? 1000 : e.timeoutMs;
+  const connectTimeoutMs = e.connectTimeoutMs == null ? 2000 : e.connectTimeoutMs;
+  const reconnectMs = e.reconnectMs == null ? 1000 : e.reconnectMs;
+  const maxMisses = e.maxMisses == null ? 3 : e.maxMisses;
   const statePeriodMs = e.statePeriodMs == null ? 1000 : e.statePeriodMs;
   const probeCmd = e.probeCmd || 'TM';
   const initialFullState = e.initialFullState !== false;
@@ -90,6 +100,10 @@ function createElmoTransport(effects) {
     };
   }
 
+  function pollRoleOf(env) {
+    return (env && env.meta && env.meta.pollRole) || (env && env.pollRole) || (env && env.extended ? 'full_state' : 'data');
+  }
+
   function topicFor(env) {
     if (env && env.meta && env.meta.topic) return env.meta.topic;
     if (env && env.kind === 'poll') return pollRoleOf(env) === 'data' ? 'poll_data' : 'poll_state';
@@ -98,10 +112,6 @@ function createElmoTransport(effects) {
 
   function isAckable(env) {
     return env && (env.kind === 'cmd' || env.kind === 'tilt');
-  }
-
-  function pollRoleOf(env) {
-    return (env && env.meta && env.meta.pollRole) || (env && env.pollRole) || (env && env.extended ? 'full_state' : 'data');
   }
 
   function hasPollRole(queue, role) {
@@ -120,28 +130,12 @@ function createElmoTransport(effects) {
     return context.inFlight && context.inFlight.kind === 'poll' && isFastPollRole(pollRoleOf(context.inFlight));
   }
 
-  function isBatchPoll(env) {
-    return env && env.kind === 'poll' && Array.isArray(env.cmds) && env.cmds.length > 0;
-  }
-
-  function cursorOf(env) {
-    return Math.max(0, Number(env && env.cursor) || 0);
-  }
-
-  function commandFor(env) {
-    if (isBatchPoll(env)) return env.cmds[Math.min(cursorOf(env), env.cmds.length - 1)];
-    return env && env.cmd;
-  }
-
-  function rawFor(env, raw) {
-    if (!isBatchPoll(env)) return raw;
-    return (env.parts || []).concat([raw]).join('');
-  }
-
   function missingFields(parsed, fields) {
     return fields.filter((field) => parsed[field] === undefined);
   }
 
+  // One datagram = one complete frame, so the whole reply is validated at once against the
+  // role's required field set (no per-part cursor).
   function validatePollResponse(env, raw) {
     if (!env || env.kind !== 'poll') return { ok: true, role: undefined, missing: [] };
     const role = pollRoleOf(env);
@@ -169,22 +163,6 @@ function createElmoTransport(effects) {
     return null;
   }
 
-  function validateCurrentPollPart(env, raw) {
-    if (!isBatchPoll(env)) return validatePollResponse(env, raw);
-    const role = pollRoleOf(env);
-    const idx = cursorOf(env);
-    const required = (env.partRequired && env.partRequired[idx]) || [];
-    const missing = missingFields(parseElmoScalars(raw), required);
-    return { ok: missing.length === 0, role, missing, part: idx, cmd: commandFor(env) };
-  }
-
-  function responseValidation(env, rawEvent) {
-    const partValidation = validateCurrentPollPart(env, rawEvent);
-    const raw = rawFor(env, rawEvent);
-    const validation = partValidation.ok ? validatePollResponse(env, raw) : partValidation;
-    return { raw, validation };
-  }
-
   function fastStabilityPatch(context, vx) {
     const cfg = context.pollConfig || normalizePollConfig();
     const prev = context.lastFastVx;
@@ -200,17 +178,14 @@ function createElmoTransport(effects) {
   return setup({
     guards: {
       hasWork: ({ context }) => context.queue.length > 0,
-      hasNextPollPart: ({ context, event }) => {
-        const env = context.inFlight;
-        if (!isBatchPoll(env)) return false;
-        if (!validateCurrentPollPart(env, event.raw).ok) return false;
-        return cursorOf(env) < env.cmds.length - 1;
-      },
+      // Evaluated before the timeout actions run, so it predicts the post-bump miss count.
+      tooManyMisses: ({ context }) => (Number(context.missCount) || 0) + 1 >= maxMisses,
     },
     delays: {
       POLL_DELAY: ({ context }) => computePollDelayMs({ ...context, nowMs: now() }, pollOptions),
       TIMEOUT: () => timeoutMs,
       CONNECT_TIMEOUT: () => connectTimeoutMs,
+      RECONNECT_DELAY: () => reconnectMs,
     },
     actions: {
       configurePoll: assign(({ context, event }) => {
@@ -241,7 +216,7 @@ function createElmoTransport(effects) {
       // Update only the fields the transport needs for its own decisions (poll rate, range).
       // Does NOT replace ResponseParser — raw is still forwarded downstream (§4.6).
       ingestResp: assign(({ context, event }) => {
-        const raw = rawFor(context.inFlight, event.raw);
+        const raw = event.raw;
         if (!validatePollResponse(context.inFlight, raw).ok) return {};
         const f = parseElmoScalars(raw);
         const patch = {};
@@ -263,7 +238,7 @@ function createElmoTransport(effects) {
       }),
 
       enqueuePoll: assign(({ context }) => {
-        // Keep data and state polls as separate serialized requests; dedup by role.
+        // Keep data and state polls as separate serialized datagrams; dedup by role.
         const t = now();
         let queue = context.queue;
         let lastExtendedAt = context.lastExtendedAt;
@@ -318,8 +293,7 @@ function createElmoTransport(effects) {
       enqueueDiagnosticOnBadPoll: assign(({ context, event }) => {
         const env = context.inFlight;
         if (!env || env.kind !== 'poll' || !isFastPollRole(pollRoleOf(env))) return {};
-        const { validation } = responseValidation(env, event.raw);
-        if (validation.ok || hasPollRole(context.queue, 'full_state') || hasPollRoleInFlight(context, 'full_state')) return {};
+        if (validatePollResponse(env, event.raw).ok || hasPollRole(context.queue, 'full_state') || hasPollRoleInFlight(context, 'full_state')) return {};
         return {
           queue: priorityInsert(
             context.queue,
@@ -340,43 +314,31 @@ function createElmoTransport(effects) {
         return patch;
       }),
 
-      collectPollPart: assign(({ context, event }) => {
-        const env = context.inFlight;
-        if (!isBatchPoll(env)) return {};
-        return {
-          inFlight: {
-            ...env,
-            parts: (env.parts || []).concat([event.raw]),
-            cursor: cursorOf(env) + 1,
-          },
-        };
-      }),
-
       sendInFlight: ({ context }) => {
-        if (context.inFlight) sendTcp(commandFor(context.inFlight));
+        if (context.inFlight) sendCmd(context.inFlight.cmd);
       },
 
       sendProbe: () => {
-        sendTcp(probeCmd);
+        sendCmd(probeCmd);
       },
 
       forwardAndAck: ({ context, event }) => {
         const env = context.inFlight;
-        const { raw, validation } = responseValidation(env, event.raw);
+        const raw = event.raw;
+        const validation = validatePollResponse(env, raw);
         if (!validation.ok) {
           emitEvent({
             type: 'POLL.BAD_FRAME',
             id: env.id,
             role: validation.role,
             missing: validation.missing,
-            part: validation.part,
-            cmd: validation.cmd,
+            cmd: env.cmd,
             raw,
           });
           return;
         }
         forwardResp(raw, topicFor(env));
-        if (isAckable(env)) emitEvent({ type: 'CMD.ACKED', id: env.id, raw: event.raw });
+        if (isAckable(env)) emitEvent({ type: 'CMD.ACKED', id: env.id, raw });
       },
 
       failInFlight: ({ context }) => {
@@ -384,17 +346,14 @@ function createElmoTransport(effects) {
         if (isAckable(env)) emitEvent({ type: 'CMD.FAILED', id: env.id, reason: 'timeout' });
       },
 
+      bumpMiss: assign(({ context }) => ({ missCount: (Number(context.missCount) || 0) + 1 })),
+      resetMiss: assign({ missCount: 0 }),
       freeInFlight: assign({ inFlight: null }),
-
-      doReset: () => {
-        resetTcp();
-      },
 
       statusOffline: () => setStatus({ fill: 'red', shape: 'ring', text: 'ELMO offline' }),
       statusConnecting: () => setStatus({ fill: 'yellow', shape: 'ring', text: 'ELMO connecting' }),
       statusIdle: () => setStatus({ fill: 'green', shape: 'dot', text: 'ELMO online' }),
       statusBusy: () => setStatus({ fill: 'blue', shape: 'dot', text: 'ELMO busy' }),
-      statusFault: () => setStatus({ fill: 'red', shape: 'dot', text: 'ELMO fault' }),
     },
   }).createMachine({
     id: 'transport',
@@ -408,6 +367,7 @@ function createElmoTransport(effects) {
         omegaSource: 'measured', // 'setpoint' right after a speed command (§4.4 fallback)
         setpointDegS: 0,
         lastExtendedAt: 0,
+        missCount: 0,
         pollConfig,
         fastRawActive: shouldFastPoll(pollConfig),
         fastStable: false,
@@ -423,6 +383,8 @@ function createElmoTransport(effects) {
     states: {
       offline: {
         entry: 'statusOffline',
+        // UDP self-heal: re-probe after a quiet period even without an explicit CONNECT.
+        after: { RECONNECT_DELAY: { target: 'connecting' } },
         on: {
           // First command (or explicit CONNECT) brings the link up. enqueue happens on the
           // accepting transition so the first request is not lost (§4.3.1).
@@ -436,7 +398,7 @@ function createElmoTransport(effects) {
         after: { CONNECT_TIMEOUT: { target: 'offline' } },
         on: {
           'UI.CMD': { actions: 'enqueueCmd' },
-          'ELMO.RESP': { target: '#transport.connected', actions: 'enqueueInitialFullStatePoll' },
+          'ELMO.RESP': { target: '#transport.connected', actions: ['resetMiss', 'enqueueInitialFullStatePoll'] },
           'ELMO.TIMEOUT': 'offline',
         },
       },
@@ -462,18 +424,24 @@ function createElmoTransport(effects) {
             always: 'awaiting',
           },
           awaiting: {
-            after: { TIMEOUT: { target: '#transport.fault', actions: 'failInFlight' } },
-            on: {
-              'ELMO.RESP': [
-                { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: 'collectPollPart' },
-                { target: 'dispatch', actions: ['ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'] },
+            // UDP timeout = missed reply. Free the slot and keep polling; only declare the
+            // link offline after maxMisses consecutive misses (then offline self-heals).
+            after: {
+              TIMEOUT: [
+                { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
+                { target: 'idle', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
               ],
-              'ELMO.TIMEOUT': { target: '#transport.fault', actions: 'failInFlight' },
             },
-          },
-          sendingNextPart: {
-            entry: 'sendInFlight',
-            always: 'awaiting',
+            on: {
+              'ELMO.RESP': {
+                target: 'dispatch',
+                actions: ['resetMiss', 'ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'],
+              },
+              'ELMO.TIMEOUT': [
+                { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
+                { target: 'idle', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
+              ],
+            },
           },
           dispatch: {
             entry: 'freeInFlight',
@@ -481,25 +449,12 @@ function createElmoTransport(effects) {
           },
         },
       },
-
-      fault: {
-        // failInFlight (on the timeout transition) runs first and reads inFlight;
-        // then fault entry resets the socket and clears the stale request.
-        entry: ['statusFault', 'doReset', 'freeInFlight'],
-        on: {
-          'UI.CMD': { actions: 'enqueueCmd' },
-          CLEARED: '#transport.connected',
-          'ELMO.RESP': { target: '#transport.connected', actions: 'enqueueInitialFullStatePoll' },
-          LOST: 'offline',
-        },
-      },
     },
   });
 }
 
 // Convenience for the Node-RED glue: create + start the actor in one call so the Function
-// node only needs the `nc3` module (xstate stays internal to this package — no second
-// external module / no userDir install needed; see docs/xstate-integration-plan.md §9.1).
+// node only needs the `nc3` module (xstate stays internal to this package).
 function startElmoTransport(effects, input) {
   return createActor(createElmoTransport(effects), { input: input || {} }).start();
 }

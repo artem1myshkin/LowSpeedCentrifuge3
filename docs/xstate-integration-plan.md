@@ -1,7 +1,9 @@
 # Интеграция XState в Node-RED для управления ПЛК ELMO
 
-Статус: проект (анализ перед реализацией). Код `flows.json` по этому документу пока не менялся.
-Актуально на: 2026-05-26.
+> **Обновление 2026-05-27 (UDP).** План написан под TCP (`tcp request` в `sit`-режиме + `FrameSplitter` + многокомандный poll). По итогу TCP не дал нужной частоты (~4 Гц), и транспорт переведён на **UDP** (одна батч-датаграмма на poll, без FrameSplitter/сброса сокета). Реализация Этапа 1 уже в коде. Актуальное поведение — `docs/xstate-machine-current-state.md`, справочник по файлам/функциям — `docs/xstate-machine-architecture.md`. Разделы ниже про `char`/`sit`/`FrameSplitter`/idle-gap читать как исторический контекст.
+
+Статус: исторический план. Этап 1 (ElmoTransport) реализован (UDP); Этап 2 (ScenarioManager) — впереди.
+Актуально на: 2026-05-26 (TCP-план).
 Охват: полный — **Этап 1 (ElmoTransport)** + **Этап 2 (ScenarioManager)**.
 
 Источники: `docs/elmo-transport-design.md`, `docs/scenario-feature-summary.md`,

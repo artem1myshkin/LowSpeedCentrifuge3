@@ -15,7 +15,7 @@
 
 | Компонент | Роль | Протокол | Адрес / порт | Как связан с `Node-RED` |
 |---|---|---|---|---|
-| `ELMO` | привод внутренней оси, вращение планшайбы | текстовый `Direct Access TCP/IP` | `192.168.1.2:2000` | `tcp request` из `new ui flow` |
+| `ELMO` | привод внутренней оси, вращение планшайбы | текстовый `Direct Access` (TCP в legacy-flow, UDP в XState-транспорте) | TCP `192.168.1.2:2000` (legacy) / UDP `192.168.1.2:5001` cmd, `:5005` reply (XState) | `tcp request` из `new ui flow`; `udp out`/`udp in` во вкладке `ELMO XState (UDP)` |
 | `БУН` | управление внешней осью наклона | `UDP` + `Modbus RTU` поверх UDP | `192.168.1.5:32767` | через внешний MQTT/UDP-шлюз `nc3_bun.py` |
 | `БЕП` | измерение ёмкости/зазора по каналам | кастомный бинарный `UDP` | `192.168.1.20:20001` | через внешний MQTT/UDP-шлюз `nc3_bep.py` и MQTT-топики |
 | `MQTT broker` | внутренняя шина обмена | `MQTT` | `localhost:1883` | основной способ связи `Node-RED` с `БУН/БЕП`-шлюзами |
@@ -31,10 +31,11 @@
 
 ### Транспорт и endpoint
 
-- Протокол: текстовые команды `ELMO Platinum Direct Access TCP/IP`
-- Endpoint в текущем flow: `192.168.1.2:2000`
+- Протокол: текстовые команды `ELMO Platinum Direct Access`
+- Legacy production-flow (`new ui flow`): TCP `192.168.1.2:2000` через `tcp request`
+- XState-транспорт (вкладка `ELMO XState (UDP)`): UDP — команды на `192.168.1.2:5001`, ответы на локальный `:5005` (`udp out`/`udp in`)
 - Команда завершается обязательным `CR` (`\r`)
-- В `Node-RED` обмен идет через `tcp request`
+- Переход на UDP сделан ради частоты опроса: по TCP `sit` + idle-gap потолок был ~4 Гц, по UDP (одна батч-датаграмма на poll) — ~25–30 Гц. См. [xstate-machine-current-state.md](xstate-machine-current-state.md). Полная замена production-flow на UDP — отдельный шаг; если ELMO переконфигурирован на UDP, legacy TCP-путь нужно мигрировать.
 
 Важно:
 

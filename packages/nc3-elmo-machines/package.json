@@ -1,7 +1,7 @@
 {
   "name": "nc3-elmo-machines",
   "version": "0.1.0",
-  "description": "XState v5 state machines for the NC-3 ELMO transport (single serialized TCP owner) and scenario runtime. Authored as a local package so Node-RED Function nodes load it as an external module (see docs/xstate-integration-plan.md).",
+  "description": "XState v5 state machines for the NC-3 ELMO transport (single serialized UDP owner, one batched datagram per poll) and scenario runtime. Authored as a local package loaded into Node-RED via functionGlobalContext (see docs/xstate-machine-current-state.md).",
   "license": "UNLICENSED",
   "main": "src/index.js",
   "scripts": {

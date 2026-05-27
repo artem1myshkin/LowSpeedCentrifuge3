@@ -61,25 +61,33 @@ function requiredKeysFor(fields) {
   return fields.map((field) => FIELD_KEYS[field]).filter(Boolean);
 }
 
+// UDP: one logical poll = ONE datagram = ONE reply. The whole field set is batched into a
+// single command line (`TM;PX;VX;`) instead of separate sequential read-commands; ELMO
+// answers with one datagram (= one complete frame, no idle-gap reassembly needed).
+function buildPollCommand(role, options) {
+  return buildPollFields(role, options).map((field) => field + ';').join('');
+}
+
+function pollTopicFor(role) {
+  if (role === 'fast_seek') return 'poll_fast';
+  if (role === 'data' || role === 'fast_data') return 'poll_data';
+  return 'poll_state';
+}
+
 function buildPollEnvelope(args) {
   const a = args || {};
   const role = a.role || (a.extended ? 'full_state' : 'data');
   const isNonData = role !== 'data';
   const isFast = role === 'fast_seek' || role === 'fast_data';
   const fields = buildPollFields(role, a.options);
-  const cmds = fields.map((field) => field);
   const required = requiredKeysFor(fields);
-  const topic = role === 'fast_seek' ? 'poll_fast' : (isNonData && role !== 'fast_data' ? 'poll_state' : 'poll_data');
+  const topic = pollTopicFor(role);
   return {
     id: a.id,
     kind: 'poll',
     priority: typeof a.priority === 'number' ? a.priority : (isFast ? PRIORITY.fastPoll : PRIORITY.poll),
-    cmd: cmds[0],
-    cmds,
-    cursor: 0,
-    parts: [],
+    cmd: buildPollCommand(role, a.options),
     required,
-    partRequired: fields.map((field) => requiredKeysFor([field])),
     extended: isNonData,
     pollRole: role,
     expect: 'parse',
@@ -135,6 +143,7 @@ module.exports = {
   buildFullStatePoll,
   buildExtendedPoll,
   buildPollFields,
+  buildPollCommand,
   shouldExtend,
   buildPollEnvelope,
   omegaDegPerSec,
