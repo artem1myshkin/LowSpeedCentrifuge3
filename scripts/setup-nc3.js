@@ -7,7 +7,7 @@
 // It installs the package's own dependencies (xstate) INSIDE the package folder only —
 // it never touches the Node-RED userDir node_modules, so it cannot prune palette nodes.
 // The package is then loaded by Node-RED via functionGlobalContext (see settings.js
-// snippet printed below and docs/xstate-integration-plan.md §9.1).
+// snippet printed below and docs/xstate-elmo-status.md).
 
 const { execSync } = require('child_process');
 const path = require('path');

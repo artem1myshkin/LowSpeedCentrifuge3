@@ -26,7 +26,7 @@ const transportInit = `
 // external module; it is a local package, not on the npm registry. xstate stays internal to nc3.
 const nc3 = global.get('nc3');
 if (!nc3 || typeof nc3.startElmoTransport !== 'function') {
-    node.error('global.nc3 not available. Add nc3 to functionGlobalContext in settings.js (see docs/xstate-integration-plan.md section 9.1).');
+    node.error('global.nc3 not available. Add nc3 to functionGlobalContext in settings.js (see docs/xstate-elmo-status.md, "How to test on the stand").');
     return;
 }
 
@@ -231,7 +231,7 @@ const nodes = [
     type: 'tab',
     label: 'ELMO XState (UDP)',
     disabled: false,
-    info: 'Parallel bring-up of the ElmoTransport XState actor over UDP (udp out/in, one batched datagram per poll). Does not replace existing ELMO nodes. See docs/xstate-machine-current-state.md.',
+    info: 'Parallel bring-up of the ElmoTransport XState actor over UDP (udp out/in, atomic per-parameter poll with reassembly). Does not replace existing ELMO nodes. See docs/xstate-elmo-design.md.',
   },
   {
     id: 'elmoxs-transport',

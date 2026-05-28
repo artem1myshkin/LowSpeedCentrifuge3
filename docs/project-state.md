@@ -1,8 +1,8 @@
 # Состояние проекта LowSpeedCentrifuge3
 
-## Актуализация 2026-05-27 (UDP)
+## Актуализация 2026-05-28 (UDP, атомарный poll)
 
-Транспорт `ElmoTransport`/XStateMachine переведён с TCP `sit` на **UDP** (одна батч-датаграмма на poll), что сняло ~4-Гц потолок и даёт ~25–30 Гц. Актуальное поведение — `docs/xstate-machine-current-state.md`, справочник по коду пакета — `docs/xstate-machine-architecture.md`. Legacy production-flow (`new ui flow`) пока остаётся на TCP `tcp request :2000`.
+Транспорт `ElmoTransport`/XStateMachine переведён с TCP `sit` на **UDP с атомарными командами** (по одной команде-параметру на датаграмму с реассемблированием в логический кадр) и компенсацией Windows-таймера — даёт ~30–32 Гц при цели 30 Гц. Дизайн и журнал решений — `docs/xstate-elmo-design.md`, текущее состояние — `docs/xstate-elmo-status.md`, справочник по файлам пакета — `docs/xstate-elmo-files.md`. Legacy production-flow (`new ui flow`) пока остаётся на TCP `tcp request :2000`.
 
 Актуально на: 2026-05-25
 Проект: `C:\Users\Артём\.node-red\projects\LowSpeedCentrifuge3`

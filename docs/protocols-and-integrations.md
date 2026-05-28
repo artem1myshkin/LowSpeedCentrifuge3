@@ -35,7 +35,7 @@
 - Legacy production-flow (`new ui flow`): TCP `192.168.1.2:2000` через `tcp request`
 - XState-транспорт (вкладка `ELMO XState (UDP)`): UDP — команды на `192.168.1.2:5001`, ответы на локальный `:5005` (`udp out`/`udp in`)
 - Команда завершается обязательным `CR` (`\r`)
-- Переход на UDP сделан ради частоты опроса: по TCP `sit` + idle-gap потолок был ~4 Гц, по UDP (одна батч-датаграмма на poll) — ~25–30 Гц. См. [xstate-machine-current-state.md](xstate-machine-current-state.md). Полная замена production-flow на UDP — отдельный шаг; если ELMO переконфигурирован на UDP, legacy TCP-путь нужно мигрировать.
+- Переход на UDP сделан ради частоты опроса: по TCP `sit` + idle-gap потолок был ~4 Гц; по UDP с атомарными per-параметровыми командами и реассемблированием — ~30–32 Гц. См. [xstate-elmo-design.md](xstate-elmo-design.md). Полная замена production-flow на UDP — отдельный шаг; если ELMO переконфигурирован на UDP, legacy TCP-путь нужно мигрировать.
 
 Важно:
 

@@ -1,6 +1,6 @@
 # ELMO TCP poll probe
 
-> **Исторический (TCP).** Этот пробник измерял предел TCP-опроса и подтвердил ~4-Гц потолок `sit` + idle-gap. Проект перешёл на **UDP** — текущую частоту проще смотреть прямо во вкладке `ELMO XState (UDP)` (inject `poll mode: raw fast 30Hz` + debug `poll rate`). См. `docs/xstate-machine-current-state.md`.
+> **Исторический (TCP).** Этот пробник измерял предел TCP-опроса и подтвердил ~4-Гц потолок `sit` + idle-gap. Проект перешёл на **UDP** — текущую частоту проще смотреть прямо во вкладке `ELMO XState (UDP)` (inject `poll mode: raw fast 30Hz` + debug `poll rate`). См. `docs/xstate-elmo-design.md` (дизайн) и `docs/xstate-elmo-status.md` (текущее состояние).
 
 Актуально на: 2026-05-27 (TCP-эпоха).
 

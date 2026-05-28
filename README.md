@@ -30,4 +30,4 @@ Node-RED references used for these rules:
 
 # Описание проекта
 
-Актуальное состояние проекта описано в `docs/project-state.md`. Контракты интеграций (ELMO/БУН/БЕП, протоколы и данные) — в `docs/protocols-and-integrations.md`. Дизайн единого транспорта ELMO (устранение TCP race, динамический опрос 1–30 Гц) и сценарного режима — в `docs/elmo-transport-design.md`. План сценарного режима — в `docs/scenario-feature-summary.md`.
+Актуальное состояние проекта описано в `docs/project-state.md`. Контракты интеграций (ELMO/БУН/БЕП, протоколы и данные) — в `docs/protocols-and-integrations.md`. Фича единого XState-транспорта ELMO (UDP, атомарный poll, ~30 Гц) описана в `docs/xstate-elmo-design.md` (полный дизайн + журнал решений), `docs/xstate-elmo-status.md` (текущее состояние для AI-агента) и `docs/xstate-elmo-files.md` (per-file справочник). План сценарного режима — в `docs/scenario-feature-summary.md`.
