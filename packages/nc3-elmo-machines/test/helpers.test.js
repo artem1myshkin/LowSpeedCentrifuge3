@@ -161,6 +161,55 @@ test('computePollDelayMs: measured vs setpoint source', () => {
   );
 });
 
+test('computePollDelayMs: timerCompensationMs trims the request to cross Windows tick boundary', () => {
+  // 30 Hz fast target, 15 ms already spent on RTTs: without comp the request is 18 ms (which
+  // setTimeout on Windows rounds up to the 2nd tick = ~31 ms). With 8 ms compensation the
+  // request drops to 10 ms (< 15.625 tick), so setTimeout lands on the 1st tick (~15.625 ms),
+  // saving one whole tick per cycle.
+  assert.equal(
+    computePollDelayMs({
+      fastRawActive: true,
+      pollConfig: { fastRawPollHz: 30 },
+      lastFastPollStartedAt: 1000,
+      nowMs: 1015,
+    }),
+    18
+  );
+  assert.equal(
+    computePollDelayMs(
+      {
+        fastRawActive: true,
+        pollConfig: { fastRawPollHz: 30 },
+        lastFastPollStartedAt: 1000,
+        nowMs: 1015,
+      },
+      { timerCompensationMs: 8 }
+    ),
+    10
+  );
+  // Compensation never drives the delay below the 1 ms floor.
+  assert.equal(
+    computePollDelayMs(
+      {
+        fastRawActive: true,
+        pollConfig: { fastRawPollHz: 30 },
+        lastFastPollStartedAt: 1000,
+        nowMs: 1030,
+      },
+      { timerCompensationMs: 8 }
+    ),
+    1
+  );
+  // Also applies in the velocity-derived (non-fast) path.
+  assert.equal(
+    computePollDelayMs(
+      { vx: 0, resolution: 'high', omegaSource: 'measured' },
+      { timerCompensationMs: 8 }
+    ),
+    992
+  );
+});
+
 test('ticksPerRev matches CA[18]', () => {
   assert.equal(ticksPerRev('high'), 262144000);
   assert.equal(ticksPerRev('low'), 6553600);

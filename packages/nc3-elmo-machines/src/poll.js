@@ -117,8 +117,18 @@ function computeRateHz(omegaDegSec, options) {
 // Delay (ms) until the next poll, self-clocked from the speed source (§4.4.5).
 // omegaSource lets the scheduler use the setpoint right after a speed command, before
 // the first poll has reported the new VX (§4.4 fallback).
+//
+// `options.timerCompensationMs` (default 0) is subtracted from the computed delay before
+// the floor at 1 ms. On Windows `setTimeout` is quantized to the system timer tick
+// (~15.625 ms by default), so a naive `setTimeout(18)` actually lands on the SECOND tick
+// (~31 ms) — losing one whole tick every cycle. Passing half a tick (~8 ms) as the
+// compensation rounds the request to the NEAREST tick instead of always ceiling it, which
+// recovers the lost tick at high target frequencies (30 Hz target jumps from ~22 Hz actual
+// to ~32 Hz on Windows). On Linux / with `timeBeginPeriod(1)` the effect is negligible.
 function computePollDelayMs(context, options) {
   const ctx = context || {};
+  const o = options || {};
+  const compensation = Math.max(0, Number(o.timerCompensationMs) || 0);
   if (ctx.fastRawActive) {
     const cfg = ctx.pollConfig || {};
     const hz = clamp(Number(cfg.fastRawPollHz) || 30, 1, 30);
@@ -126,13 +136,13 @@ function computePollDelayMs(context, options) {
     const startedAt = Number(ctx.lastFastPollStartedAt) || 0;
     const nowMs = Number(ctx.nowMs) || 0;
     const elapsedMs = startedAt > 0 && nowMs > 0 ? Math.max(0, nowMs - startedAt) : 0;
-    return Math.max(1, Math.round(targetMs - elapsedMs));
+    return Math.max(1, Math.round(targetMs - elapsedMs - compensation));
   }
   const omega = ctx.omegaSource === 'setpoint'
     ? Math.abs(Number(ctx.setpointDegS) || 0)
     : omegaDegPerSec(ctx.vx, ctx.resolution);
   const rate = computeRateHz(omega, options);
-  return Math.round(1000 / rate);
+  return Math.max(1, Math.round(1000 / rate - compensation));
 }
 
 module.exports = {

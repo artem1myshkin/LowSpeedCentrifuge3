@@ -72,7 +72,7 @@ const actor = nc3.startElmoTransport({
     reconnectMs: 1000,
     maxMisses: 3,
     statePeriodMs: 1000,
-    pollOptions: { minHz: 1, maxHz: 1 }
+    pollOptions: { minHz: 1, maxHz: 1, timerCompensationMs: 8 }
 }, { resolution: ckpt.resolution || 'high', pollConfig: initialPollConfig });
 
 let lastRes = ckpt.resolution || null;

@@ -143,7 +143,7 @@ UDP, **атомарные команды**: ELMO плохо отвечает н�
 | `shouldExtend(lastExtendedAt, now, statePeriodMs)` | Пора ли добавить медленный state-poll. |
 | `omegaDegPerSec(vx, resolution)` | `VX` (ticks/s) → °/с по разрешению. |
 | `computeRateHz(omega, options)` | `clamp(\|ω\|/12, minHz, maxHz)` — 30 точек/оборот, не ниже 1 Гц. |
-| `computePollDelayMs(context, options)` | Задержка до следующего poll; в fast-режиме — start-to-start от `fastRawPollHz`. |
+| `computePollDelayMs(context, options)` | Задержка до следующего poll; в fast-режиме — start-to-start от `fastRawPollHz`. `options.timerCompensationMs` (дефолт 0) вычитается из результата — компенсация гранулярности `setTimeout` Windows (~15.625 мс); значение ~8 мс убирает один потерянный тик и поднимает фактическую частоту fast-poll с ~22 до ~32 Гц при цели 30 Гц. |
 
 Роли poll: `data` (`TM`, `PX`, `VX`), `state` (`MO`, `SO`, `SR`), `full_state` (`MS`, `MO`, `SO`, `SR`, `AF`, `OL[1]`, `OL[2]`), `fast_seek` (`VX`, `PX`), `fast_data` (`VX`, `PX`, `TM`). Topic наружу: `poll_data` / `poll_state` / `poll_fast`.
 
