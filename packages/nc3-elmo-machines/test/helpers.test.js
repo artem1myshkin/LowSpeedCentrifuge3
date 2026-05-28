@@ -54,19 +54,23 @@ test('clamp', () => {
   assert.equal(clamp(100, 1, 30), 30);
 });
 
-test('poll payloads: one batched datagram per logical poll', () => {
+test('poll payloads: atomic single-parameter commands (cmds[])', () => {
   assert.equal(DATA_POLL, LEAN_POLL);
-  // UDP: one logical poll is a single batched command datagram (no cmds[] of separate reads).
+  // ELMO answers one datagram per parameter, so a logical poll is a SEQUENCE of atomic
+  // single-parameter commands (cmds[]); the transport reassembles parts into one logical raw.
   const data = buildPollEnvelope({ id: 'p', extended: false });
-  assert.equal(data.cmd, 'TM;PX;VX;');
-  assert.equal(data.cmds, undefined);
+  assert.equal(data.cmd, 'TM');
+  assert.deepEqual(data.cmds, ['TM', 'PX', 'VX']);
   assert.deepEqual(data.required, ['tm', 'px', 'vx']);
+  assert.deepEqual(data.partRequired, [['tm'], ['px'], ['vx']]);
   const stateEnv = buildPollEnvelope({ id: 'p', role: 'state' });
-  assert.equal(stateEnv.cmd, 'MO;SO;SR;');
+  assert.equal(stateEnv.cmd, 'MO');
+  assert.deepEqual(stateEnv.cmds, ['MO', 'SO', 'SR']);
   assert.deepEqual(stateEnv.required, ['mo', 'so', 'sr']);
   const extEnv = buildPollEnvelope({ id: 'p', extended: true });
   const ext = buildExtendedPoll();
-  assert.equal(extEnv.cmd, 'MS;MO;SO;SR;AF;OL[1];OL[2];');
+  assert.equal(extEnv.cmd, 'MS');
+  assert.deepEqual(extEnv.cmds, ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']);
   assert.deepEqual(extEnv.required, ['ms', 'mo', 'so', 'sr', 'af', 'ol1', 'ol2']);
   for (const tok of ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']) {
     assert.ok(ext.includes(tok), 'state poll missing ' + tok);
@@ -79,13 +83,13 @@ test('poll payloads: one batched datagram per logical poll', () => {
   assert.equal(buildPollEnvelope({ id: 'p', role: 'state' }).pollRole, 'state');
 
   const fastSeek = buildPollEnvelope({ id: 'fast-seek', role: 'fast_seek' });
-  assert.equal(fastSeek.cmd, 'VX;PX;');
+  assert.deepEqual(fastSeek.cmds, ['VX', 'PX']);
   assert.deepEqual(fastSeek.required, ['vx', 'px']);
   assert.equal(fastSeek.priority, PRIORITY.fastPoll);
   assert.equal(fastSeek.meta.topic, 'poll_fast');
 
   const fastData = buildPollEnvelope({ id: 'fast-data', role: 'fast_data' });
-  assert.equal(fastData.cmd, 'VX;PX;TM;');
+  assert.deepEqual(fastData.cmds, ['VX', 'PX', 'TM']);
   assert.deepEqual(fastData.required, ['vx', 'px', 'tm']);
   assert.equal(fastData.meta.topic, 'poll_data');
 });

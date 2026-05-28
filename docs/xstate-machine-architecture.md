@@ -67,6 +67,7 @@
 |---|---|---|
 | `hasWork` | guard | В очереди есть запрос. |
 | `tooManyMisses` | guard | После инкремента число пропусков достигнет `maxMisses` (предсказывает до actions). |
+| `hasNextPollPart` | guard | Текущий poll — батч атомарных команд, только что пришедшая часть валидна и есть ещё команды. |
 | `POLL_DELAY` | delay | Задержка до следующего самотактируемого poll (`computePollDelayMs`). |
 | `TIMEOUT` | delay | Watchdog ответа = `timeoutMs`. |
 | `CONNECT_TIMEOUT` | delay | Watchdog probe = `connectTimeoutMs`. |
@@ -82,9 +83,10 @@
 | `enqueueConfirmPoll` | После команды, меняющей состояние (`MO=`, `OL[1]=`…), поставить подтверждающий poll. |
 | `enqueueDiagnosticOnBadPoll` | На невалидный fast-кадр поставить `full_state` (высокий приоритет) и сбросить fast-стабильность. |
 | `takeNext` | Снять головной запрос из очереди в `inFlight`; для fast-poll зафиксировать `lastFastPollStartedAt`. |
-| `sendInFlight` / `sendProbe` | Отправить через `sendCmd` команду текущего запроса / probe. |
-| `ingestResp` | Обновить из ответа поля контекста (vx, resolution, mo/so/sr…) и fast-стабильность. Не заменяет `ResponseParser`. |
-| `forwardAndAck` | Валидировать ответ; невалидный → `POLL.BAD_FRAME`; валидный → `forwardResp` + (для команд) `CMD.ACKED`. |
+| `sendInFlight` / `sendProbe` | Отправить через `sendCmd` команду текущего запроса (атомарная команда `cmds[cursor]` для poll) / probe. |
+| `collectPollPart` | Принять валидную часть атомарного poll: добавить raw в `parts`, инкрементировать `cursor`. |
+| `ingestResp` | Из РЕАССЕМБЛИРОВАННОГО `rawFor(env, raw)` обновить поля контекста (vx, resolution, mo/so/sr…) и fast-стабильность. Не заменяет `ResponseParser`. |
+| `forwardAndAck` | Валидировать через `responseValidation`; невалидный → `POLL.BAD_FRAME` (с `part`/`cmd` сбойной части); валидный → `forwardResp` склеенного `raw` + (для команд) `CMD.ACKED`. |
 | `failInFlight` | Для команды выдать `CMD.FAILED` (reason `timeout`). |
 | `bumpMiss` / `resetMiss` | Инкремент/сброс счётчика пропусков. |
 | `freeInFlight` | Очистить `inFlight`. |
@@ -93,7 +95,7 @@
 
 ### Внутренние хелперы (кратко)
 
-`normalizeEnvelope` (нормализация конверта команды/poll), `pollRoleOf`/`topicFor`/`isAckable`, `hasPollRole`/`hasAnyFastPoll`/`…InFlight` (dedup), `validatePollResponse` (проверка обязательных полей роли), `confirmPollRoleFor` (какой confirm-poll нужен после команды), `fastStabilityPatch` (счётчик стабильной скорости), `normalizePollConfig`/`shouldFastPoll`/`fastPollRoleFor`.
+`normalizeEnvelope` (нормализация конверта команды/poll), `pollRoleOf`/`topicFor`/`isAckable`, `hasPollRole`/`hasAnyFastPoll`/`…InFlight` (dedup), `isBatchPoll`/`cursorOf`/`commandFor`/`rawFor` (многочастный атомарный poll: какая команда сейчас и как склеить части), `validatePollResponse` / `validateCurrentPollPart` / `responseValidation` (проверка целого кадра, текущей части, и их комбинации), `confirmPollRoleFor` (какой confirm-poll нужен после команды), `fastStabilityPatch` (счётчик стабильной скорости), `normalizePollConfig`/`shouldFastPoll`/`fastPollRoleFor`.
 
 ### Состояния
 
@@ -107,7 +109,9 @@ stateDiagram-v2
     [*] --> idle
     idle --> sending: hasWork
     sending --> awaiting
-    awaiting --> dispatch: ELMO.RESP
+    awaiting --> sendingNextPart: ELMO.RESP [hasNextPollPart]
+    sendingNextPart --> awaiting
+    awaiting --> dispatch: ELMO.RESP (last part / non-batch)
     dispatch --> idle
     awaiting --> idle: TIMEOUT (miss < max)
   }
@@ -117,8 +121,9 @@ stateDiagram-v2
 - `offline` — нет связи; сам перезапрашивает probe через `RECONNECT_DELAY` (UDP self-heal).
 - `connecting` — отправлен probe (`TM`), ждём любой ответ.
 - `connected.idle` — простой; через `POLL_DELAY` сам ставит poll; при `hasWork` → `sending`.
-- `connected.sending` — снять запрос и отправить датаграмму.
-- `connected.awaiting` — ждём ответ; `ELMO.RESP` → `dispatch`; таймаут → `idle` (или `offline` после `maxMisses`). Сокет не сбрасывается — в UDP его нет.
+- `connected.sending` — снять запрос и отправить ПЕРВУЮ атомарную команду (для poll) или команду целиком.
+- `connected.awaiting` — ждём ответ-датаграмму; если есть ещё атомарные команды этого poll → `sendingNextPart`; иначе → `dispatch`; таймаут → `idle` (или `offline` после `maxMisses`). Сокет не сбрасывается — в UDP его нет.
+- `connected.sendingNextPart` — отправить следующую атомарную команду текущего poll и вернуться в `awaiting`.
 - `connected.dispatch` — освободить `inFlight`, вернуться в `idle`.
 
 Входные события: `UI.CMD`, `POLL.TICK`, `POLL.FULL_STATE`, `POLL.CONFIG`, `CONNECT`, `ELMO.RESP`, `ELMO.TIMEOUT`.
@@ -127,21 +132,20 @@ stateDiagram-v2
 
 ## `poll.js`
 
-UDP: один логический poll = одна командная датаграмма с батчем полей, ответ — одна датаграмма (готовый кадр).
+UDP, **атомарные команды**: ELMO плохо отвечает на батч (один ответ-датаграмма на параметр и не всегда в порядке), поэтому логический poll = СПИСОК (`cmds`) атомарных команд (`TM`, потом `PX`, потом `VX`), каждая даёт ровно одну датаграмму-ответ. Транспорт собирает части в один логический raw для downstream.
 
 | Функция / константа | Назначение |
 |---|---|
-| `DATA_POLL` / `LEAN_POLL` | `'TM;PX;VX;'` — батч обычного data-poll. |
+| `DATA_POLL` / `LEAN_POLL` | `'TM;PX;VX;'` — display-константа (поля data-poll), не отправляется как одна строка. |
 | `buildPollFields(role, options)` | Список полей роли (`data`/`state`/`full_state`/`fast_seek`/`fast_data`); `analogParam` опционально для full_state. |
-| `buildPollCommand(role, options)` | Поля роли, склеенные в одну командную строку (`TM;PX;VX;`). |
-| `buildStatePoll` / `buildFullStatePoll` (`buildExtendedPoll`) | Командные строки для state / full_state. |
-| `buildPollEnvelope(args)` | Конверт poll: `cmd` (батч), `required` (ключи для валидации), `priority`, `pollRole`, `meta.topic`. |
+| `buildStatePoll` / `buildFullStatePoll` (`buildExtendedPoll`) | Текстовое представление полей (display). |
+| `buildPollEnvelope(args)` | Конверт poll: `cmds` (атомарные команды), `cursor`/`parts` для пошаговой сборки, `cmd = cmds[0]`, `required` (для итоговой валидации), `partRequired` (для проверки каждой части), `priority`, `pollRole`, `meta.topic`. |
 | `shouldExtend(lastExtendedAt, now, statePeriodMs)` | Пора ли добавить медленный state-poll. |
 | `omegaDegPerSec(vx, resolution)` | `VX` (ticks/s) → °/с по разрешению. |
 | `computeRateHz(omega, options)` | `clamp(\|ω\|/12, minHz, maxHz)` — 30 точек/оборот, не ниже 1 Гц. |
 | `computePollDelayMs(context, options)` | Задержка до следующего poll; в fast-режиме — start-to-start от `fastRawPollHz`. |
 
-Роли poll: `data` (TM;PX;VX), `state` (MO;SO;SR), `full_state` (MS;MO;SO;SR;AF;OL[1];OL[2]), `fast_seek` (VX;PX), `fast_data` (VX;PX;TM). Topic наружу: `poll_data` / `poll_state` / `poll_fast`.
+Роли poll: `data` (`TM`, `PX`, `VX`), `state` (`MO`, `SO`, `SR`), `full_state` (`MS`, `MO`, `SO`, `SR`, `AF`, `OL[1]`, `OL[2]`), `fast_seek` (`VX`, `PX`), `fast_data` (`VX`, `PX`, `TM`). Topic наружу: `poll_data` / `poll_state` / `poll_fast`.
 
 ---
 

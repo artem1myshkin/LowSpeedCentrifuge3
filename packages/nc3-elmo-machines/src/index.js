@@ -21,7 +21,6 @@ module.exports = {
   PRIORITY: queue.PRIORITY,
   DATA_POLL: poll.DATA_POLL,
   buildPollEnvelope: poll.buildPollEnvelope,
-  buildPollCommand: poll.buildPollCommand,
   buildStatePoll: poll.buildStatePoll,
   buildFullStatePoll: poll.buildFullStatePoll,
   computePollDelayMs: poll.computePollDelayMs,

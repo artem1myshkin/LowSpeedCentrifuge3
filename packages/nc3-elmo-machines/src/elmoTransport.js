@@ -134,8 +134,28 @@ function createElmoTransport(effects) {
     return fields.filter((field) => parsed[field] === undefined);
   }
 
-  // One datagram = one complete frame, so the whole reply is validated at once against the
-  // role's required field set (no per-part cursor).
+  // Stand finding: ELMO does NOT batch its reply — one datagram per parameter. So a logical
+  // poll is sent as a SEQUENCE of atomic single-parameter commands (cmds[]); each atomic reply
+  // is one datagram (= one part), and the parts are reassembled into the logical raw frame.
+  function isBatchPoll(env) {
+    return env && env.kind === 'poll' && Array.isArray(env.cmds) && env.cmds.length > 0;
+  }
+
+  function cursorOf(env) {
+    return Math.max(0, Number(env && env.cursor) || 0);
+  }
+
+  function commandFor(env) {
+    if (isBatchPoll(env)) return env.cmds[Math.min(cursorOf(env), env.cmds.length - 1)];
+    return env && env.cmd;
+  }
+
+  function rawFor(env, raw) {
+    if (!isBatchPoll(env)) return raw;
+    return (env.parts || []).concat([raw]).join('');
+  }
+
+  // Whole-frame validation (after all parts reassembled, or for a non-batch envelope).
   function validatePollResponse(env, raw) {
     if (!env || env.kind !== 'poll') return { ok: true, role: undefined, missing: [] };
     const role = pollRoleOf(env);
@@ -145,6 +165,25 @@ function createElmoTransport(effects) {
       : (role === 'state' ? ['mo', 'so', 'sr'] : ['tm', 'px', 'vx']));
     const missing = missingFields(parsed, required);
     return { ok: missing.length === 0, role, missing };
+  }
+
+  // Per-part validation: does the current atomic reply carry the field we just requested?
+  // A stale/cross-attributed datagram (the bug we fixed by going atomic) will fail this check
+  // and surface as POLL.BAD_FRAME for the part, instead of silently corrupting the frame.
+  function validateCurrentPollPart(env, raw) {
+    if (!isBatchPoll(env)) return validatePollResponse(env, raw);
+    const role = pollRoleOf(env);
+    const idx = cursorOf(env);
+    const required = (env.partRequired && env.partRequired[idx]) || [];
+    const missing = missingFields(parseElmoScalars(raw), required);
+    return { ok: missing.length === 0, role, missing, part: idx, cmd: commandFor(env) };
+  }
+
+  function responseValidation(env, rawEvent) {
+    const partValidation = validateCurrentPollPart(env, rawEvent);
+    const raw = rawFor(env, rawEvent);
+    const validation = partValidation.ok ? validatePollResponse(env, raw) : partValidation;
+    return { raw, validation };
   }
 
   function commandRequests(cmd, pattern) {
@@ -180,6 +219,14 @@ function createElmoTransport(effects) {
       hasWork: ({ context }) => context.queue.length > 0,
       // Evaluated before the timeout actions run, so it predicts the post-bump miss count.
       tooManyMisses: ({ context }) => (Number(context.missCount) || 0) + 1 >= maxMisses,
+      // True while the in-flight poll still has more atomic commands to send AND the just-
+      // received part validated; false at the last part (or on a part validation failure).
+      hasNextPollPart: ({ context, event }) => {
+        const env = context.inFlight;
+        if (!isBatchPoll(env)) return false;
+        if (!validateCurrentPollPart(env, event.raw).ok) return false;
+        return cursorOf(env) < env.cmds.length - 1;
+      },
     },
     delays: {
       POLL_DELAY: ({ context }) => computePollDelayMs({ ...context, nowMs: now() }, pollOptions),
@@ -216,7 +263,8 @@ function createElmoTransport(effects) {
       // Update only the fields the transport needs for its own decisions (poll rate, range).
       // Does NOT replace ResponseParser — raw is still forwarded downstream (§4.6).
       ingestResp: assign(({ context, event }) => {
-        const raw = event.raw;
+        // Reassemble parts so the parser sees the whole logical frame, not just the last one.
+        const raw = rawFor(context.inFlight, event.raw);
         if (!validatePollResponse(context.inFlight, raw).ok) return {};
         const f = parseElmoScalars(raw);
         const patch = {};
@@ -293,7 +341,8 @@ function createElmoTransport(effects) {
       enqueueDiagnosticOnBadPoll: assign(({ context, event }) => {
         const env = context.inFlight;
         if (!env || env.kind !== 'poll' || !isFastPollRole(pollRoleOf(env))) return {};
-        if (validatePollResponse(env, event.raw).ok || hasPollRole(context.queue, 'full_state') || hasPollRoleInFlight(context, 'full_state')) return {};
+        const { validation } = responseValidation(env, event.raw);
+        if (validation.ok || hasPollRole(context.queue, 'full_state') || hasPollRoleInFlight(context, 'full_state')) return {};
         return {
           queue: priorityInsert(
             context.queue,
@@ -315,8 +364,22 @@ function createElmoTransport(effects) {
       }),
 
       sendInFlight: ({ context }) => {
-        if (context.inFlight) sendCmd(context.inFlight.cmd);
+        if (context.inFlight) sendCmd(commandFor(context.inFlight));
       },
+
+      // After a part validates, append its raw and advance the cursor; sendingNextPart then
+      // emits the next atomic command.
+      collectPollPart: assign(({ context, event }) => {
+        const env = context.inFlight;
+        if (!isBatchPoll(env)) return {};
+        return {
+          inFlight: {
+            ...env,
+            parts: (env.parts || []).concat([event.raw]),
+            cursor: cursorOf(env) + 1,
+          },
+        };
+      }),
 
       sendProbe: () => {
         sendCmd(probeCmd);
@@ -324,21 +387,21 @@ function createElmoTransport(effects) {
 
       forwardAndAck: ({ context, event }) => {
         const env = context.inFlight;
-        const raw = event.raw;
-        const validation = validatePollResponse(env, raw);
+        const { raw, validation } = responseValidation(env, event.raw);
         if (!validation.ok) {
           emitEvent({
             type: 'POLL.BAD_FRAME',
             id: env.id,
             role: validation.role,
             missing: validation.missing,
-            cmd: env.cmd,
+            part: validation.part,
+            cmd: validation.cmd != null ? validation.cmd : env.cmd,
             raw,
           });
           return;
         }
         forwardResp(raw, topicFor(env));
-        if (isAckable(env)) emitEvent({ type: 'CMD.ACKED', id: env.id, raw });
+        if (isAckable(env)) emitEvent({ type: 'CMD.ACKED', id: env.id, raw: event.raw });
       },
 
       failInFlight: ({ context }) => {
@@ -433,15 +496,21 @@ function createElmoTransport(effects) {
               ],
             },
             on: {
-              'ELMO.RESP': {
-                target: 'dispatch',
-                actions: ['resetMiss', 'ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'],
-              },
+              // Multi-part: if the just-arrived part validated and more atomic commands remain,
+              // collect it and send the next; otherwise dispatch the (whole, reassembled) frame.
+              'ELMO.RESP': [
+                { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: ['resetMiss', 'collectPollPart'] },
+                { target: 'dispatch', actions: ['resetMiss', 'ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'] },
+              ],
               'ELMO.TIMEOUT': [
                 { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
                 { target: 'idle', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
               ],
             },
+          },
+          sendingNextPart: {
+            entry: 'sendInFlight',
+            always: 'awaiting',
           },
           dispatch: {
             entry: 'freeInFlight',

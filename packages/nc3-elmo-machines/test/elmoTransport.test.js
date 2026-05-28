@@ -9,9 +9,9 @@ const { LEAN_POLL } = require('../src/poll');
 
 // All actors created by the harness are stopped after the suite. The UDP machine recovers
 // from a timeout back to connected.idle (not a terminal fault), so an un-stopped actor would
-// loop on real `after` timers forever and keep the test process alive. The watchdog delays are
-// also set far beyond the suite runtime so no timer fires mid-run; the timeout path is exercised
-// via the injectable ELMO.TIMEOUT event instead.
+// loop on real `after` timers forever and keep the test process alive. Watchdog delays are
+// set far beyond the suite runtime so no real timer fires mid-run; the timeout path is
+// exercised via the injectable ELMO.TIMEOUT event instead.
 const createdActors = [];
 after(() => {
   for (const a of createdActors) {
@@ -46,33 +46,40 @@ function acked(calls) { return calls.emitEvent.filter((e) => e.type === 'CMD.ACK
 function failed(calls) { return calls.emitEvent.filter((e) => e.type === 'CMD.FAILED'); }
 function badPoll(calls) { return calls.emitEvent.filter((e) => e.type === 'POLL.BAD_FRAME'); }
 
-// UDP: one logical poll = one datagram = one reply. Each feed sends a SINGLE ELMO.RESP
-// whose raw payload carries the whole batched response (opts.raw overrides the default).
+// ELMO answers one datagram per parameter, so each logical poll feeds N atomic ELMO.RESP
+// events (one per requested field). The transport reassembles the parts into a single raw
+// frame for downstream.
 function feedDataPoll(h, opts = {}) {
-  const raw = opts.raw != null ? opts.raw : (opts.tm || 'TM;1;') + (opts.px || 'PX;2;') + (opts.vx || 'VX;0;');
-  h.actor.send({ type: 'ELMO.RESP', raw });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.tm || 'TM;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.px || 'PX;2;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.vx || 'VX;0;' });
 }
 
 function feedFastSeekPoll(h, opts = {}) {
-  const raw = opts.raw != null ? opts.raw : (opts.vx || 'VX;0;') + (opts.px || 'PX;2;');
-  h.actor.send({ type: 'ELMO.RESP', raw });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.vx || 'VX;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.px || 'PX;2;' });
 }
 
 function feedFastDataPoll(h, opts = {}) {
-  const raw = opts.raw != null ? opts.raw : (opts.vx || 'VX;0;') + (opts.px || 'PX;2;') + (opts.tm || 'TM;1;');
-  h.actor.send({ type: 'ELMO.RESP', raw });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.vx || 'VX;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.px || 'PX;2;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.tm || 'TM;1;' });
 }
 
 function feedStatePoll(h, opts = {}) {
-  const raw = opts.raw != null ? opts.raw : (opts.mo || 'MO;0;') + (opts.so || 'SO;0;') + (opts.sr || 'SR;100663616;');
-  h.actor.send({ type: 'ELMO.RESP', raw });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.mo || 'MO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.so || 'SO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.sr || 'SR;100663616;' });
 }
 
 function feedFullStatePoll(h, opts = {}) {
-  const raw = opts.raw != null ? opts.raw
-    : (opts.ms || 'MS;3;') + (opts.mo || 'MO;0;') + (opts.so || 'SO;0;') + (opts.sr || 'SR;100663616;')
-      + (opts.af || 'AF;0;') + (opts.ol1 || 'OL[1];1;') + (opts.ol2 || 'OL[2];1;');
-  h.actor.send({ type: 'ELMO.RESP', raw });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.ms || 'MS;3;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.mo || 'MO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.so || 'SO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.sr || 'SR;100663616;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.af || 'AF;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.ol1 || 'OL[1];1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.ol2 || 'OL[2];1;' });
 }
 
 // Drive to connected.awaiting with one command in flight.
@@ -138,7 +145,7 @@ test('request timeout fails the in-flight cmd and keeps the link up (no socket r
 });
 
 test('declares link offline after maxMisses consecutive reply timeouts', () => {
-  const h = makeHarness({ maxMisses: 2, startNow: 500 }); // lean poll only (no trailing state poll)
+  const h = makeHarness({ maxMisses: 2, startNow: 500 }); // lean poll only (one in-flight chain)
   h.actor.send({ type: 'CONNECT' });
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe' }); // connected.idle
 
@@ -154,7 +161,7 @@ test('declares link offline after maxMisses consecutive reply timeouts', () => {
 });
 
 test('offline recovers and resets miss count on CONNECT + probe reply', () => {
-  const h = makeHarness({ maxMisses: 1, startNow: 500 }); // lean poll only
+  const h = makeHarness({ maxMisses: 1, startNow: 500 });
   h.actor.send({ type: 'CONNECT' });
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
   h.actor.send({ type: 'POLL.TICK' });
@@ -176,7 +183,7 @@ test('connect enqueues one full-state initialization poll when enabled', () => {
   h.actor.send({ type: 'ELMO.RESP', raw: 'TM;1;' });
   assert.deepEqual(h.value(), { connected: 'awaiting' });
   assert.equal(h.ctx().inFlight.pollRole, 'full_state');
-  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS;MO;SO;SR;AF;OL[1];OL[2];');
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS');
 
   h.calls.forwardResp.length = 0;
   feedFullStatePoll(h);
@@ -194,14 +201,14 @@ test('POLL.TICK enqueues a lean poll (no ack on poll response)', () => {
   h.actor.send({ type: 'POLL.TICK' });
   assert.deepEqual(h.value(), { connected: 'awaiting' });
   assert.equal(h.ctx().inFlight.kind, 'poll');
-  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'TM;PX;VX;'); // one batched datagram
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'TM'); // first atomic command
 
   h.calls.forwardResp.length = 0;
   feedDataPoll(h);
   assert.deepEqual(h.value(), { connected: 'idle' });
   assert.equal(acked(h.calls).length, 0); // polls are not acked
   assert.equal(h.calls.forwardResp[0].topic, 'poll_data'); // restored logical topic
-  assert.equal(h.calls.forwardResp[0].raw, 'TM;1;PX;2;VX;0;');
+  assert.equal(h.calls.forwardResp[0].raw, 'TM;1;PX;2;VX;0;'); // reassembled from atomic parts
 });
 
 test('POLL.TICK enqueues an extended poll past statePeriod and records lastExtendedAt', () => {
@@ -213,12 +220,13 @@ test('POLL.TICK enqueues an extended poll past statePeriod and records lastExten
   assert.equal(h.ctx().inFlight.pollRole, 'data');
   assert.equal(h.ctx().queue.length, 1);
   assert.equal(h.ctx().queue[0].pollRole, 'state');
-  assert.equal(h.ctx().queue[0].cmd, 'MO;SO;SR;');
+  assert.deepEqual(h.ctx().queue[0].cmds, ['MO', 'SO', 'SR']);
   assert.equal(h.ctx().lastExtendedAt, 2000);
 
   feedDataPoll(h);
+  // After data poll completes, the state poll's first atomic command is sent.
   const cmd = h.calls.sendCmd[h.calls.sendCmd.length - 1];
-  assert.equal(cmd, 'MO;SO;SR;');
+  assert.equal(cmd, 'MO');
 });
 
 test('fast raw polling uses VX/PX seek poll and suppresses periodic state poll', () => {
@@ -236,11 +244,11 @@ test('fast raw polling uses VX/PX seek poll and suppresses periodic state poll',
 
   h.actor.send({ type: 'POLL.TICK' });
   assert.equal(h.ctx().inFlight.pollRole, 'fast_seek');
-  assert.equal(h.ctx().inFlight.cmd, 'VX;PX;');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['VX', 'PX']);
   assert.equal(h.ctx().inFlight.priority, 2.5);
   assert.equal(h.ctx().lastFastPollStartedAt, 2000);
   assert.equal(h.ctx().queue.length, 0); // no MO/SO/SR while fast raw poll is healthy
-  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'VX;PX;');
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'VX');
 
   h.calls.forwardResp.length = 0;
   feedFastSeekPoll(h, { vx: 'VX;9;', px: 'PX;-10;' });
@@ -273,14 +281,14 @@ test('fast raw polling switches to VX/PX/TM poll_data after stable speed', () =>
   h.calls.forwardResp.length = 0;
   h.actor.send({ type: 'POLL.TICK' });
   assert.equal(h.ctx().inFlight.pollRole, 'fast_data');
-  assert.equal(h.ctx().inFlight.cmd, 'VX;PX;TM;');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['VX', 'PX', 'TM']);
   feedFastDataPoll(h, { vx: 'VX;9;', px: 'PX;3;', tm: 'TM;100;' });
   assert.equal(h.calls.forwardResp.length, 1);
   assert.equal(h.calls.forwardResp[0].topic, 'poll_data');
   assert.equal(h.calls.forwardResp[0].raw, 'VX;9;PX;3;TM;100;');
 });
 
-test('invalid fast poll emits bad frame and schedules full-state diagnostics', () => {
+test('invalid fast poll part emits bad frame and schedules full-state diagnostics', () => {
   const h = makeHarness({
     startNow: 2000,
     pollConfig: {
@@ -295,12 +303,14 @@ test('invalid fast poll emits bad frame and schedules full-state diagnostics', (
   h.actor.send({ type: 'POLL.TICK' });
   assert.equal(h.ctx().inFlight.pollRole, 'fast_seek');
 
-  h.actor.send({ type: 'ELMO.RESP', raw: 'PX;2;' }); // missing VX
+  // We asked for VX (part 0), got a stale/cross-attributed PX datagram instead.
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PX;2;' });
   assert.equal(badPoll(h.calls).length, 1);
   assert.equal(badPoll(h.calls)[0].role, 'fast_seek');
   assert.deepEqual(badPoll(h.calls)[0].missing, ['vx']);
+  assert.equal(badPoll(h.calls)[0].cmd, 'VX');
   assert.equal(h.ctx().inFlight.pollRole, 'full_state');
-  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS;MO;SO;SR;AF;OL[1];OL[2];');
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS');
 });
 
 test('poll dedup: only one poll in flight/queue at a time', () => {
@@ -322,7 +332,8 @@ test('ingests VX/OL[1] from a poll response (drives dynamic poll rate)', () => {
   h.actor.send({ type: 'POLL.TICK' });                  // lean poll in flight (awaiting)
   assert.equal(h.ctx().inFlight.kind, 'poll');
 
-  // High speed (low range, 180 deg/s) response -> context updates -> faster poll.
+  // High speed (low range, 180 deg/s) — the VX part also carries OL[1] and MS scalars; the
+  // reassembled raw includes everything and ingestResp picks it up.
   feedDataPoll(h, { vx: 'VX;-3276800;OL[1]=1;MS=0;' });
   const c = h.ctx();
   assert.equal(c.vx, -3276800);
@@ -339,11 +350,12 @@ test('drops invalid data poll frames and emits POLL.BAD_FRAME', () => {
   h.actor.send({ type: 'POLL.TICK' });
   assert.equal(h.ctx().inFlight.pollRole, 'data');
 
-  h.actor.send({ type: 'ELMO.RESP', raw: 'PX;2;VX;9.000000e+00;' }); // missing TM
+  // First atomic part is 'TM'; reply with a stale fragment missing TM.
+  h.actor.send({ type: 'ELMO.RESP', raw: 'VX;9.000000e+00;\r;' });
   assert.equal(h.calls.forwardResp.length, 0);
   assert.equal(badPoll(h.calls).length, 1);
   assert.deepEqual(badPoll(h.calls)[0].missing, ['tm']);
-  assert.equal(badPoll(h.calls)[0].cmd, 'TM;PX;VX;');
+  assert.equal(badPoll(h.calls)[0].cmd, 'TM');
   assert.equal(h.ctx().tm, undefined);
 });
 
@@ -375,7 +387,7 @@ test('ingests observed ELMO CR-separated scalar response and returns to measured
 
   h.actor.send({ type: 'ELMO.RESP', raw: 'ok' }); // command ack -> dispatch -> poll can run
   h.actor.send({ type: 'POLL.TICK' });
-  feedDataPoll(h, { raw: 'TM\r1;PX\r2;VX\r0.000000e+00;OL[1]\r1;MS\r0;SO\r1;SR\r105120016;' });
+  feedDataPoll(h, { vx: 'VX\r0.000000e+00;OL[1]\r1;MS\r0;SO\r1;SR\r105120016;' });
 
   const c = h.ctx();
   assert.equal(c.vx, 0);
@@ -403,8 +415,8 @@ test('MO command ack enqueues a minimal MO/SO/SR confirmation poll', () => {
   h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
 
   assert.equal(h.ctx().inFlight.pollRole, 'state');
-  assert.equal(h.ctx().inFlight.cmd, 'MO;SO;SR;');
-  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MO;SO;SR;');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['MO', 'SO', 'SR']);
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MO');
 
   h.calls.forwardResp.length = 0;
   feedStatePoll(h, { mo: 'MO;1;', so: 'SO;1;' });
@@ -419,8 +431,8 @@ test('OL command ack enqueues full-state confirmation poll', () => {
   h.actor.send({ type: 'ELMO.RESP', raw: 'OL[2];0;' });
 
   assert.equal(h.ctx().inFlight.pollRole, 'full_state');
-  assert.equal(h.ctx().inFlight.cmd, 'MS;MO;SO;SR;AF;OL[1];OL[2];');
-  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS;MO;SO;SR;AF;OL[1];OL[2];');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']);
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS');
 });
 
 test('startElmoTransport returns a started actor in offline with given resolution', () => {
@@ -435,16 +447,16 @@ test('a cmd preempts a queued poll (priority)', () => {
   h.actor.send({ type: 'CONNECT' });
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe' }); // connected.idle
 
-  // First poll goes in flight; queue a poll-then-cmd while awaiting.
-  h.actor.send({ type: 'POLL.TICK' }); // poll in flight
+  h.actor.send({ type: 'POLL.TICK' }); // poll in flight (awaiting TM part)
   h.actor.send({ type: 'UI.CMD', envelope: { id: 'cmdX', kind: 'cmd', cmd: 'ST', meta: { topic: 'drive_stop' } } });
   // queue currently: [cmdX] (poll is in flight, deduped)
   assert.equal(h.ctx().queue[0].id, 'cmdX');
 
-  h.actor.send({ type: 'ELMO.RESP', raw: 'poll-data' }); // dispatch poll -> idle -> send cmdX
+  h.actor.send({ type: 'ELMO.RESP', raw: 'poll-data' }); // first atomic reply missing TM -> dispatch (BAD_FRAME) -> idle -> send cmdX
   assert.equal(h.ctx().inFlight.id, 'cmdX');
 });
 
-test('LEAN_POLL is the batched data datagram', () => {
+test('LEAN_POLL constant lists the data fields', () => {
+  // Vestigial display constant; the transport sends data poll as atomic TM, PX, VX commands.
   assert.equal(LEAN_POLL, 'TM;PX;VX;');
 });
