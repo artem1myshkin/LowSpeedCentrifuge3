@@ -61,13 +61,11 @@
             "4b24d34e30e4c5d6",
             "6e9db2de251f6051",
             "d0936a4883287a3e",
-            "5c8966b2f436b0f2",
             "919ad73d0499e421",
             "125b1570b6b709d9",
             "49281f13d2e68275",
             "07ff7bd3ca490729",
             "d7ecfaf6acff715e",
-            "fdc5d5de98540ce9",
             "339655c97f72e69a",
             "2486f0695dedf47c",
             "a2ba28ea727b868d",
@@ -76,21 +74,15 @@
             "84983c310254256f",
             "6bf3697a49fd5702",
             "89ec4695ea57a83c",
-            "7ab17041fc0bd5ac",
-            "b7be05895e0f3b73",
-            "321c93180471316c",
             "3fedb9b025f94afd",
-            "844db4a049922251",
-            "4f1ee326853e85a7",
             "2af4e4dddc079d5e",
-            "8fc155a62ec95715",
-            "29b5ecc0aaf5d6c5",
             "bep_mqtt_status_in",
             "bep_status_rename",
             "bc6eff304fcf6a8e",
             "e0755f9473bbaf96",
             "15dd1b4f57f9cb3d",
-            "d052743e2b95be4c"
+            "d052743e2b95be4c",
+            "newui-tilt-elmo-cmd-out"
         ],
         "x": 1634,
         "y": 199,
@@ -109,17 +101,11 @@
         },
         "nodes": [
             "f0893e7d43d9e2b8",
-            "a02e17e0f1f93afd",
             "2c823494d7f38024",
             "a4c3fbb3cecc89ec",
-            "4fcf13177fcee3a2",
             "094feefc78513059",
-            "4b5e4232716557fc",
-            "3da48e86283614c6",
-            "90d7f1a1c7f37862",
             "51e12555bda80a27",
             "fd823fb67f7b2e69",
-            "8a57cd45b0fd3994",
             "7242130536670b24",
             "57266dd52d61d4de",
             "467bb4e422d6bdda",
@@ -128,7 +114,6 @@
             "77d591911b63dd77",
             "edca78e0b49029e4",
             "e62c2f4510a8af0b",
-            "61d2121e662421a5",
             "7ea17c20dc6a19cc",
             "01ebe906f9df9688",
             "defeba9f1c3e6b14",
@@ -139,13 +124,21 @@
             "b00b50ceb5e7071a",
             "9a9c7b519313301e",
             "5e1ab91d73c3505b",
-            "6cebf01333cb8e85",
-            "4873c06413320495"
+            "scenario-manager",
+            "bun-elmo-cmd-out",
+            "scenario-protocol-out",
+            "scenario-ui-out",
+            "scenario-file-read",
+            "scenario-elmo-events-in",
+            "96ec2f9c8b972482",
+            "b8a80758dd566f2c",
+            "9eb053a6223523bf",
+            "d0b617334d6037e0"
         ],
-        "x": 34,
+        "x": -6,
         "y": 39,
-        "w": 1412,
-        "h": 742
+        "w": 1442,
+        "h": 542
     },
     {
         "id": "65aa9b618869d533",
@@ -862,8 +855,7 @@
         "y": 420,
         "wires": [
             [
-                "30120c1bddd81915",
-                "321c93180471316c"
+                "30120c1bddd81915"
             ]
         ]
     },
@@ -935,8 +927,7 @@
         "y": 340,
         "wires": [
             [
-                "0816b3475d0f51fa",
-                "b7be05895e0f3b73"
+                "0816b3475d0f51fa"
             ]
         ]
     },
@@ -980,8 +971,7 @@
         "y": 420,
         "wires": [
             [
-                "e7b4f5538231f452",
-                "7ab17041fc0bd5ac"
+                "e7b4f5538231f452"
             ]
         ]
     },
@@ -1021,8 +1011,8 @@
         "correl": "",
         "expiry": "",
         "broker": "ed4f1a176f6d33ed",
-        "x": 2770,
-        "y": 400,
+        "x": 2710,
+        "y": 380,
         "wires": []
     },
     {
@@ -1091,12 +1081,10 @@
         "y": 420,
         "wires": [
             [
-                "abfe814380848f11",
-                "844db4a049922251"
+                "abfe814380848f11"
             ],
             [
-                "96ae7b57902c3524",
-                "844db4a049922251"
+                "96ae7b57902c3524"
             ],
             [],
             [
@@ -1130,8 +1118,8 @@
             "d0936a4883287a3e",
             "01ebe906f9df9688"
         ],
-        "x": 2065,
-        "y": 480,
+        "x": 2095,
+        "y": 500,
         "wires": [
             [
                 "6e9db2de251f6051"
@@ -1179,12 +1167,11 @@
         "from": "",
         "to": "",
         "reg": false,
-        "x": 2130,
-        "y": 460,
+        "x": 2170,
+        "y": 500,
         "wires": [
             [
-                "2ad82a0f02bba2ad",
-                "5c8966b2f436b0f2"
+                "2ad82a0f02bba2ad"
             ]
         ]
     },
@@ -1198,26 +1185,8 @@
         "links": [
             "4b24d34e30e4c5d6"
         ],
-        "x": 2725,
-        "y": 440,
-        "wires": []
-    },
-    {
-        "id": "5c8966b2f436b0f2",
-        "type": "debug",
-        "z": "5bbcbebf6ff74a86",
-        "g": "52568354c3badd48",
-        "name": "debug 6",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "true",
-        "targetType": "full",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 2260,
-        "y": 500,
+        "x": 2635,
+        "y": 420,
         "wires": []
     },
     {
@@ -1243,7 +1212,6 @@
         "y": 820,
         "wires": [
             [
-                "fdc5d5de98540ce9",
                 "bc6eff304fcf6a8e"
             ]
         ]
@@ -1312,7 +1280,7 @@
             "49281f13d2e68275"
         ],
         "x": 3295,
-        "y": 780,
+        "y": 800,
         "wires": []
     },
     {
@@ -1331,24 +1299,7 @@
         "expiry": "",
         "broker": "ed4f1a176f6d33ed",
         "x": 3340,
-        "y": 740,
-        "wires": []
-    },
-    {
-        "id": "fdc5d5de98540ce9",
-        "type": "debug",
-        "z": "5bbcbebf6ff74a86",
-        "g": "52568354c3badd48",
-        "name": "debug 7",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "false",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 3200,
-        "y": 680,
+        "y": 760,
         "wires": []
     },
     {
@@ -1524,7 +1475,8 @@
         "wires": [
             [
                 "6bf3697a49fd5702",
-                "89ec4695ea57a83c"
+                "89ec4695ea57a83c",
+                "919ad73d0499e421"
             ]
         ]
     },
@@ -1532,6 +1484,7 @@
         "id": "6bf3697a49fd5702",
         "type": "function",
         "z": "5bbcbebf6ff74a86",
+        "d": true,
         "g": "52568354c3badd48",
         "name": "BEP Calibration",
         "func": "var ch1_in = global.get(\"v1_gap_inp\"),\n    ch1_out = global.get(\"v1_gap_out\"),\n    ch2_in = global.get(\"v2_gap_inp\"),\n    ch2_out = global.get(\"v2_gap_out\"),\n    ch3_in = global.get(\"v3_gap_inp\"),\n    ch3_out = global.get(\"v3_gap_out\"),\n    ch4_in = global.get(\"v4_gap_inp\"),\n    ch4_out = global.get(\"v4_gap_out\"),\n    ch5_in = global.get(\"v5_gap_inp\"),\n    ch5_out = global.get(\"v5_gap_out\"),\n    calib_use = global.get(\"use_calib\");\n\nmsg.calib_use = calib_use;\n\nif (calib_use == 0) \n{\n    msg.ignore = 1;\n\n    if (msg.topic == \"Channel 1\")      return [msg, msg, 0, 0, 0, 0];\n    else if (msg.topic == \"Channel 2\") return [msg, 0, msg, 0, 0, 0];\n    else if (msg.topic == \"Channel 3\") return [msg, 0, 0, msg, 0, 0];\n    else if (msg.topic == \"Channel 4\") return [msg, 0, 0, 0, msg, 0];\n    else if (msg.topic == \"Channel 5\") return [msg, 0, 0, 0, 0, msg];\n    else return [0, 0, 0, 0, 0, 0];\n\n}\n\n\nvar ch1_diff = ch1_in.payload - ch1_out.payload,\n    ch2_diff = ch2_in.payload - ch2_out.payload,\n    ch3_diff = ch3_in.payload - ch3_out.payload,\n    ch4_diff = ch4_in.payload - ch4_out.payload,\n    ch5_diff = ch5_in.payload - ch5_out.payload,\n    k = 0;\n\nmsg.k = k;\n\n\nif (msg.topic == \"Channel 1\") \n{\n    msg.payload += ch1_diff;k=1;\n    return [msg, msg, 0,0,0,0];\n}\nelse if (msg.topic == \"Channel 2\") \n{ \n    msg.payload += ch2_diff; k = 2; \n    return [msg, 0, msg, 0, 0, 0];\n}\nelse if (msg.topic == \"Channel 3\") \n{ \n    msg.payload += ch3_diff; k = 3; \n    return [msg, 0, 0, msg, 0, 0];\n}\nelse if (msg.topic == \"Channel 4\") \n{ \n    msg.payload += ch4_diff; k = 4; \n    return [msg, 0, 0, 0, msg, 0];\n}\nelse if (msg.topic == \"Channel 5\") \n{ \n    msg.payload += ch5_diff; k = 5; \n    return [msg, 0, 0, 0, 0, msg];\n}\n\n\n\n",
@@ -1541,8 +1494,8 @@
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 2820,
-        "y": 820,
+        "x": 2840,
+        "y": 860,
         "wires": [
             [
                 "919ad73d0499e421"
@@ -1563,26 +1516,8 @@
         "targetType": "full",
         "statusVal": "",
         "statusType": "auto",
-        "x": 2800,
-        "y": 700,
-        "wires": []
-    },
-    {
-        "id": "7ab17041fc0bd5ac",
-        "type": "debug",
-        "z": "5bbcbebf6ff74a86",
-        "g": "52568354c3badd48",
-        "name": "debug 17",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "true",
-        "targetType": "full",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 2100,
-        "y": 520,
+        "x": 2820,
+        "y": 760,
         "wires": []
     },
     {
@@ -1710,41 +1645,6 @@
         "wires": []
     },
     {
-        "id": "b7be05895e0f3b73",
-        "type": "debug",
-        "z": "5bbcbebf6ff74a86",
-        "g": "52568354c3badd48",
-        "name": "debug 22",
-        "active": false,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "true",
-        "targetType": "full",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 2080,
-        "y": 280,
-        "wires": []
-    },
-    {
-        "id": "321c93180471316c",
-        "type": "debug",
-        "z": "5bbcbebf6ff74a86",
-        "g": "52568354c3badd48",
-        "name": "debug 27",
-        "active": false,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "false",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 2500,
-        "y": 280,
-        "wires": []
-    },
-    {
         "id": "3fedb9b025f94afd",
         "type": "change",
         "z": "5bbcbebf6ff74a86",
@@ -1771,40 +1671,6 @@
         ]
     },
     {
-        "id": "844db4a049922251",
-        "type": "debug",
-        "z": "5bbcbebf6ff74a86",
-        "g": "52568354c3badd48",
-        "name": "debug 28",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "false",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 2880,
-        "y": 380,
-        "wires": []
-    },
-    {
-        "id": "4f1ee326853e85a7",
-        "type": "debug",
-        "z": "5bbcbebf6ff74a86",
-        "g": "52568354c3badd48",
-        "name": "debug 19",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "false",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 3040,
-        "y": 500,
-        "wires": []
-    },
-    {
         "id": "2af4e4dddc079d5e",
         "type": "function",
         "z": "5bbcbebf6ff74a86",
@@ -1817,68 +1683,11 @@
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 2650,
+        "x": 2670,
         "y": 520,
         "wires": [
             [
                 "newui-tilt-elmo-cmd-out"
-            ]
-        ]
-    },
-    {
-        "id": "8fc155a62ec95715",
-        "type": "tcp request",
-        "z": "5bbcbebf6ff74a86",
-        "d": true,
-        "g": "52568354c3badd48",
-        "name": "legacy TCP tilt request (disabled)",
-        "server": "192.168.1.2",
-        "port": "2000",
-        "out": "time",
-        "ret": "string",
-        "splitc": "100",
-        "newline": "",
-        "trim": false,
-        "tls": "",
-        "x": 2840,
-        "y": 520,
-        "wires": [
-            [
-                "4e889732f239b9ce",
-                "4f1ee326853e85a7"
-            ]
-        ]
-    },
-    {
-        "id": "4e889732f239b9ce",
-        "type": "link out",
-        "z": "5bbcbebf6ff74a86",
-        "name": "link out 4",
-        "mode": "link",
-        "links": [
-            "7ea17c20dc6a19cc"
-        ],
-        "x": 2958.571533203125,
-        "y": 578.5714111328125,
-        "wires": []
-    },
-    {
-        "id": "29b5ecc0aaf5d6c5",
-        "type": "inject",
-        "z": "5bbcbebf6ff74a86",
-        "g": "52568354c3badd48",
-        "name": "",
-        "props": [],
-        "repeat": "",
-        "crontab": "",
-        "once": false,
-        "onceDelay": 0.1,
-        "topic": "",
-        "x": 1840,
-        "y": 500,
-        "wires": [
-            [
-                "6e9db2de251f6051"
             ]
         ]
     },
@@ -2254,7 +2063,7 @@
         "func": "// Пересылаем JSON конфига в MQTT bep/write-config\nmsg.topic = 'bep/write-config';\nreturn msg;",
         "outputs": 1,
         "x": 3360,
-        "y": 880,
+        "y": 860,
         "wires": [
             [
                 "15dd1b4f57f9cb3d"
@@ -2272,7 +2081,7 @@
         "retain": "",
         "broker": "ed4f1a176f6d33ed",
         "x": 3540,
-        "y": 880,
+        "y": 860,
         "wires": []
     },
     {
@@ -2405,8 +2214,8 @@
         "links": [
             "defeba9f1c3e6b14"
         ],
-        "x": 2255,
-        "y": 460,
+        "x": 2205,
+        "y": 540,
         "wires": [
             [
                 "2ad82a0f02bba2ad"
@@ -2505,6 +2314,20 @@
         "wires": []
     },
     {
+        "id": "newui-tilt-elmo-cmd-out",
+        "type": "link out",
+        "z": "5bbcbebf6ff74a86",
+        "g": "52568354c3badd48",
+        "name": "ELMO tilt command bus out",
+        "mode": "link",
+        "links": [
+            "elmoxs-link-cmd-in"
+        ],
+        "x": 2755,
+        "y": 520,
+        "wires": []
+    },
+    {
         "id": "f0893e7d43d9e2b8",
         "type": "ui-template",
         "z": "ac37a9949da4d9d6",
@@ -2528,84 +2351,8 @@
         "wires": [
             [
                 "a4c3fbb3cecc89ec",
-                "2bf42c6651257b16",
-                "scenario-manager"
+                "2bf42c6651257b16"
             ]
-        ]
-    },
-    {
-        "id": "a02e17e0f1f93afd",
-        "type": "change",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "init params ",
-        "rules": [
-            {
-                "t": "set",
-                "p": "language",
-                "pt": "msg",
-                "to": "settings.general.language",
-                "tot": "global"
-            },
-            {
-                "t": "set",
-                "p": "topic",
-                "pt": "msg",
-                "to": "init",
-                "tot": "str"
-            },
-            {
-                "t": "set",
-                "p": "abs_pos_set",
-                "pt": "msg",
-                "to": "abs_pos_set",
-                "tot": "global"
-            },
-            {
-                "t": "set",
-                "p": "rel_pos_set",
-                "pt": "msg",
-                "to": "rel_pos_set",
-                "tot": "global"
-            },
-            {
-                "t": "set",
-                "p": "vel_set",
-                "pt": "msg",
-                "to": "vel_set",
-                "tot": "global"
-            },
-            {
-                "t": "set",
-                "p": "acc_set",
-                "pt": "msg",
-                "to": "acc_set",
-                "tot": "global"
-            },
-            {
-                "t": "set",
-                "p": "dec_set",
-                "pt": "msg",
-                "to": "dec_set",
-                "tot": "global"
-            },
-            {
-                "t": "set",
-                "p": "jerk_set",
-                "pt": "msg",
-                "to": "jerk_set",
-                "tot": "global"
-            }
-        ],
-        "action": "",
-        "property": "",
-        "from": "",
-        "to": "",
-        "reg": false,
-        "x": 910,
-        "y": 460,
-        "wires": [
-            []
         ]
     },
     {
@@ -2627,8 +2374,8 @@
         "resendOnRefresh": true,
         "templateScope": "local",
         "className": "",
-        "x": 1250,
-        "y": 740,
+        "x": 330,
+        "y": 480,
         "wires": [
             [
                 "facb56f63b2cc38b"
@@ -2657,30 +2404,6 @@
         ]
     },
     {
-        "id": "4fcf13177fcee3a2",
-        "type": "tcp request",
-        "z": "ac37a9949da4d9d6",
-        "d": true,
-        "g": "103337ebd466ad7c",
-        "name": "legacy TCP command request (disabled)",
-        "server": "192.168.1.2",
-        "port": "2000",
-        "out": "time",
-        "ret": "string",
-        "splitc": "100",
-        "newline": "",
-        "trim": false,
-        "tls": "",
-        "x": 810,
-        "y": 180,
-        "wires": [
-            [
-                "094feefc78513059",
-                "4873c06413320495"
-            ]
-        ]
-    },
-    {
         "id": "094feefc78513059",
         "type": "function",
         "z": "ac37a9949da4d9d6",
@@ -2699,79 +2422,7 @@
             [
                 "51e12555bda80a27",
                 "b00b50ceb5e7071a",
-                "scenario-manager"
-            ]
-        ]
-    },
-    {
-        "id": "4b5e4232716557fc",
-        "type": "inject",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "legacy poll_data (disabled)",
-        "props": [
-            {
-                "p": "topic",
-                "vt": "str"
-            }
-        ],
-        "repeat": "1",
-        "crontab": "",
-        "once": false,
-        "onceDelay": 0.1,
-        "topic": "poll_data",
-        "x": 190,
-        "y": 600,
-        "wires": [
-            [
-                "3da48e86283614c6"
-            ]
-        ],
-        "d": true
-    },
-    {
-        "id": "3da48e86283614c6",
-        "type": "function",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "legacy TCP poll builder (disabled)",
-        "func": "msg.payload = \"MS;TM;PX;TM;MO;SO;VX;OL[2];\"\n\nreturn msg;",
-        "outputs": 1,
-        "timeout": 0,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 360,
-        "y": 600,
-        "wires": [
-            [
-                "90d7f1a1c7f37862"
-            ]
-        ],
-        "d": true
-    },
-    {
-        "id": "90d7f1a1c7f37862",
-        "type": "tcp request",
-        "z": "ac37a9949da4d9d6",
-        "d": true,
-        "g": "103337ebd466ad7c",
-        "name": "legacy TCP poll request (disabled)",
-        "server": "192.168.1.2",
-        "port": "2000",
-        "out": "time",
-        "ret": "string",
-        "splitc": "100",
-        "newline": "",
-        "trim": false,
-        "tls": "",
-        "x": 560,
-        "y": 600,
-        "wires": [
-            [
-                "61d2121e662421a5",
-                "6cebf01333cb8e85"
+                "d0b617334d6037e0"
             ]
         ]
     },
@@ -2821,7 +2472,7 @@
         "checkall": "true",
         "repair": false,
         "outputs": 7,
-        "x": 1210,
+        "x": 1250,
         "y": 180,
         "wires": [
             [
@@ -2855,33 +2506,9 @@
         "links": [
             "7242130536670b24"
         ],
-        "x": 1375,
-        "y": 100,
+        "x": 1395,
+        "y": 80,
         "wires": []
-    },
-    {
-        "id": "8a57cd45b0fd3994",
-        "type": "switch",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "",
-        "property": "payload",
-        "propertyType": "msg",
-        "rules": [
-            {
-                "t": "eq",
-                "v": "reread",
-                "vt": "str"
-            }
-        ],
-        "checkall": "true",
-        "repair": false,
-        "outputs": 1,
-        "x": 910,
-        "y": 420,
-        "wires": [
-            []
-        ]
     },
     {
         "id": "7242130536670b24",
@@ -2920,8 +2547,8 @@
         "from": "",
         "to": "",
         "reg": false,
-        "x": 300,
-        "y": 400,
+        "x": 180,
+        "y": 340,
         "wires": [
             [
                 "facb56f63b2cc38b",
@@ -2939,8 +2566,8 @@
         "links": [
             "0f89ea5953ae3ec7"
         ],
-        "x": 1375,
-        "y": 140,
+        "x": 1395,
+        "y": 120,
         "wires": []
     },
     {
@@ -2952,8 +2579,8 @@
         "links": [
             "467bb4e422d6bdda"
         ],
-        "x": 145,
-        "y": 420,
+        "x": 35,
+        "y": 380,
         "wires": [
             [
                 "57266dd52d61d4de"
@@ -2970,8 +2597,8 @@
         "links": [
             "77d591911b63dd77"
         ],
-        "x": 1375,
-        "y": 180,
+        "x": 1395,
+        "y": 160,
         "wires": []
     },
     {
@@ -2983,8 +2610,8 @@
         "links": [
             "3e4123fc78364070"
         ],
-        "x": 145,
-        "y": 460,
+        "x": 35,
+        "y": 420,
         "wires": [
             [
                 "57266dd52d61d4de"
@@ -3000,8 +2627,8 @@
         "links": [
             "e62c2f4510a8af0b"
         ],
-        "x": 145,
-        "y": 500,
+        "x": 35,
+        "y": 460,
         "wires": [
             [
                 "57266dd52d61d4de"
@@ -3018,22 +2645,8 @@
         "links": [
             "edca78e0b49029e4"
         ],
-        "x": 1405,
-        "y": 220,
-        "wires": []
-    },
-    {
-        "id": "61d2121e662421a5",
-        "type": "link out",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "link out 11",
-        "mode": "link",
-        "links": [
-            "7ea17c20dc6a19cc"
-        ],
-        "x": 705,
-        "y": 600,
+        "x": 1395,
+        "y": 200,
         "wires": []
     },
     {
@@ -3047,8 +2660,8 @@
             "4e889732f239b9ce",
             "elmoxs-link-resp-out"
         ],
-        "x": 885,
-        "y": 240,
+        "x": 895,
+        "y": 180,
         "wires": [
             [
                 "094feefc78513059"
@@ -3065,8 +2678,8 @@
         "links": [
             "4b24d34e30e4c5d6"
         ],
-        "x": 1375,
-        "y": 260,
+        "x": 1395,
+        "y": 240,
         "wires": []
     },
     {
@@ -3097,8 +2710,8 @@
         "links": [
             "defeba9f1c3e6b14"
         ],
-        "x": 1145,
-        "y": 740,
+        "x": 225,
+        "y": 540,
         "wires": [
             [
                 "2c823494d7f38024"
@@ -3152,10 +2765,11 @@
         "name": "link out 13",
         "mode": "link",
         "links": [
-            "427b0128f7dae746"
+            "427b0128f7dae746",
+            "scenario-elmo-events-in"
         ],
-        "x": 505,
-        "y": 120,
+        "x": 515,
+        "y": 140,
         "wires": []
     },
     {
@@ -3171,8 +2785,8 @@
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 1030,
-        "y": 720,
+        "x": 1250,
+        "y": 260,
         "wires": []
     },
     {
@@ -3236,38 +2850,172 @@
         "wires": []
     },
     {
-        "id": "6cebf01333cb8e85",
-        "type": "debug",
+        "id": "bun-elmo-cmd-out",
+        "type": "link out",
         "z": "ac37a9949da4d9d6",
         "g": "103337ebd466ad7c",
-        "name": "debug 9",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "true",
-        "targetType": "full",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 760,
-        "y": 660,
+        "name": "ELMO command bus out",
+        "mode": "link",
+        "links": [
+            "elmoxs-link-cmd-in"
+        ],
+        "x": 715,
+        "y": 180,
         "wires": []
     },
     {
-        "id": "4873c06413320495",
-        "type": "debug",
+        "id": "scenario-manager",
+        "type": "function",
         "z": "ac37a9949da4d9d6",
         "g": "103337ebd466ad7c",
-        "name": "debug 10",
-        "active": true,
-        "tosidebar": true,
-        "console": false,
-        "tostatus": false,
-        "complete": "false",
-        "statusVal": "",
-        "statusType": "auto",
-        "x": 1000,
-        "y": 80,
+        "name": "ScenarioManager",
+        "func": "// ScenarioManager: runs angular-speed scenario files through the existing ELMO command path.\nvar topic = msg.topic;\nvar nc3 = global.get('nc3') || {};\nvar SCENARIO_FILES = ['high_resolution.scn', 'low_resolution.scn', 'range_switch.scn'];\n\nfunction nowMs() { return Date.now(); }\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction defaults() { return { enabled:false, status:'idle', file_name:'', file_path:'', step_index:0, step_count:0, target_speed_deg_per_sec:0, target_speed_ticks:0, current_speed_deg_per_sec:0, ready:false, ready_error_percent:null, hold_started_at:0, hold_ends_at:0, hold_remaining_sec:0, last_error:'', save_raw_data:false }; }\nfunction getState() {\n    var s = global.get('scenario_state');\n    var d = defaults();\n    if (s && typeof s === 'object') {\n        Object.keys(s).forEach(function(k) { d[k] = s[k]; });\n    }\n    if (!Array.isArray(d.steps)) d.steps = [];\n    return d;\n}\nfunction saveState(s) {\n    global.set('scenario_state', s);\n    return s;\n}\nfunction uiMsg(s) { return { topic: 'scenario_state', payload: clone(s) }; }\nfunction emit(s, commands, protocols, fileMsg) {\n    saveState(s);\n    return [commands && commands.length ? commands : null, protocols && protocols.length ? protocols : null, uiMsg(s), fileMsg || null];\n}\nfunction fail(s, text, commands, protocols) {\n    s.status = 'error';\n    s.enabled = false;\n    s.ready = false;\n    s.last_error = text || 'Scenario error';\n    return emit(s, commands || [{ topic: 'drive_stop', payload: {} }], protocols || []);\n}\nfunction basename(filePath) {\n    var parts = String(filePath || '').split(/[\\\\\\/]/);\n    return parts.length ? parts[parts.length - 1] : '';\n}\nfunction resolveScenarioFile(fileName) {\n    var name = basename(fileName || SCENARIO_FILES[0]);\n    if (SCENARIO_FILES.indexOf(name) < 0) name = SCENARIO_FILES[0];\n    return { name: name, path: ['C:', 'NC3', 'scenarios', name].join('\\\\') };\n}\nfunction ticksPerRev(res) { return res === 'low' ? 6553600 : 262144000; }\nfunction speedFromPayload(d) {\n    if (!d || d.velocity === undefined) return null;\n    var res = d.resolution || global.get('current_range') || 'high';\n    var vx = Number(d.velocity);\n    if (!isFinite(vx)) return null;\n    return vx / ticksPerRev(res) * 360.0;\n}\nfunction stepAt(s) { return s.steps && s.steps[s.step_index]; }\nfunction protocolOpenMsg() { return { topic: 'open_protocol', payload: { scenario: true, save_raw_data: !!global.get('recording_save_raw_data') } }; }\nfunction startStep(s) {\n    var step = stepAt(s);\n    if (!step) {\n        s.enabled = false;\n        s.status = 'completed';\n        s.ready = false;\n        s.hold_remaining_sec = 0;\n        return emit(s, [{ topic: 'drive_stop', payload: {} }], []);\n    }\n\n    var commands = [];\n    var currentRange = global.get('current_range') || 'high';\n    if (step.resolution && step.resolution !== currentRange) {\n        commands.push({ topic: 'drive_stop', payload: {} });\n        commands.push({ topic: 'set_resolution', payload: { resolution: step.resolution } });\n        commands.push({ topic: 'driveInit', payload: { resolution: step.resolution } });\n    }\n    commands.push({ topic: 'set_jv', payload: { ticks_per_sec: step.speed_ticks } });\n\n    s.status = 'commanding';\n    s.target_speed_deg_per_sec = Number(step.speed_deg_per_sec) || 0;\n    s.target_speed_ticks = Number(step.speed_ticks) || 0;\n    s.ready = false;\n    s.ready_error_percent = null;\n    s.hold_started_at = 0;\n    s.hold_ends_at = 0;\n    s.hold_remaining_sec = 0;\n    s.ready_eval = { startedAt: nowMs() };\n    s.last_error = '';\n    return emit(s, commands, []);\n}\nfunction startHoldIfReady(s, evalState) {\n    var step = stepAt(s);\n    if (!step) return emit(s, [], []);\n    s.status = 'holding';\n    s.ready = true;\n    s.ready_error_percent = isFinite(evalState.errorPercent) ? evalState.errorPercent : null;\n    s.hold_started_at = nowMs();\n    s.hold_ends_at = s.hold_started_at + Math.round(Number(step.hold_sec) * 1000);\n    s.hold_remaining_sec = Math.ceil((s.hold_ends_at - s.hold_started_at) / 1000);\n    var protocols = [];\n    if (!global.get('protocol_open')) protocols.push(protocolOpenMsg());\n    protocols.push({\n        topic: 'start_recording',\n        payload: {\n            sp_ticks: step.speed_ticks,\n            duration_sec: step.hold_sec,\n            save_raw_data: !!s.save_raw_data\n        }\n    });\n    return emit(s, [], protocols);\n}\nfunction finishHoldOrContinue(s) {\n    var step = stepAt(s);\n    var protocols = [];\n    if (global.get('is_recording')) {\n        protocols.push({ topic: 'record_measurement', payload: { duration_sec: step && step.hold_sec, save_raw_data: !!s.save_raw_data } });\n    }\n    s.step_index += 1;\n    s.ready = false;\n    s.ready_error_percent = null;\n    s.hold_started_at = 0;\n    s.hold_ends_at = 0;\n    s.hold_remaining_sec = 0;\n    if (s.step_index >= s.step_count) {\n        s.enabled = false;\n        s.status = 'completed';\n        return emit(s, [{ topic: 'drive_stop', payload: {} }], protocols);\n    }\n    var next = startStep(s);\n    var cmds = next[0] || [];\n    var ui = next[2];\n    saveState(s);\n    return [cmds, protocols.length ? protocols : null, ui, null];\n}\n\nif (topic === 'scenario_start') {\n    var req = msg.payload && typeof msg.payload === 'object' ? msg.payload : {};\n    var file = resolveScenarioFile(req.file || req.file_name || req.scenario || msg.file_name);\n    var state = defaults();\n    state.enabled = true;\n    state.status = 'loading';\n    state.file_name = file.name;\n    state.file_path = file.path;\n    state.save_raw_data = !!req.save_raw_data;\n    state.started_at = nowMs();\n    state.last_error = '';\n    var protocols = [];\n    if (!global.get('protocol_open')) protocols.push(protocolOpenMsg());\n    return emit(state, [], protocols, { topic: 'scenario_file_loaded', filename: file.path, file_name: file.name });\n}\n\nif (topic === 'scenario_stop') {\n    var st = getState();\n    var stopProtocols = [];\n    if (global.get('is_recording')) stopProtocols.push({ topic: 'record_measurement', payload: { save_raw_data: !!st.save_raw_data } });\n    st.enabled = false;\n    st.status = 'stopped';\n    st.ready = false;\n    st.hold_remaining_sec = 0;\n    return emit(st, [{ topic: 'drive_stop', payload: {} }], stopProtocols);\n}\n\nif (topic === 'scenario_file_loaded') {\n    var loaded = getState();\n    if (!loaded.enabled || loaded.status !== 'loading') return null;\n    if (msg.error) return fail(loaded, String(msg.error));\n    if (typeof nc3.normalizeScenario !== 'function') return fail(loaded, 'nc3.normalizeScenario is not available');\n    try {\n        var normalized = nc3.normalizeScenario(String(msg.payload || ''), global.get('current_range') || 'high', global.get('settings') || {});\n        loaded.steps = normalized.steps || [];\n        loaded.step_count = loaded.steps.length;\n        loaded.step_index = 0;\n        loaded.meta = normalized.meta || {};\n        if (!loaded.step_count) return fail(loaded, 'Scenario contains no steps');\n        return startStep(loaded);\n    } catch (err) {\n        return fail(loaded, err.message || String(err));\n    }\n}\n\nif (topic === 'CMD.FAILED') {\n    var failed = getState();\n    if (!failed.enabled) return null;\n    var evt = msg.payload || {};\n    return fail(failed, 'ELMO command failed: ' + (evt.topic || evt.id || evt.reason || 'unknown'));\n}\n\nif (topic === 'CMD.ACKED') {\n    var ackState = getState();\n    if (!ackState.enabled || ackState.status !== 'commanding') return null;\n    var evtAck = msg.payload || {};\n    if (evtAck.topic === 'set_jv') {\n        ackState.status = 'waiting_ready';\n        ackState.ready_eval = { startedAt: nowMs() };\n        return emit(ackState, [], []);\n    }\n    return null;\n}\n\nif (topic === 'poll_data' || topic === 'set_jv' || topic === 'set_jp') {\n    var state = getState();\n    if (!state.enabled) return null;\n    var d = msg.payload && typeof msg.payload === 'object' ? msg.payload : {};\n    var measured = speedFromPayload(d);\n    if (measured !== null) state.current_speed_deg_per_sec = measured;\n\n    if (state.status === 'waiting_ready' && measured !== null) {\n        if (typeof nc3.evaluateSpeedReady !== 'function') return fail(state, 'nc3.evaluateSpeedReady is not available');\n        var evalState = nc3.evaluateSpeedReady(state.ready_eval, measured, state.target_speed_deg_per_sec, nowMs(), global.get('settings') || {});\n        state.ready_eval = evalState;\n        state.ready = !!evalState.ready;\n        state.ready_error_percent = isFinite(evalState.errorPercent) ? evalState.errorPercent : null;\n        if (evalState.timedOut) {\n            return fail(state, 'Speed reach timeout: target=' + state.target_speed_deg_per_sec + ' deg/s, measured=' + measured.toFixed(6) + ' deg/s');\n        }\n        if (evalState.ready) return startHoldIfReady(state, evalState);\n        return emit(state, [], []);\n    }\n\n    if (state.status === 'holding') {\n        var rem = Math.ceil((Number(state.hold_ends_at) - nowMs()) / 1000);\n        state.hold_remaining_sec = rem > 0 ? rem : 0;\n        if (nowMs() >= Number(state.hold_ends_at)) return finishHoldOrContinue(state);\n        return emit(state, [], []);\n    }\n}\n\nreturn null;",
+        "outputs": 4,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 890,
+        "y": 400,
+        "wires": [
+            [
+                "b8a80758dd566f2c"
+            ],
+            [
+                "scenario-protocol-out"
+            ],
+            [
+                "scenario-ui-out"
+            ],
+            [
+                "scenario-file-read"
+            ]
+        ]
+    },
+    {
+        "id": "scenario-file-read",
+        "type": "file in",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "Read scenario file",
+        "filename": "filename",
+        "filenameType": "msg",
+        "format": "utf8",
+        "chunk": false,
+        "sendError": true,
+        "encoding": "none",
+        "allProps": false,
+        "x": 1130,
+        "y": 460,
+        "wires": [
+            [
+                "96ec2f9c8b972482"
+            ]
+        ]
+    },
+    {
+        "id": "scenario-protocol-out",
+        "type": "link out",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "scenario -> protocol",
+        "mode": "link",
+        "links": [
+            "427b0128f7dae746"
+        ],
+        "x": 1055,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "scenario-ui-out",
+        "type": "link out",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "scenario -> speed ui",
+        "mode": "link",
+        "links": [
+            "5f65b6086231c61f"
+        ],
+        "x": 1055,
+        "y": 420,
+        "wires": []
+    },
+    {
+        "id": "scenario-elmo-events-in",
+        "type": "link in",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "xState events -> scenario",
+        "links": [
+            "elmoxs-link-events-out",
+            "2bf42c6651257b16",
+            "d0b617334d6037e0"
+        ],
+        "x": 765,
+        "y": 400,
+        "wires": [
+            [
+                "scenario-manager"
+            ]
+        ]
+    },
+    {
+        "id": "96ec2f9c8b972482",
+        "type": "link out",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "link out 5",
+        "mode": "link",
+        "links": [],
+        "x": 1255,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "b8a80758dd566f2c",
+        "type": "link out",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "link out 6",
+        "mode": "link",
+        "links": [
+            "9eb053a6223523bf"
+        ],
+        "x": 1055,
+        "y": 340,
+        "wires": []
+    },
+    {
+        "id": "9eb053a6223523bf",
+        "type": "link in",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "link in 10",
+        "links": [
+            "b8a80758dd566f2c"
+        ],
+        "x": 425,
+        "y": 220,
+        "wires": [
+            [
+                "a4c3fbb3cecc89ec"
+            ]
+        ]
+    },
+    {
+        "id": "d0b617334d6037e0",
+        "type": "link out",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "link out 11",
+        "mode": "link",
+        "links": [
+            "scenario-elmo-events-in"
+        ],
+        "x": 1205,
+        "y": 300,
         "wires": []
     },
     {
@@ -3546,8 +3294,8 @@
         "initialize": "// nc3-elmo-machines is exposed via functionGlobalContext in settings.js, NOT as a Function\n// external module; it is a local package, not on the npm registry. xstate stays internal to nc3.\nconst nc3 = global.get('nc3');\nif (!nc3 || typeof nc3.startElmoTransport !== 'function') {\n    node.error('global.nc3 not available. Add nc3 to functionGlobalContext in settings.js (see docs/xstate-elmo-status.md, \"How to test on the stand\").');\n    return;\n}\n\nfunction ensureCr(c) { const t = String(c == null ? '' : c); return t.endsWith('\\r') ? t : t + '\\r'; }\nfunction debugTransport(evt) { if (context.get('transportDebug') === true) node.warn(evt); }\nfunction finiteNumber(value, fallback) { const n = Number(value); return Number.isFinite(n) ? n : fallback; }\nfunction clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }\nfunction readPollConfigFromGlobals() {\n    const settings = global.get('settings') || {};\n    const advanced = settings.advanced || {};\n    return {\n        isRecording: !!global.get('is_recording'),\n        isRecordingRaw: !!global.get('is_recording_raw'),\n        rawDataEnabled: !!global.get('recording_save_raw_data'),\n        fastRawPollingEnabled: advanced.fastRawPollingEnabled !== false,\n        normalPollHz: 2,\n        fastRawPollHz: clamp(finiteNumber(advanced.rawDataPollHz, 30), 1, 30),\n        fastStableSamples: Math.round(clamp(finiteNumber(advanced.fastStableSamples, 3), 1, 50)),\n        fastStableToleranceTicks: Math.max(0, finiteNumber(advanced.fastStableToleranceTicks, 1000))\n    };\n}\nfunction syncPollConfig(actor, force) {\n    const cfg = context.get('pollConfigOverride') || readPollConfigFromGlobals();\n    const json = JSON.stringify(cfg);\n    if (force || context.get('pollConfigJson') !== json) {\n        actor.send({ type: 'POLL.CONFIG', config: cfg });\n        context.set('pollConfigJson', json);\n    }\n}\n\n// Default (in-memory) context store; the checkpoint is only a pre-first-poll UI hint.\nconst ckpt = context.get('elmo_checkpoint') || {};\nconst initialPollConfig = readPollConfigFromGlobals();\n\n// UDP transport: out0 -> udp out (one atomic command per datagram), out1 -> ResponseParser/\n// debug, out2 -> domain events. No socket reset (UDP is connectionless); replies come via udp in.\nconst actor = nc3.startElmoTransport({\n    sendCmd: function (cmd) { debugTransport({ tag: 'ELMO_TX', cmd: String(cmd == null ? '' : cmd) }); node.send([{ payload: ensureCr(cmd) }, null, null]); },\n    forwardResp: function (raw, topic) { node.send([null, { topic: topic || 'poll_data', payload: raw }, null]); },\n    emitEvent: function (evt) { node.send([null, null, { topic: evt.type, payload: evt }]); },\n    setStatus: function (st) { node.status(st); },\n    timeoutMs: 1000,\n    connectTimeoutMs: 2000,\n    reconnectMs: 1000,\n    maxMisses: 3,\n    statePeriodMs: 1000,\n    pollOptions: { normalPollHz: 2, minHz: 1, maxHz: 30, timerCompensationMs: 8 }\n}, { resolution: ckpt.resolution || 'high', pollConfig: initialPollConfig });\n\nlet lastRes = ckpt.resolution || null;\nactor.subscribe(function (snap) {\n    context.set('transport_state', snap.value);\n    const r = snap.context.resolution;\n    if (r && r !== lastRes) { context.set('elmo_checkpoint', { resolution: r }); lastRes = r; }\n});\n\ncontext.set('elmoActor', actor);\nsyncPollConfig(actor, true);\n\nconst pct = setInterval(function () {\n    const a = context.get('elmoActor');\n    if (a) syncPollConfig(a, false);\n}, 500);\ncontext.set('pollConfigTimer', pct);\n\n// Kick connect + self-clocked poll AFTER On Start completes.\nconst ct = setTimeout(function () {\n    const a = context.get('elmoActor');\n    if (a) a.send({ type: 'CONNECT' });\n}, 0);\ncontext.set('connectTimer', ct);",
         "finalize": "const actor = context.get('elmoActor');\nif (actor) actor.stop();\nconst ct = context.get('connectTimer');\nif (ct) clearTimeout(ct);\nconst pct = context.get('pollConfigTimer');\nif (pct) clearInterval(pct);",
         "libs": [],
-        "x": 470,
-        "y": 160,
+        "x": 880,
+        "y": 100,
         "wires": [
             [
                 "9eebec7a9fcbd4c5"
@@ -3582,8 +3330,8 @@
         "from": "",
         "to": "",
         "reg": false,
-        "x": 690,
-        "y": 300,
+        "x": 580,
+        "y": 240,
         "wires": [
             [
                 "elmoxs-transport"
@@ -3611,8 +3359,8 @@
         "topic": "manual",
         "payload": "VX",
         "payloadType": "str",
-        "x": 230,
-        "y": 160,
+        "x": 260,
+        "y": 100,
         "wires": [
             [
                 "elmoxs-transport"
@@ -3631,8 +3379,8 @@
         "targetType": "full",
         "statusVal": "",
         "statusType": "auto",
-        "x": 720,
-        "y": 360,
+        "x": 1140,
+        "y": 140,
         "wires": []
     },
     {
@@ -3647,8 +3395,8 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 730,
-        "y": 420,
+        "x": 1140,
+        "y": 180,
         "wires": []
     },
     {
@@ -3663,8 +3411,8 @@
         "initialize": "",
         "finalize": "",
         "libs": [],
-        "x": 970,
-        "y": 360,
+        "x": 1200,
+        "y": 100,
         "wires": [
             [
                 "elmoxs-dbg-rate"
@@ -3683,8 +3431,8 @@
         "targetType": "msg",
         "statusVal": "",
         "statusType": "auto",
-        "x": 1230,
-        "y": 360,
+        "x": 1420,
+        "y": 100,
         "wires": []
     },
     {
@@ -3737,8 +3485,8 @@
         "topic": "POLL.CONFIG",
         "payload": "{\"isRecording\":true,\"isRecordingRaw\":true,\"rawDataEnabled\":true,\"fastRawPollingEnabled\":true,\"fastRawPollHz\":1,\"fastStableSamples\":3,\"fastStableToleranceTicks\":1000}",
         "payloadType": "json",
-        "x": 210,
-        "y": 80,
+        "x": 240,
+        "y": 60,
         "wires": [
             [
                 "elmoxs-transport"
@@ -3766,8 +3514,8 @@
         "topic": "POLL.CONFIG",
         "payload": "{\"isRecording\":true,\"isRecordingRaw\":true,\"rawDataEnabled\":true,\"fastRawPollingEnabled\":true,\"fastRawPollHz\":10,\"fastStableSamples\":3,\"fastStableToleranceTicks\":1000}",
         "payloadType": "json",
-        "x": 210,
-        "y": 120,
+        "x": 270,
+        "y": 80,
         "wires": [
             [
                 "elmoxs-transport"
@@ -3795,8 +3543,8 @@
         "topic": "POLL.CONFIG",
         "payload": "{\"isRecording\":true,\"isRecordingRaw\":true,\"rawDataEnabled\":true,\"fastRawPollingEnabled\":true,\"fastRawPollHz\":30,\"fastStableSamples\":3,\"fastStableToleranceTicks\":1000}",
         "payloadType": "json",
-        "x": 210,
-        "y": 200,
+        "x": 310,
+        "y": 120,
         "wires": [
             [
                 "elmoxs-transport"
@@ -3824,8 +3572,8 @@
         "topic": "POLL.CONFIG",
         "payload": "{\"clearOverride\":true}",
         "payloadType": "json",
-        "x": 210,
-        "y": 240,
+        "x": 330,
+        "y": 140,
         "wires": [
             [
                 "elmoxs-transport"
@@ -3848,8 +3596,8 @@
         "once": false,
         "onceDelay": 0.1,
         "topic": "POLL.TICK",
-        "x": 230,
-        "y": 280,
+        "x": 310,
+        "y": 160,
         "wires": [
             [
                 "elmoxs-transport"
@@ -3872,8 +3620,8 @@
         "once": false,
         "onceDelay": 0.1,
         "topic": "POLL.FULL_STATE",
-        "x": 230,
-        "y": 320,
+        "x": 350,
+        "y": 180,
         "wires": [
             [
                 "elmoxs-transport"
@@ -3892,8 +3640,8 @@
         "outport": "5005",
         "base64": false,
         "multicast": "false",
-        "x": 680,
-        "y": 100,
+        "x": 1140,
+        "y": 60,
         "wires": []
     },
     {
@@ -3907,39 +3655,13 @@
         "multicast": "false",
         "group": "",
         "datatype": "utf8",
-        "x": 500,
-        "y": 300,
+        "x": 420,
+        "y": 240,
         "wires": [
             [
                 "elmoxs-udp-rx"
             ]
         ]
-    },
-    {
-        "id": "bun-elmo-cmd-out",
-        "type": "link out",
-        "z": "ac37a9949da4d9d6",
-        "name": "ELMO command bus out",
-        "mode": "link",
-        "links": [
-            "elmoxs-link-cmd-in"
-        ],
-        "x": 810,
-        "y": 180,
-        "wires": []
-    },
-    {
-        "id": "newui-tilt-elmo-cmd-out",
-        "type": "link out",
-        "z": "5bbcbebf6ff74a86",
-        "name": "ELMO tilt command bus out",
-        "mode": "link",
-        "links": [
-            "elmoxs-link-cmd-in"
-        ],
-        "x": 2850,
-        "y": 520,
-        "wires": []
     },
     {
         "id": "elmoxs-link-cmd-in",
@@ -3950,8 +3672,8 @@
             "bun-elmo-cmd-out",
             "newui-tilt-elmo-cmd-out"
         ],
-        "x": 210,
-        "y": 380,
+        "x": 645,
+        "y": 200,
         "wires": [
             [
                 "elmoxs-transport"
@@ -3967,8 +3689,8 @@
         "links": [
             "7ea17c20dc6a19cc"
         ],
-        "x": 735,
-        "y": 220,
+        "x": 1055,
+        "y": 100,
         "wires": []
     },
     {
@@ -3980,99 +3702,8 @@
         "links": [
             "scenario-elmo-events-in"
         ],
-        "x": 735,
-        "y": 460,
+        "x": 1055,
+        "y": 220,
         "wires": []
-    },
-    {
-        "id": "scenario-manager",
-        "type": "function",
-        "z": "ac37a9949da4d9d6",
-        "name": "ScenarioManager",
-        "func": "// ScenarioManager: runs angular-speed scenario files through the existing ELMO command path.\nvar topic = msg.topic;\nvar nc3 = global.get('nc3') || {};\nvar SCENARIO_FILES = ['high_resolution.scn', 'low_resolution.scn', 'range_switch.scn'];\n\nfunction nowMs() { return Date.now(); }\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction defaults() { return { enabled:false, status:'idle', file_name:'', file_path:'', step_index:0, step_count:0, target_speed_deg_per_sec:0, target_speed_ticks:0, current_speed_deg_per_sec:0, ready:false, ready_error_percent:null, hold_started_at:0, hold_ends_at:0, hold_remaining_sec:0, last_error:'', save_raw_data:false }; }\nfunction getState() {\n    var s = global.get('scenario_state');\n    var d = defaults();\n    if (s && typeof s === 'object') {\n        Object.keys(s).forEach(function(k) { d[k] = s[k]; });\n    }\n    if (!Array.isArray(d.steps)) d.steps = [];\n    return d;\n}\nfunction saveState(s) {\n    global.set('scenario_state', s);\n    return s;\n}\nfunction uiMsg(s) { return { topic: 'scenario_state', payload: clone(s) }; }\nfunction emit(s, commands, protocols, fileMsg) {\n    saveState(s);\n    return [commands && commands.length ? commands : null, protocols && protocols.length ? protocols : null, uiMsg(s), fileMsg || null];\n}\nfunction fail(s, text, commands, protocols) {\n    s.status = 'error';\n    s.enabled = false;\n    s.ready = false;\n    s.last_error = text || 'Scenario error';\n    return emit(s, commands || [{ topic: 'drive_stop', payload: {} }], protocols || []);\n}\nfunction basename(filePath) {\n    var parts = String(filePath || '').split(/[\\\\\\/]/);\n    return parts.length ? parts[parts.length - 1] : '';\n}\nfunction resolveScenarioFile(fileName) {\n    var name = basename(fileName || SCENARIO_FILES[0]);\n    if (SCENARIO_FILES.indexOf(name) < 0) name = SCENARIO_FILES[0];\n    return { name: name, path: ['C:', 'NC3', 'scenarios', name].join('\\\\') };\n}\nfunction ticksPerRev(res) { return res === 'low' ? 6553600 : 262144000; }\nfunction speedFromPayload(d) {\n    if (!d || d.velocity === undefined) return null;\n    var res = d.resolution || global.get('current_range') || 'high';\n    var vx = Number(d.velocity);\n    if (!isFinite(vx)) return null;\n    return vx / ticksPerRev(res) * 360.0;\n}\nfunction stepAt(s) { return s.steps && s.steps[s.step_index]; }\nfunction protocolOpenMsg() { return { topic: 'open_protocol', payload: { scenario: true, save_raw_data: !!global.get('recording_save_raw_data') } }; }\nfunction startStep(s) {\n    var step = stepAt(s);\n    if (!step) {\n        s.enabled = false;\n        s.status = 'completed';\n        s.ready = false;\n        s.hold_remaining_sec = 0;\n        return emit(s, [{ topic: 'drive_stop', payload: {} }], []);\n    }\n\n    var commands = [];\n    var currentRange = global.get('current_range') || 'high';\n    if (step.resolution && step.resolution !== currentRange) {\n        commands.push({ topic: 'drive_stop', payload: {} });\n        commands.push({ topic: 'set_resolution', payload: { resolution: step.resolution } });\n        commands.push({ topic: 'driveInit', payload: { resolution: step.resolution } });\n    }\n    commands.push({ topic: 'set_jv', payload: { ticks_per_sec: step.speed_ticks } });\n\n    s.status = 'commanding';\n    s.target_speed_deg_per_sec = Number(step.speed_deg_per_sec) || 0;\n    s.target_speed_ticks = Number(step.speed_ticks) || 0;\n    s.ready = false;\n    s.ready_error_percent = null;\n    s.hold_started_at = 0;\n    s.hold_ends_at = 0;\n    s.hold_remaining_sec = 0;\n    s.ready_eval = { startedAt: nowMs() };\n    s.last_error = '';\n    return emit(s, commands, []);\n}\nfunction startHoldIfReady(s, evalState) {\n    var step = stepAt(s);\n    if (!step) return emit(s, [], []);\n    s.status = 'holding';\n    s.ready = true;\n    s.ready_error_percent = isFinite(evalState.errorPercent) ? evalState.errorPercent : null;\n    s.hold_started_at = nowMs();\n    s.hold_ends_at = s.hold_started_at + Math.round(Number(step.hold_sec) * 1000);\n    s.hold_remaining_sec = Math.ceil((s.hold_ends_at - s.hold_started_at) / 1000);\n    var protocols = [];\n    if (!global.get('protocol_open')) protocols.push(protocolOpenMsg());\n    protocols.push({\n        topic: 'start_recording',\n        payload: {\n            sp_ticks: step.speed_ticks,\n            duration_sec: step.hold_sec,\n            save_raw_data: !!s.save_raw_data\n        }\n    });\n    return emit(s, [], protocols);\n}\nfunction finishHoldOrContinue(s) {\n    var step = stepAt(s);\n    var protocols = [];\n    if (global.get('is_recording')) {\n        protocols.push({ topic: 'record_measurement', payload: { duration_sec: step && step.hold_sec, save_raw_data: !!s.save_raw_data } });\n    }\n    s.step_index += 1;\n    s.ready = false;\n    s.ready_error_percent = null;\n    s.hold_started_at = 0;\n    s.hold_ends_at = 0;\n    s.hold_remaining_sec = 0;\n    if (s.step_index >= s.step_count) {\n        s.enabled = false;\n        s.status = 'completed';\n        return emit(s, [{ topic: 'drive_stop', payload: {} }], protocols);\n    }\n    var next = startStep(s);\n    var cmds = next[0] || [];\n    var ui = next[2];\n    saveState(s);\n    return [cmds, protocols.length ? protocols : null, ui, null];\n}\n\nif (topic === 'scenario_start') {\n    var req = msg.payload && typeof msg.payload === 'object' ? msg.payload : {};\n    var file = resolveScenarioFile(req.file || req.file_name || req.scenario || msg.file_name);\n    var state = defaults();\n    state.enabled = true;\n    state.status = 'loading';\n    state.file_name = file.name;\n    state.file_path = file.path;\n    state.save_raw_data = !!req.save_raw_data;\n    state.started_at = nowMs();\n    state.last_error = '';\n    var protocols = [];\n    if (!global.get('protocol_open')) protocols.push(protocolOpenMsg());\n    return emit(state, [], protocols, { topic: 'scenario_file_loaded', filename: file.path, file_name: file.name });\n}\n\nif (topic === 'scenario_stop') {\n    var st = getState();\n    var stopProtocols = [];\n    if (global.get('is_recording')) stopProtocols.push({ topic: 'record_measurement', payload: { save_raw_data: !!st.save_raw_data } });\n    st.enabled = false;\n    st.status = 'stopped';\n    st.ready = false;\n    st.hold_remaining_sec = 0;\n    return emit(st, [{ topic: 'drive_stop', payload: {} }], stopProtocols);\n}\n\nif (topic === 'scenario_file_loaded') {\n    var loaded = getState();\n    if (!loaded.enabled || loaded.status !== 'loading') return null;\n    if (msg.error) return fail(loaded, String(msg.error));\n    if (typeof nc3.normalizeScenario !== 'function') return fail(loaded, 'nc3.normalizeScenario is not available');\n    try {\n        var normalized = nc3.normalizeScenario(String(msg.payload || ''), global.get('current_range') || 'high', global.get('settings') || {});\n        loaded.steps = normalized.steps || [];\n        loaded.step_count = loaded.steps.length;\n        loaded.step_index = 0;\n        loaded.meta = normalized.meta || {};\n        if (!loaded.step_count) return fail(loaded, 'Scenario contains no steps');\n        return startStep(loaded);\n    } catch (err) {\n        return fail(loaded, err.message || String(err));\n    }\n}\n\nif (topic === 'CMD.FAILED') {\n    var failed = getState();\n    if (!failed.enabled) return null;\n    var evt = msg.payload || {};\n    return fail(failed, 'ELMO command failed: ' + (evt.topic || evt.id || evt.reason || 'unknown'));\n}\n\nif (topic === 'CMD.ACKED') {\n    var ackState = getState();\n    if (!ackState.enabled || ackState.status !== 'commanding') return null;\n    var evtAck = msg.payload || {};\n    if (evtAck.topic === 'set_jv') {\n        ackState.status = 'waiting_ready';\n        ackState.ready_eval = { startedAt: nowMs() };\n        return emit(ackState, [], []);\n    }\n    return null;\n}\n\nif (topic === 'poll_data' || topic === 'set_jv' || topic === 'set_jp') {\n    var state = getState();\n    if (!state.enabled) return null;\n    var d = msg.payload && typeof msg.payload === 'object' ? msg.payload : {};\n    var measured = speedFromPayload(d);\n    if (measured !== null) state.current_speed_deg_per_sec = measured;\n\n    if (state.status === 'waiting_ready' && measured !== null) {\n        if (typeof nc3.evaluateSpeedReady !== 'function') return fail(state, 'nc3.evaluateSpeedReady is not available');\n        var evalState = nc3.evaluateSpeedReady(state.ready_eval, measured, state.target_speed_deg_per_sec, nowMs(), global.get('settings') || {});\n        state.ready_eval = evalState;\n        state.ready = !!evalState.ready;\n        state.ready_error_percent = isFinite(evalState.errorPercent) ? evalState.errorPercent : null;\n        if (evalState.timedOut) {\n            return fail(state, 'Speed reach timeout: target=' + state.target_speed_deg_per_sec + ' deg/s, measured=' + measured.toFixed(6) + ' deg/s');\n        }\n        if (evalState.ready) return startHoldIfReady(state, evalState);\n        return emit(state, [], []);\n    }\n\n    if (state.status === 'holding') {\n        var rem = Math.ceil((Number(state.hold_ends_at) - nowMs()) / 1000);\n        state.hold_remaining_sec = rem > 0 ? rem : 0;\n        if (nowMs() >= Number(state.hold_ends_at)) return finishHoldOrContinue(state);\n        return emit(state, [], []);\n    }\n}\n\nreturn null;",
-        "outputs": 4,
-        "timeout": 0,
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 770,
-        "y": 620,
-        "wires": [
-            [
-                "a4c3fbb3cecc89ec"
-            ],
-            [
-                "scenario-protocol-out"
-            ],
-            [
-                "scenario-ui-out"
-            ],
-            [
-                "scenario-file-read"
-            ]
-        ]
-    },
-    {
-        "id": "scenario-file-read",
-        "type": "file in",
-        "z": "ac37a9949da4d9d6",
-        "name": "Read scenario file",
-        "filename": "filename",
-        "filenameType": "msg",
-        "format": "utf8",
-        "chunk": false,
-        "sendError": true,
-        "encoding": "none",
-        "allProps": false,
-        "x": 1000,
-        "y": 700,
-        "wires": [
-            [
-                "scenario-manager"
-            ]
-        ]
-    },
-    {
-        "id": "scenario-protocol-out",
-        "type": "link out",
-        "z": "ac37a9949da4d9d6",
-        "name": "scenario -> protocol",
-        "mode": "link",
-        "links": [
-            "427b0128f7dae746"
-        ],
-        "x": 1025,
-        "y": 620,
-        "wires": []
-    },
-    {
-        "id": "scenario-ui-out",
-        "type": "link out",
-        "z": "ac37a9949da4d9d6",
-        "name": "scenario -> speed ui",
-        "mode": "link",
-        "links": [
-            "5f65b6086231c61f"
-        ],
-        "x": 1025,
-        "y": 660,
-        "wires": []
-    },
-    {
-        "id": "scenario-elmo-events-in",
-        "type": "link in",
-        "z": "ac37a9949da4d9d6",
-        "name": "xState events -> scenario",
-        "links": [
-            "elmoxs-link-events-out"
-        ],
-        "x": 555,
-        "y": 660,
-        "wires": [
-            [
-                "scenario-manager"
-            ]
-        ]
     }
 ]
