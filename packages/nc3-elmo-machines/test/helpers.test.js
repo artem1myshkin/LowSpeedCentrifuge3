@@ -96,8 +96,8 @@ test('poll payloads: atomic single-parameter commands (cmds[])', () => {
   assert.equal(fastSeek.meta.topic, 'poll_fast');
 
   const fastData = buildPollEnvelope({ id: 'fast-data', role: 'fast_data' });
-  assert.deepEqual(fastData.cmds, ['VX', 'PX', 'TM']);
-  assert.deepEqual(fastData.required, ['vx', 'px', 'tm']);
+  assert.deepEqual(fastData.cmds, ['TM', 'PX']);
+  assert.deepEqual(fastData.required, ['tm', 'px']);
   assert.equal(fastData.meta.topic, 'poll_data');
 });
 
@@ -132,15 +132,14 @@ test('computeRateHz: clamp 1..30', () => {
 });
 
 test('computePollDelayMs: measured vs setpoint source', () => {
-  // rest -> 1 Hz -> 1000 ms
-  assert.equal(computePollDelayMs({ vx: 0, resolution: 'high', omegaSource: 'measured' }), 1000);
-  // 360 deg/s -> 30 Hz -> ~33 ms
+  // Normal mode is fixed at 2 Hz.
+  assert.equal(computePollDelayMs({ vx: 0, resolution: 'high', omegaSource: 'measured' }), 500);
   assert.equal(
     computePollDelayMs({ vx: degPerSecToTicks(360, 'low'), resolution: 'low', omegaSource: 'measured' }),
-    Math.round(1000 / 30)
+    500
   );
-  // setpoint fallback before first VX poll
-  assert.equal(computePollDelayMs({ omegaSource: 'setpoint', setpointDegS: 120 }), 100);
+  assert.equal(computePollDelayMs({ omegaSource: 'setpoint', setpointDegS: 120 }), 500);
+  assert.equal(computePollDelayMs({ pollConfig: { normalPollHz: 4 } }), 250);
   // fast raw recording mode uses configured fixed rate, not velocity-derived rate
   assert.equal(
     computePollDelayMs({ fastRawActive: true, pollConfig: { fastRawPollHz: 30 }, vx: 0, resolution: 'high' }),
@@ -207,13 +206,13 @@ test('computePollDelayMs: timerCompensationMs trims the request to cross Windows
     ),
     1
   );
-  // Also applies in the velocity-derived (non-fast) path.
+  // Also applies in the normal 2 Hz path.
   assert.equal(
     computePollDelayMs(
       { vx: 0, resolution: 'high', omegaSource: 'measured' },
       { timerCompensationMs: 8 }
     ),
-    992
+    492
   );
 });
 

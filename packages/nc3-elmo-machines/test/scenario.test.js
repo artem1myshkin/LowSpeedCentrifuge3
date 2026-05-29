@@ -20,6 +20,9 @@ test('scenarioOptions uses non-zero settings ranges and falls back from zero val
         low: { min: { decimalDeg: 0 }, max: { decimalDeg: 400 } },
       },
     },
+    general: {
+      speedReadyTolerancePercent: 7,
+    },
   };
   const opts = scenarioOptions(settings);
   assert.equal(opts.ranges.high.minDeg, 1 / 3600);
@@ -27,6 +30,7 @@ test('scenarioOptions uses non-zero settings ranges and falls back from zero val
   assert.equal(opts.ranges.low.minDeg, 10);
   assert.equal(opts.ranges.low.maxDeg, 360);
   assert.equal(opts.switchBoundaryDegSec, 20);
+  assert.equal(opts.speedReadyTolerancePercent, 7);
 });
 
 test('selectResolutionForSpeed keeps current range inside 20 deg/s +/-5 hysteresis', () => {
@@ -80,7 +84,7 @@ Name switch_test
 
 test('evaluateSpeedReady requires stable time and reports timeout', () => {
   let state = evaluateSpeedReady(null, 9.6, 10, 1000, null, {
-    speedReadyToleranceDegSec: 0.5,
+    speedReadyTolerancePercent: 5,
     speedStableTimeMs: 1000,
     speedReachTimeoutMs: 3000,
   });
@@ -88,21 +92,23 @@ test('evaluateSpeedReady requires stable time and reports timeout', () => {
   assert.equal(state.ready, false);
 
   state = evaluateSpeedReady(state, 10.2, 10, 1999, null, {
-    speedReadyToleranceDegSec: 0.5,
+    speedReadyTolerancePercent: 5,
     speedStableTimeMs: 1000,
     speedReachTimeoutMs: 3000,
   });
   assert.equal(state.ready, false);
 
   state = evaluateSpeedReady(state, 10.1, 10, 2000, null, {
-    speedReadyToleranceDegSec: 0.5,
+    speedReadyTolerancePercent: 5,
     speedStableTimeMs: 1000,
     speedReachTimeoutMs: 3000,
   });
   assert.equal(state.ready, true);
+  assert.equal(state.toleranceDegSec, 0.5);
+  assert.ok(state.errorPercent <= 5);
 
   const timeoutState = evaluateSpeedReady({ startedAt: 1000 }, 8, 10, 4000, null, {
-    speedReadyToleranceDegSec: 0.5,
+    speedReadyTolerancePercent: 5,
     speedStableTimeMs: 1000,
     speedReachTimeoutMs: 3000,
   });

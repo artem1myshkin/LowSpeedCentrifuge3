@@ -42,6 +42,7 @@ function readPollConfigFromGlobals() {
         isRecordingRaw: !!global.get('is_recording_raw'),
         rawDataEnabled: !!global.get('recording_save_raw_data'),
         fastRawPollingEnabled: advanced.fastRawPollingEnabled !== false,
+        normalPollHz: 2,
         fastRawPollHz: clamp(finiteNumber(advanced.rawDataPollHz, 30), 1, 30),
         fastStableSamples: Math.round(clamp(finiteNumber(advanced.fastStableSamples, 3), 1, 50)),
         fastStableToleranceTicks: Math.max(0, finiteNumber(advanced.fastStableToleranceTicks, 1000))
@@ -72,7 +73,7 @@ const actor = nc3.startElmoTransport({
     reconnectMs: 1000,
     maxMisses: 3,
     statePeriodMs: 1000,
-    pollOptions: { minHz: 1, maxHz: 30, timerCompensationMs: 8 }
+    pollOptions: { normalPollHz: 2, minHz: 1, maxHz: 30, timerCompensationMs: 8 }
 }, { resolution: ckpt.resolution || 'high', pollConfig: initialPollConfig });
 
 let lastRes = ckpt.resolution || null;
@@ -118,6 +119,7 @@ function readPollConfigFromGlobals() {
         isRecordingRaw: !!global.get('is_recording_raw'),
         rawDataEnabled: !!global.get('recording_save_raw_data'),
         fastRawPollingEnabled: advanced.fastRawPollingEnabled !== false,
+        normalPollHz: 2,
         fastRawPollHz: clamp(finiteNumber(advanced.rawDataPollHz, 30), 1, 30),
         fastStableSamples: Math.round(clamp(finiteNumber(advanced.fastStableSamples, 3), 1, 50)),
         fastStableToleranceTicks: Math.max(0, finiteNumber(advanced.fastStableToleranceTicks, 1000))
@@ -224,6 +226,7 @@ function fastCfg(hz, recording) {
     isRecordingRaw: recording,
     rawDataEnabled: recording,
     fastRawPollingEnabled: true,
+    normalPollHz: 2,
     fastRawPollHz: hz,
     fastStableSamples: 3,
     fastStableToleranceTicks: 1000,

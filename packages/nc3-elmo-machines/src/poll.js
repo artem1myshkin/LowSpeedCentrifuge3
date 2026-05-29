@@ -9,7 +9,7 @@ const DATA_POLL = 'TM;PX;VX;';
 const LEAN_POLL = DATA_POLL;
 const DATA_POLL_FIELDS = ['TM', 'PX', 'VX'];
 const FAST_SEEK_POLL_FIELDS = ['VX', 'PX'];
-const FAST_DATA_POLL_FIELDS = ['VX', 'PX', 'TM'];
+const FAST_DATA_POLL_FIELDS = ['TM', 'PX'];
 const STATE_POLL_FIELDS = ['MO', 'SO', 'SR'];
 const FULL_STATE_POLL_FIELDS = ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]'];
 const FIELD_KEYS = {
@@ -106,7 +106,8 @@ function omegaDegPerSec(vx, resolution) {
   return (Math.abs(Number(vx) || 0) / tpr) * 360;
 }
 
-// rate_hz = clamp(|omega|/12, 1, 30): 30 points/rev at max speed, never below 1 Hz.
+// Legacy helper for speed-proportional polling. The runtime scheduler now uses fixed
+// normalPollHz/fastRawPollHz, but this remains exported for callers that still need it.
 function computeRateHz(omegaDegSec, options) {
   const o = options || {};
   const minHz = o.minHz == null ? 1 : o.minHz;
@@ -114,9 +115,8 @@ function computeRateHz(omegaDegSec, options) {
   return clamp(Math.abs(omegaDegSec) / 12, minHz, maxHz);
 }
 
-// Delay (ms) until the next poll, self-clocked from the speed source (§4.4.5).
-// omegaSource lets the scheduler use the setpoint right after a speed command, before
-// the first poll has reported the new VX (§4.4 fallback).
+// Delay (ms) until the next poll. Normal mode is fixed-rate; fast raw mode is
+// start-to-start from lastFastPollStartedAt so 30 Hz is not slowed by response latency.
 //
 // `options.timerCompensationMs` (default 0) is subtracted from the computed delay before
 // the floor at 1 ms. On Windows `setTimeout` is quantized to the system timer tick
@@ -138,10 +138,10 @@ function computePollDelayMs(context, options) {
     const elapsedMs = startedAt > 0 && nowMs > 0 ? Math.max(0, nowMs - startedAt) : 0;
     return Math.max(1, Math.round(targetMs - elapsedMs - compensation));
   }
-  const omega = ctx.omegaSource === 'setpoint'
-    ? Math.abs(Number(ctx.setpointDegS) || 0)
-    : omegaDegPerSec(ctx.vx, ctx.resolution);
-  const rate = computeRateHz(omega, options);
+  const cfg = ctx.pollConfig || {};
+  const minHz = o.minHz == null ? 1 : o.minHz;
+  const maxHz = o.maxHz == null ? 30 : o.maxHz;
+  const rate = clamp(Number(cfg.normalPollHz) || Number(o.normalPollHz) || 2, minHz, maxHz);
   return Math.max(1, Math.round(1000 / rate - compensation));
 }
 

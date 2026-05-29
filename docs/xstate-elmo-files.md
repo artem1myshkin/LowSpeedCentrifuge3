@@ -1,10 +1,18 @@
 # Пакет `nc3-elmo-machines` — справочник по файлам
 
-Актуально на: 2026-05-28. Краткая карта: что в каком файле и какие функции. Без полного кода — за деталями в `packages/nc3-elmo-machines/src/`.
+Актуально на: 2026-05-29. Краткая карта: что в каком файле и какие функции. Без полного кода — за деталями в `packages/nc3-elmo-machines/src/`.
 
 Поведение системы целиком — [xstate-elmo-design.md](xstate-elmo-design.md). Текущее состояние — [xstate-elmo-status.md](xstate-elmo-status.md).
 
 `ElmoTransport` — **транспортная** XState-машина (один владелец UDP-канала к ELMO, очередь, опрос), не машина процесса измерения. Машина чистая: весь ввод-вывод вынесен в `effects`, тестируется через `node --test` без Node-RED.
+
+## Актуализация 2026-05-29
+
+- `scenario.js` добавляет парсер `.scn`, нормализацию сценариев, выбор диапазона с гистерезисом 20 ± 5 град/с и проверку достижения скорости по времени устойчивости.
+- `elmoTransport.js` передает `topic` и `meta` в `CMD.ACKED` / `CMD.FAILED`, чтобы поверх транспорта можно было строить сценарный процесс без разбора сырого ответа.
+- Обычный `poll_data` работает с фиксированной частотой 2 Гц. Быстрый raw-poll включается только когда идет запись, выбран флаг записи исходных данных и `rawDataEnabled === true`.
+- Быстрый raw-poll формирует только пару `TM/PX`. В data-файл не попадают дополнительные параметры ELMO, а временные метки хранятся как сырые метки ELMO без вычитания `t0`.
+- `index.js` реэкспортирует сценарные helpers, чтобы Node-RED Function-узлы использовали `global.get('nc3')`, а не дублировали доменную логику.
 
 ## Карта файлов
 
@@ -16,13 +24,14 @@
 | `parse.js` | Минимальный парсер скаляров из ответа ELMO (для решений транспорта). |
 | `queue.js` | Приоритетная очередь с одним in-flight. |
 | `res.js` | Константы разрешения энкодера, пересчёт °↔ticks. |
+| `scenario.js` | Парсинг и нормализация файлов сценариев, выбор диапазона, проверка готовности скорости. |
 | `util.js` | Мелочи (`ensureCr`, `clamp`). |
 
 ---
 
 ## `index.js`
 
-Реэкспортирует: `createElmoTransport`, `startElmoTransport`, `parseElmoScalars`, `RES`, `ticksPerRev`, `ticksPerDeg`, `degPerSecToTicks`, `priorityInsert`, `dequeue`, `PRIORITY`, `DATA_POLL`, `buildPollEnvelope`, `buildStatePoll`, `buildFullStatePoll`, `computePollDelayMs`, `omegaDegPerSec`, `computeRateHz`, `ensureCr`.
+Реэкспортирует: `createElmoTransport`, `startElmoTransport`, `parseElmoScalars`, `RES`, `ticksPerRev`, `ticksPerDeg`, `degPerSecToTicks`, `priorityInsert`, `dequeue`, `PRIORITY`, `DATA_POLL`, `buildPollEnvelope`, `buildStatePoll`, `buildFullStatePoll`, `computePollDelayMs`, `omegaDegPerSec`, `computeRateHz`, `parseScenarioText`, `normalizeScenario`, `selectResolutionForSpeed`, `evaluateSpeedReady`, `scenarioOptions`, `ensureCr`.
 
 Пакет грузится в Node-RED через `functionGlobalContext` (`global.get('nc3')`), `xstate` — внутренняя зависимость.
 
@@ -53,11 +62,11 @@
 | `statePeriodMs` | Минимальный период state-poll. | `1000` |
 | `probeCmd` | Команда probe. | `'TM'` |
 | `initialFullState` | Full-state после connect. | `true` |
-| `pollOptions` | `{ minHz, maxHz, analogParam, timerCompensationMs }`. | `{}` |
+| `pollOptions` | `{ normalPollHz, minHz, maxHz, analogParam, timerCompensationMs }`. | `{}` |
 
 ### Контекст (ключевое)
 
-`queue` (приоритетная очередь), `inFlight` (текущий запрос с `cursor`/`parts` для атомарного poll), `resolution`, `vx`, `omegaSource` (`measured`/`setpoint`), `setpointDegS`, `lastExtendedAt`, `missCount`, `pollConfig`/`fastRawActive`, `fastStable`/`fastStableCount`/`lastFastVx`/`lastFastPollStartedAt`.
+`queue` (приоритетная очередь), `inFlight` (текущий запрос с `cursor`/`parts` для атомарного poll), `resolution`, `vx`, `omegaSource` (`measured`/`setpoint`), `setpointDegS`, `lastExtendedAt`, `missCount`, `pollConfig`/`fastRawActive`, `lastFastPollStartedAt`.
 
 ### Guards / delays
 
@@ -76,7 +85,7 @@
 | Action | Назначение |
 |---|---|
 | `enqueueCmd` | Положить команду в очередь; при `setpointDegS` включить setpoint-источник. |
-| `enqueuePoll` | Поставить data- (и при необходимости state-) poll; в fast-режиме — `fast_seek`/`fast_data`; dedup по роли. |
+| `enqueuePoll` | Поставить data- (и при необходимости state-) poll; в fast-режиме — `fast_data`; dedup по роли. |
 | `enqueueFullStatePoll` / `enqueueInitialFullStatePoll` | Полный диагностический poll (вручную / после connect). |
 | `enqueueConfirmPoll` | После `MO=`/`OL[1]=`/`OL[2]=`/`AF=` поставить подтверждающий poll. |
 | `enqueueDiagnosticOnBadPoll` | На невалидный fast-кадр поставить `full_state` с приоритетом `init` и сбросить fast-стабильность. |
@@ -93,7 +102,7 @@
 
 ### Внутренние хелперы
 
-`normalizeEnvelope` (нормализация конверта), `pollRoleOf`/`topicFor`/`isAckable`, `hasPollRole`/`hasAnyFastPoll`/…`InFlight` (dedup), `isBatchPoll`/`cursorOf`/`commandFor`/`rawFor` (атомарный multi-part: какая команда сейчас и как склеить части), `validatePollResponse` / `validateCurrentPollPart` / `responseValidation` (валидация целого кадра, текущей части, и их комбинации), `confirmPollRoleFor`, `fastStabilityPatch`, `normalizePollConfig`/`shouldFastPoll`/`fastPollRoleFor`.
+`normalizeEnvelope` (нормализация конверта), `pollRoleOf`/`topicFor`/`isAckable`, `hasPollRole`/`hasAnyFastPoll`/…`InFlight` (dedup), `isBatchPoll`/`cursorOf`/`commandFor`/`rawFor` (атомарный multi-part: какая команда сейчас и как склеить части), `validatePollResponse` / `validateCurrentPollPart` / `responseValidation` (валидация целого кадра, текущей части, и их комбинации), `confirmPollRoleFor`, `normalizePollConfig`/`shouldFastPoll`/`fastPollRoleFor`.
 
 ### Состояния
 
@@ -110,15 +119,28 @@ UDP + атомарные команды: один логический poll — 
 | Функция / константа | Назначение |
 |---|---|
 | `DATA_POLL` / `LEAN_POLL` | `'TM;PX;VX;'` — display-константа (поля data-poll), не отправляется как одна строка. |
-| `buildPollFields(role, options)` | Список полей роли (`data`/`state`/`full_state`/`fast_seek`/`fast_data`); `analogParam` опционально для full_state. |
+| `buildPollFields(role, options)` | Список полей роли (`data`/`state`/`full_state`/`fast_data`); `analogParam` опционально для full_state. |
 | `buildStatePoll` / `buildFullStatePoll` (`buildExtendedPoll`) | Текстовое представление полей (display). |
 | `buildPollEnvelope(args)` | Конверт poll: `cmds` (атомарные команды), `cursor`/`parts`, `cmd = cmds[0]`, `required` (полный список ключей), `partRequired` (по каждой части), `priority`, `pollRole`, `meta.topic`. |
 | `shouldExtend(lastExtendedAt, now, statePeriodMs)` | Пора ли добавить медленный state-poll. |
 | `omegaDegPerSec(vx, resolution)` | `VX` (ticks/s) → °/с по разрешению. |
 | `computeRateHz(omega, options)` | `clamp(|ω|/12, minHz, maxHz)`. |
-| `computePollDelayMs(context, options)` | Задержка до следующего poll. В fast-режиме — start-to-start от `fastRawPollHz`. `options.timerCompensationMs` (дефолт 0) вычитается перед `max(1,...)` — компенсация гранулярности Windows-таймера. |
+| `computePollDelayMs(context, options)` | Задержка до следующего poll. В normal-режиме используется фиксированная частота `normalPollHz` (по умолчанию 2 Гц). В fast-режиме — start-to-start от `fastRawPollHz`. `options.timerCompensationMs` (дефолт 0) вычитается перед `max(1,...)` — компенсация гранулярности Windows-таймера. |
 
-Роли: `data` (`TM`, `PX`, `VX`), `state` (`MO`, `SO`, `SR`), `full_state` (`MS`, `MO`, `SO`, `SR`, `AF`, `OL[1]`, `OL[2]`), `fast_seek` (`VX`, `PX`), `fast_data` (`VX`, `PX`, `TM`).
+Роли: `data` (`TM`, `PX`, `VX`), `state` (`MO`, `SO`, `SR`), `full_state` (`MS`, `MO`, `SO`, `SR`, `AF`, `OL[1]`, `OL[2]`), `fast_data` (`TM`, `PX`).
+
+---
+
+## `scenario.js`
+
+| Функция / константа | Назначение |
+|---|---|
+| `DEFAULT_SCENARIO_OPTIONS` | Базовые настройки сценариев: 10 с timeout достижения скорости, 1 с устойчивости, допуск скорости 5 %, гистерезис диапазона 20 ± 5 град/с. |
+| `parseScenarioText(text)` | Читает `.scn`: параметры до разделителя `-------------------`, затем строки `скорость время`. |
+| `normalizeScenario(parsed, options)` | Проверяет и нормализует шаги, применяет допуски диапазонов и выбирает разрешение для каждого шага. |
+| `selectResolutionForSpeed(speed, currentResolution, options)` | Выбирает `high`/`low` с сохранением текущего диапазона внутри hysteresis-зоны. |
+| `evaluateSpeedReady(target, measured, state, options)` | Проверяет достижение скорости по процентной погрешности и времени устойчивости. |
+| `scenarioOptions(settings)` | Собирает runtime-настройки из `settings.general` и `settings.advanced`. |
 
 ---
 

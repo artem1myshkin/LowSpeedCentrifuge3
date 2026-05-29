@@ -33,9 +33,9 @@ const { clamp, splitElmoCommands } = require('./util');
 //   statePeriodMs           -> minimal state-poll cadence (default 1000)
 //   probeCmd                -> liveness probe sent on connect (default single TM read)
 //   initialFullState        -> enqueue full-state poll after connect/recover (default true)
-//   pollOptions             -> { minHz, maxHz, analogParam } for poll scheduling/payload
+//   pollOptions             -> { normalPollHz, minHz, maxHz, analogParam } for poll scheduling/payload
 // input.pollConfig:
-//   { isRecording, isRecordingRaw, rawDataEnabled, fastRawPollHz, ... } toggles the fast raw
+//   { isRecording, isRecordingRaw, rawDataEnabled, normalPollHz, fastRawPollHz, ... } toggles the fast raw
 //   recording poll path without coupling the machine to Node-RED globals.
 
 function createElmoTransport(effects) {
@@ -69,6 +69,7 @@ function createElmoTransport(effects) {
       isRecordingRaw: cfg.isRecordingRaw === true,
       rawDataEnabled: cfg.rawDataEnabled === true,
       fastRawPollingEnabled: cfg.fastRawPollingEnabled !== false,
+      normalPollHz: clamp(finiteNumber(cfg.normalPollHz, 2), 1, 30),
       fastRawPollHz: clamp(finiteNumber(cfg.fastRawPollHz, 30), 1, 30),
       fastStableSamples: Math.round(clamp(finiteNumber(cfg.fastStableSamples, 3), 1, 50)),
       fastStableToleranceTicks: Math.max(0, finiteNumber(cfg.fastStableToleranceTicks, 1000)),
@@ -77,7 +78,7 @@ function createElmoTransport(effects) {
 
   function shouldFastPoll(config) {
     const cfg = normalizePollConfig(config);
-    return cfg.fastRawPollingEnabled && cfg.isRecording && (cfg.isRecordingRaw || cfg.rawDataEnabled);
+    return cfg.fastRawPollingEnabled && cfg.isRecording && cfg.isRecordingRaw && cfg.rawDataEnabled;
   }
 
   function isFastPollRole(role) {
@@ -85,7 +86,7 @@ function createElmoTransport(effects) {
   }
 
   function fastPollRoleFor(context) {
-    return context.fastStable ? 'fast_data' : 'fast_seek';
+    return 'fast_data';
   }
 
   function normalizeEnvelope(env) {
@@ -415,12 +416,12 @@ function createElmoTransport(effects) {
           return;
         }
         forwardResp(raw, topicFor(env));
-        if (isAckable(env)) emitEvent({ type: 'CMD.ACKED', id: env.id, raw: event.raw });
+        if (isAckable(env)) emitEvent({ type: 'CMD.ACKED', id: env.id, raw, topic: topicFor(env), meta: env.meta || {} });
       },
 
       failInFlight: ({ context }) => {
         const env = context.inFlight;
-        if (isAckable(env)) emitEvent({ type: 'CMD.FAILED', id: env.id, reason: 'timeout' });
+        if (isAckable(env)) emitEvent({ type: 'CMD.FAILED', id: env.id, reason: 'timeout', topic: topicFor(env), meta: env.meta || {} });
       },
 
       bumpMiss: assign(({ context }) => ({ missCount: (Number(context.missCount) || 0) + 1 })),

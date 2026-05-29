@@ -1,5 +1,15 @@
 # Состояние проекта LowSpeedCentrifuge3
 
+## Актуализация 2026-05-29: сценарии и буфер
+
+`ScenarioManager` подключен в `BUN flow` поверх текущего `ELMO XState (UDP)`: вкладка `Угловая скорость` отправляет `scenario_start`/`scenario_stop`, менеджер читает файлы из `C:\NC3\scenarios`, нормализует шаги через `nc3.normalizeScenario`, отправляет `set_jv`/`set_resolution`/`driveInit` через существующий `CommandHandler`, слушает `CMD.ACKED`/`CMD.FAILED` из transport event bus и `poll_data` из `ResponseParser`.
+
+Сценарный шаг начинает выдержку только после устойчивого достижения скорости. Критерий задается настройкой `settings.general.speedReadyTolerancePercent` на вкладке `Настройка` в основных настройках, диапазон 0..100 %, время устойчивости и timeout остаются в `advanced.speedStableTimeMs` и `advanced.speedReachTimeoutMs`.
+
+Опрос теперь разделен по назначению: нормальный режим держит 2 Гц (`TM/PX/VX`), быстрый raw-режим включается только при `is_recording && is_recording_raw && recording_save_raw_data` и читает только `TM/PX` с частотой до 30 Гц. `angle_buffer` хранит чистые метки ELMO `{ t: TM/1e6, tm_us: TM, angle }` без `t-t0`, без усреднения `TM-before/TM-after` и без дополнительных параметров ELMO в data-файле.
+
+Готовые файлы сценариев находятся в `scenarios/`: `high_resolution.scn`, `low_resolution.scn`, `range_switch.scn`. Для стенда они копируются в `C:\NC3\scenarios`.
+
 ## Актуализация 2026-05-29 (UDP, атомарный poll, production bus)
 
 Транспорт `ElmoTransport`/XStateMachine переведён с TCP `sit` на **UDP с атомарными командами** (по одной команде-параметру на датаграмму с реассемблированием в логический кадр) и компенсацией Windows-таймера — даёт ~30–32 Гц при цели 30 Гц. Production-контур `BUN flow`/`new ui flow` теперь подключён к этому транспорту через link bus: UI-команды и `tilt_brake` идут в `ELMO XState (UDP)`, ответы возвращаются в существующий `ResponseParser`. Legacy TCP-узлы оставлены в flow, но выключены.

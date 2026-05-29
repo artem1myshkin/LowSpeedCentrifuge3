@@ -61,9 +61,8 @@ function feedFastSeekPoll(h, opts = {}) {
 }
 
 function feedFastDataPoll(h, opts = {}) {
-  h.actor.send({ type: 'ELMO.RESP', raw: opts.vx || 'VX;0;' });
-  h.actor.send({ type: 'ELMO.RESP', raw: opts.px || 'PX;2;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.tm || 'TM;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.px || 'PX;2;' });
 }
 
 function feedStatePoll(h, opts = {}) {
@@ -144,6 +143,7 @@ test('command batches are sent atomically and reassembled before forwarding', ()
   assert.equal(h.calls.forwardResp[0].raw, 'AC;1;DC;2;JV;3;;');
   assert.equal(acked(h.calls).length, 1);
   assert.equal(acked(h.calls)[0].id, 'cmdBatch');
+  assert.equal(acked(h.calls)[0].raw, 'AC;1;DC;2;JV;3;;');
 });
 
 test('single in-flight: a second cmd waits until the first is dispatched', () => {
@@ -258,7 +258,7 @@ test('POLL.TICK enqueues an extended poll past statePeriod and records lastExten
   assert.equal(cmd, 'MO');
 });
 
-test('fast raw polling uses VX/PX seek poll and suppresses periodic state poll', () => {
+test('fast raw polling uses TM/PX data poll and suppresses periodic state poll', () => {
   const h = makeHarness({
     startNow: 2000,
     pollConfig: {
@@ -272,21 +272,21 @@ test('fast raw polling uses VX/PX seek poll and suppresses periodic state poll',
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
 
   h.actor.send({ type: 'POLL.TICK' });
-  assert.equal(h.ctx().inFlight.pollRole, 'fast_seek');
-  assert.deepEqual(h.ctx().inFlight.cmds, ['VX', 'PX']);
+  assert.equal(h.ctx().inFlight.pollRole, 'fast_data');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['TM', 'PX']);
   assert.equal(h.ctx().inFlight.priority, 2.5);
   assert.equal(h.ctx().lastFastPollStartedAt, 2000);
   assert.equal(h.ctx().queue.length, 0); // no MO/SO/SR while fast raw poll is healthy
-  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'VX');
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'TM');
 
   h.calls.forwardResp.length = 0;
-  feedFastSeekPoll(h, { vx: 'VX;9;', px: 'PX;-10;' });
+  feedFastDataPoll(h, { tm: 'TM;100;', px: 'PX;-10;' });
   assert.equal(h.calls.forwardResp.length, 1);
-  assert.equal(h.calls.forwardResp[0].topic, 'poll_fast');
-  assert.equal(h.ctx().fastStableCount, 1);
+  assert.equal(h.calls.forwardResp[0].topic, 'poll_data');
+  assert.equal(h.calls.forwardResp[0].raw, 'TM;100;PX;-10;');
 });
 
-test('fast raw polling switches to VX/PX/TM poll_data after stable speed', () => {
+test('fast raw polling stays on TM/PX at 30 Hz', () => {
   const h = makeHarness({
     startNow: 2000,
     pollConfig: {
@@ -302,19 +302,12 @@ test('fast raw polling switches to VX/PX/TM poll_data after stable speed', () =>
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
 
   h.actor.send({ type: 'POLL.TICK' });
-  feedFastSeekPoll(h, { vx: 'VX;9;', px: 'PX;1;' });
-  h.actor.send({ type: 'POLL.TICK' });
-  feedFastSeekPoll(h, { vx: 'VX;9;', px: 'PX;2;' });
-  assert.equal(h.ctx().fastStable, true);
-
-  h.calls.forwardResp.length = 0;
-  h.actor.send({ type: 'POLL.TICK' });
   assert.equal(h.ctx().inFlight.pollRole, 'fast_data');
-  assert.deepEqual(h.ctx().inFlight.cmds, ['VX', 'PX', 'TM']);
-  feedFastDataPoll(h, { vx: 'VX;9;', px: 'PX;3;', tm: 'TM;100;' });
+  assert.deepEqual(h.ctx().inFlight.cmds, ['TM', 'PX']);
+  feedFastDataPoll(h, { tm: 'TM;100;', px: 'PX;3;' });
   assert.equal(h.calls.forwardResp.length, 1);
   assert.equal(h.calls.forwardResp[0].topic, 'poll_data');
-  assert.equal(h.calls.forwardResp[0].raw, 'VX;9;PX;3;TM;100;');
+  assert.equal(h.calls.forwardResp[0].raw, 'TM;100;PX;3;');
 });
 
 test('invalid fast poll part emits bad frame and schedules full-state diagnostics', () => {
@@ -330,14 +323,14 @@ test('invalid fast poll part emits bad frame and schedules full-state diagnostic
   h.actor.send({ type: 'CONNECT' });
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
   h.actor.send({ type: 'POLL.TICK' });
-  assert.equal(h.ctx().inFlight.pollRole, 'fast_seek');
+  assert.equal(h.ctx().inFlight.pollRole, 'fast_data');
 
-  // We asked for VX (part 0), got a stale/cross-attributed PX datagram instead.
+  // We asked for TM (part 0), got a stale/cross-attributed PX datagram instead.
   h.actor.send({ type: 'ELMO.RESP', raw: 'PX;2;' });
   assert.equal(badPoll(h.calls).length, 1);
-  assert.equal(badPoll(h.calls)[0].role, 'fast_seek');
-  assert.deepEqual(badPoll(h.calls)[0].missing, ['vx']);
-  assert.equal(badPoll(h.calls)[0].cmd, 'VX');
+  assert.equal(badPoll(h.calls)[0].role, 'fast_data');
+  assert.deepEqual(badPoll(h.calls)[0].missing, ['tm']);
+  assert.equal(badPoll(h.calls)[0].cmd, 'TM');
   assert.equal(h.ctx().inFlight.pollRole, 'full_state');
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS');
 });
@@ -353,7 +346,7 @@ test('poll dedup: only one poll in flight/queue at a time', () => {
   assert.equal(h.ctx().queue.length, 0);
 });
 
-test('ingests VX/OL[1] from a poll response (drives dynamic poll rate)', () => {
+test('ingests VX/OL[1] from a poll response while normal cadence stays 2 Hz', () => {
   const { computePollDelayMs } = require('../src/poll');
   const h = makeHarness({ startNow: 500 });
   h.actor.send({ type: 'CONNECT' });
@@ -368,8 +361,7 @@ test('ingests VX/OL[1] from a poll response (drives dynamic poll rate)', () => {
   assert.equal(c.vx, -3276800);
   assert.equal(c.resolution, 'low');
   assert.equal(c.omegaSource, 'measured');
-  // 180 deg/s -> 15 Hz -> ~67 ms (was 1000 ms at rest), proving the rate is now dynamic.
-  assert.equal(computePollDelayMs(c), Math.round(1000 / 15));
+  assert.equal(computePollDelayMs(c), 500);
 });
 
 test('drops invalid data poll frames and emits POLL.BAD_FRAME', () => {

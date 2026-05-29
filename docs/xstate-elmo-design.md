@@ -1,5 +1,13 @@
 # XState-машина транспорта ELMO — фича и план
 
+## Актуализация 2026-05-29: сценарии поверх транспорта
+
+К транспортной машине добавлен сценарный потребитель, но сам транспорт остался единственным владельцем UDP-канала. `ScenarioManager` живет в `BUN flow`, получает команды UI `scenario_start`/`scenario_stop`, читает `.scn` файл, формирует шаги через `nc3.normalizeScenario`, а затем кладет обычные UI-команды в существующий `CommandHandler`. За счет этого сценарии используют тот же путь, что и ручное управление: валидация диапазонов, пересчет тиков, атомарная очередь UDP и `ResponseParser`.
+
+Критерий готовности шага вынесен из сценарного файла в настройки ПО: `settings.general.speedReadyTolerancePercent` (0..100 %) плюс время устойчивости `advanced.speedStableTimeMs` и timeout `advanced.speedReachTimeoutMs`. Удержание шага и запись протокола начинаются только после устойчивого входа в допуск.
+
+Poll-контракт уточнен: обычный режим больше не зависит от скорости и работает 2 Гц, быстрый raw-режим включается только на время записи raw-данных и читает только `TM/PX`. Это сохраняет data-файл чистым временным рядом угловых меток, а скорость для `Готов` берется из обычного `TM/PX/VX` до начала записи шага.
+
 Актуально на: 2026-05-28.
 
 Документ описывает фичу «единая XState-машина транспорта ELMO» целиком: зачем она нужна, какие архитектурные решения принимались по ходу стендовой отладки и какой получился финальный дизайн. Текущее состояние реализации — [xstate-elmo-status.md](xstate-elmo-status.md). Краткая карта файлов и функций — [xstate-elmo-files.md](xstate-elmo-files.md).
@@ -215,7 +223,7 @@ stateDiagram-v2
 | Роль (`kind`) | Приоритет |
 |---|---:|
 | `cmd` / `init` | 3 |
-| `fastPoll` (fast_seek/fast_data) | 2.5 |
+| `fastPoll` (fast_data) | 2.5 |
 | `tilt` | 2 |
 | `poll` (data/state/full_state) | 1 |
 
@@ -228,17 +236,16 @@ stateDiagram-v2
 | `data` | `TM`, `PX`, `VX` | `poll_data` | Базовый поток данных. |
 | `state` | `MO`, `SO`, `SR` | `poll_state` | ≥1 раз в `statePeriodMs`. |
 | `full_state` | `MS`, `MO`, `SO`, `SR`, `AF`, `OL[1]`, `OL[2]` (+ `analogParam`) | `poll_state` | После connect, ручной запрос, диагностика при `POLL.BAD_FRAME`. |
-| `fast_seek` | `VX`, `PX` | `poll_fast` | Запись «сырых», скорость ещё не устойчива. |
-| `fast_data` | `VX`, `PX`, `TM` | `poll_data` | Запись «сырых», скорость стабильна. |
+| `fast_data` | `TM`, `PX` | `poll_data` | Запись исходных угловых/временных меток. |
 
 ### 3.7 Самотактируемая частота
 
 `computePollDelayMs(context, options)`:
 
 - В fast-raw режиме: `target_ms = 1000 / fastRawPollHz`, `delay = max(1, round(target_ms − elapsed_since_lastFastPollStartedAt − timerCompensationMs))`.
-- В normal режиме: `omega = (omegaSource === 'setpoint') ? setpointDegS : omegaDegPerSec(vx, resolution)`; `rate = clamp(|omega|/12, minHz, maxHz)`; `delay = max(1, round(1000/rate − timerCompensationMs))`.
+- В normal режиме: `rate = normalPollHz` (по умолчанию 2 Гц); `delay = max(1, round(1000/rate − timerCompensationMs))`.
 
-`omegaSource = 'setpoint'` — fallback после команды смены скорости, до первого нового `VX`-poll.
+`omegaSource = 'setpoint'` сохраняется в контексте как подсказка для внешних потребителей, но текущая частота normal-poll больше не зависит от скорости.
 
 ### 3.8 Fast raw recording mode
 
@@ -247,12 +254,13 @@ stateDiagram-v2
 ```
 fastRawPollingEnabled === true
 isRecording === true
-(isRecordingRaw === true || rawDataEnabled === true)
+isRecordingRaw === true
+rawDataEnabled === true
 ```
 
-Параметры: `fastRawPollHz` (1–30), `fastStableSamples` (умолч. 3), `fastStableToleranceTicks` (умолч. 1000).
+Параметры: `fastRawPollHz` (1–30). Legacy-параметры `fastStableSamples` и `fastStableToleranceTicks` больше не выбирают состав fast-poll.
 
-Сценарий: пока скорость не «устойчива», fast-poll = `fast_seek` (VX/PX). После `fastStableSamples` подряд VX в пределах толеранса — переход на `fast_data` (VX/PX/TM). Невалидный fast-кадр → `POLL.BAD_FRAME` + `full_state` poll с приоритетом `init` для диагностики, fast-стабильность сбрасывается.
+Сценарий: достижение скорости определяется до начала выдержки по обычному `poll_data` (`TM/PX/VX`) и процентной настройке `speedReadyTolerancePercent`. После старта записи raw fast-poll всегда читает только `TM/PX`; невалидный fast-кадр → `POLL.BAD_FRAME` + `full_state` poll с приоритетом `init` для диагностики.
 
 ### 3.9 Подтверждение состояния после команды
 

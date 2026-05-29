@@ -11,7 +11,7 @@ const DEFAULT_SCENARIO_OPTIONS = {
   switchBoundaryDegSec: 20,
   switchHysteresisDegSec: 5,
   speedRangeToleranceDegSec: 5,
-  speedReadyToleranceDegSec: 0.5,
+  speedReadyTolerancePercent: 5,
   speedStableTimeMs: 1000,
   speedReachTimeoutMs: 10000,
   protocolPollMaxHz: 30,
@@ -61,8 +61,14 @@ function configuredRange(settings, key) {
 
 function scenarioOptions(settings, override) {
   const advanced = (settings && settings.advanced) || {};
+  const general = (settings && settings.general) || {};
   const o = override || {};
   const switchBoundary = finite(o.switchBoundaryDegSec, finite(advanced.encoderSwitchSpeedDegSec, angleDeg(advanced.encoderSwitchSpeed, DEFAULT_SCENARIO_OPTIONS.switchBoundaryDegSec)));
+  const tolerancePercent = clamp(
+    finite(o.speedReadyTolerancePercent, finite(general.speedReadyTolerancePercent, DEFAULT_SCENARIO_OPTIONS.speedReadyTolerancePercent)),
+    0,
+    100
+  );
   return {
     ranges: {
       high: configuredRange(settings, 'high'),
@@ -71,7 +77,7 @@ function scenarioOptions(settings, override) {
     switchBoundaryDegSec: switchBoundary > 0 ? switchBoundary : DEFAULT_SCENARIO_OPTIONS.switchBoundaryDegSec,
     switchHysteresisDegSec: finite(o.switchHysteresisDegSec, finite(advanced.encoderSwitchHysteresisDegSec, DEFAULT_SCENARIO_OPTIONS.switchHysteresisDegSec)),
     speedRangeToleranceDegSec: finite(o.speedRangeToleranceDegSec, finite(advanced.speedRangeToleranceDegSec, DEFAULT_SCENARIO_OPTIONS.speedRangeToleranceDegSec)),
-    speedReadyToleranceDegSec: finite(o.speedReadyToleranceDegSec, finite(advanced.speedReadyToleranceDegSec, DEFAULT_SCENARIO_OPTIONS.speedReadyToleranceDegSec)),
+    speedReadyTolerancePercent: tolerancePercent,
     speedStableTimeMs: Math.max(0, finite(o.speedStableTimeMs, finite(advanced.speedStableTimeMs, DEFAULT_SCENARIO_OPTIONS.speedStableTimeMs))),
     speedReachTimeoutMs: Math.max(1, finite(o.speedReachTimeoutMs, finite(advanced.speedReachTimeoutMs, DEFAULT_SCENARIO_OPTIONS.speedReachTimeoutMs))),
     protocolPollMaxHz: clamp(finite(o.protocolPollMaxHz, finite(advanced.rawDataPollHz, DEFAULT_SCENARIO_OPTIONS.protocolPollMaxHz)), 1, 30),
@@ -197,8 +203,11 @@ function evaluateSpeedReady(state, measuredDegSec, targetDegSec, nowMs, settings
   const prev = state || {};
   const now = finite(nowMs, Date.now());
   const startedAt = prev.startedAt || now;
-  const errorDegSec = Math.abs(finite(measuredDegSec, 0) - finite(targetDegSec, 0));
-  const withinTolerance = errorDegSec <= opts.speedReadyToleranceDegSec;
+  const target = finite(targetDegSec, 0);
+  const errorDegSec = Math.abs(finite(measuredDegSec, 0) - target);
+  const toleranceDegSec = Math.abs(target) * opts.speedReadyTolerancePercent / 100;
+  const errorPercent = Math.abs(target) > 0 ? errorDegSec / Math.abs(target) * 100 : (errorDegSec === 0 ? 0 : Infinity);
+  const withinTolerance = errorDegSec <= toleranceDegSec;
   const stableSince = withinTolerance ? (prev.stableSince || now) : null;
   const stableMs = stableSince ? now - stableSince : 0;
   const ready = withinTolerance && stableMs >= opts.speedStableTimeMs;
@@ -208,6 +217,9 @@ function evaluateSpeedReady(state, measuredDegSec, targetDegSec, nowMs, settings
     stableSince,
     stableMs,
     errorDegSec,
+    errorPercent,
+    toleranceDegSec,
+    tolerancePercent: opts.speedReadyTolerancePercent,
     withinTolerance,
     ready,
     timedOut,
