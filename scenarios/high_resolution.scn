@@ -1,0 +1,11 @@
+=====
+# Scenario file: high-resolution encoder pair
+Name high_resolution
+ResolutionHint high
+
+-------------------
+0.5     30   # deg/s    sec
+2       45
+8       60
+18      90
+=====

@@ -6,6 +6,7 @@ const res = require('./res');
 const queue = require('./queue');
 const poll = require('./poll');
 const util = require('./util');
+const scenario = require('./scenario');
 
 module.exports = {
   createElmoTransport,
@@ -27,4 +28,13 @@ module.exports = {
   omegaDegPerSec: poll.omegaDegPerSec,
   computeRateHz: poll.computeRateHz,
   ensureCr: util.ensureCr,
+  splitElmoCommands: util.splitElmoCommands,
+  DEFAULT_SPEED_RANGES: scenario.DEFAULT_SPEED_RANGES,
+  DEFAULT_SCENARIO_OPTIONS: scenario.DEFAULT_SCENARIO_OPTIONS,
+  scenarioOptions: scenario.scenarioOptions,
+  speedAllowedInRange: scenario.speedAllowedInRange,
+  selectResolutionForSpeed: scenario.selectResolutionForSpeed,
+  parseScenarioText: scenario.parseScenarioText,
+  normalizeScenario: scenario.normalizeScenario,
+  evaluateSpeedReady: scenario.evaluateSpeedReady,
 };

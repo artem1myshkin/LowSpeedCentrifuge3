@@ -4,14 +4,15 @@ const { setup, assign, createActor } = require('xstate');
 const { priorityInsert, dequeue: queueDequeue, PRIORITY } = require('./queue');
 const { buildPollEnvelope, shouldExtend, computePollDelayMs } = require('./poll');
 const { parseElmoScalars } = require('./parse');
-const { clamp } = require('./util');
+const { clamp, splitElmoCommands } = require('./util');
 
 // ElmoTransport — single serialized owner of the ELMO UDP link (plan §4, reworked for UDP).
 //
 // UDP model: ELMO listens on a UDP port and answers each command datagram with exactly one
 // reply datagram. Node-RED `udp out` / `udp in` are NOT a correlated request/response pair,
-// so the transport keeps a SINGLE in-flight request and batches each logical poll into ONE
-// datagram (`TM;PX;VX;`); every reply then maps 1:1 to the outstanding request. A received
+// so the transport keeps a SINGLE in-flight request and sends logical batches as ordered
+// atomic commands (`TM`, then `PX`, then `VX`; or `AC=...`, `DC=...`, `JV=...`, `BG` for a
+// command sequence). Replies are reassembled before being forwarded downstream. A received
 // datagram is already a complete frame — there is no FrameSplitter / idle-gap reassembly,
 // which is what capped the old TCP `sit` path at ~4 Hz.
 //
@@ -90,11 +91,15 @@ function createElmoTransport(effects) {
   function normalizeEnvelope(env) {
     const src = env || {};
     const kind = src.kind || 'cmd';
+    const cmds = splitElmoCommands(src.cmds || src.cmd);
     return {
       id: src.id || nextId(),
       kind,
       priority: typeof src.priority === 'number' ? src.priority : (PRIORITY[kind] || 0),
-      cmd: src.cmd,
+      cmd: cmds[0] || src.cmd,
+      cmds: cmds.length ? cmds : undefined,
+      cursor: 0,
+      parts: [],
       expect: src.expect || (kind === 'poll' ? 'parse' : 'ack'),
       meta: src.meta || {},
     };
@@ -137,8 +142,12 @@ function createElmoTransport(effects) {
   // Stand finding: ELMO does NOT batch its reply — one datagram per parameter. So a logical
   // poll is sent as a SEQUENCE of atomic single-parameter commands (cmds[]); each atomic reply
   // is one datagram (= one part), and the parts are reassembled into the logical raw frame.
+  function isMultiPart(env) {
+    return env && Array.isArray(env.cmds) && env.cmds.length > 0;
+  }
+
   function isBatchPoll(env) {
-    return env && env.kind === 'poll' && Array.isArray(env.cmds) && env.cmds.length > 0;
+    return env && env.kind === 'poll' && isMultiPart(env);
   }
 
   function cursorOf(env) {
@@ -146,12 +155,12 @@ function createElmoTransport(effects) {
   }
 
   function commandFor(env) {
-    if (isBatchPoll(env)) return env.cmds[Math.min(cursorOf(env), env.cmds.length - 1)];
+    if (isMultiPart(env)) return env.cmds[Math.min(cursorOf(env), env.cmds.length - 1)];
     return env && env.cmd;
   }
 
   function rawFor(env, raw) {
-    if (!isBatchPoll(env)) return raw;
+    if (!isMultiPart(env)) return raw;
     return (env.parts || []).concat([raw]).join('');
   }
 
@@ -186,19 +195,24 @@ function createElmoTransport(effects) {
     return { raw, validation };
   }
 
-  function commandRequests(cmd, pattern) {
-    return pattern.test(String(cmd || '').toUpperCase());
+  function commandListFor(env) {
+    if (!env) return [];
+    if (Array.isArray(env.cmds) && env.cmds.length) return env.cmds;
+    return env.cmd ? [env.cmd] : [];
+  }
+
+  function commandRequests(env, pattern) {
+    return commandListFor(env).some((cmd) => pattern.test(String(cmd || '').toUpperCase()));
   }
 
   function confirmPollRoleFor(env) {
     if (!isAckable(env)) return null;
     const meta = env.meta || {};
     if (meta.confirmPollRole) return meta.confirmPollRole;
-    const cmd = env.cmd;
-    if (commandRequests(cmd, /\bMO\s*=/)) return 'state';
-    if (commandRequests(cmd, /\bOL\[1\]\s*=/)) return 'full_state';
-    if (commandRequests(cmd, /\bOL\[2\]\s*=/)) return 'full_state';
-    if (commandRequests(cmd, /\bAF\s*=/)) return 'full_state';
+    if (commandRequests(env, /\bMO\s*=/)) return 'state';
+    if (commandRequests(env, /\bOL\[1\]\s*=/)) return 'full_state';
+    if (commandRequests(env, /\bOL\[2\]\s*=/)) return 'full_state';
+    if (commandRequests(env, /\bAF\s*=/)) return 'full_state';
     return null;
   }
 
@@ -219,12 +233,12 @@ function createElmoTransport(effects) {
       hasWork: ({ context }) => context.queue.length > 0,
       // Evaluated before the timeout actions run, so it predicts the post-bump miss count.
       tooManyMisses: ({ context }) => (Number(context.missCount) || 0) + 1 >= maxMisses,
-      // True while the in-flight poll still has more atomic commands to send AND the just-
-      // received part validated; false at the last part (or on a part validation failure).
+      // True while the in-flight request still has more atomic commands to send. Poll parts
+      // must validate before advancing; command batches only require another part.
       hasNextPollPart: ({ context, event }) => {
         const env = context.inFlight;
-        if (!isBatchPoll(env)) return false;
-        if (!validateCurrentPollPart(env, event.raw).ok) return false;
+        if (!isMultiPart(env)) return false;
+        if (env.kind === 'poll' && !validateCurrentPollPart(env, event.raw).ok) return false;
         return cursorOf(env) < env.cmds.length - 1;
       },
     },
@@ -371,7 +385,7 @@ function createElmoTransport(effects) {
       // emits the next atomic command.
       collectPollPart: assign(({ context, event }) => {
         const env = context.inFlight;
-        if (!isBatchPoll(env)) return {};
+        if (!isMultiPart(env)) return {};
         return {
           inFlight: {
             ...env,

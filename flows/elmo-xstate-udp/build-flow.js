@@ -1,7 +1,7 @@
 'use strict';
 
 // Generates an importable Node-RED flow (a new tab) wiring the ElmoTransport XState actor to
-// ELMO over UDP: `udp out` (one batched datagram per request) + `udp in` -> a small change node
+// ELMO over UDP: `udp out` (one atomic command per datagram) + `udp in` -> a small change node
 // that marks the datagram as an ELMO response -> the actor. There is NO FrameSplitter: a UDP
 // datagram is already a complete frame, which is what lets this path reach ~30 Hz where the old
 // TCP `sit` + idle-gap path capped at ~4 Hz. Node glue is thin; logic lives in nc3-elmo-machines.
@@ -60,7 +60,7 @@ function syncPollConfig(actor, force) {
 const ckpt = context.get('elmo_checkpoint') || {};
 const initialPollConfig = readPollConfigFromGlobals();
 
-// UDP transport: out0 -> udp out (one batched datagram per request), out1 -> ResponseParser/
+// UDP transport: out0 -> udp out (one atomic command per datagram), out1 -> ResponseParser/
 // debug, out2 -> domain events. No socket reset (UDP is connectionless); replies come via udp in.
 const actor = nc3.startElmoTransport({
     sendCmd: function (cmd) { debugTransport({ tag: 'ELMO_TX', cmd: String(cmd == null ? '' : cmd) }); node.send([{ payload: ensureCr(cmd) }, null, null]); },
@@ -72,7 +72,7 @@ const actor = nc3.startElmoTransport({
     reconnectMs: 1000,
     maxMisses: 3,
     statePeriodMs: 1000,
-    pollOptions: { minHz: 1, maxHz: 1, timerCompensationMs: 8 }
+    pollOptions: { minHz: 1, maxHz: 30, timerCompensationMs: 8 }
 }, { resolution: ckpt.resolution || 'high', pollConfig: initialPollConfig });
 
 let lastRes = ckpt.resolution || null;
@@ -150,10 +150,15 @@ if (msg.topic === 'CONNECT') { actor.send({ type: 'CONNECT' }); return null; }
 if (msg.topic === 'POLL.TICK') { actor.send({ type: 'POLL.TICK' }); return null; }
 if (msg.topic === 'POLL.FULL_STATE') { actor.send({ type: 'POLL.FULL_STATE' }); return null; }
 
-// Bring-up: any remaining string input becomes a UI.CMD (e.g. "VX", "MO=1;BG").
+// Any remaining string input becomes a UI.CMD; logical batches are split and reassembled
+// inside nc3-elmo-machines (e.g. "MO=1;BG").
 if (typeof msg.payload === 'string' && msg.payload.length) {
-    debugTransport({ tag: 'INTO_TRANSPORT_UI_CMD', topic: msg.topic, payload: shortValue(msg.payload), _msgid: msg._msgid });
-    actor.send({ type: 'UI.CMD', envelope: { kind: 'cmd', cmd: msg.payload, meta: { topic: msg.topic || 'manual' } } });
+    const meta = (msg.elmo_meta && typeof msg.elmo_meta === 'object') ? Object.assign({}, msg.elmo_meta) : {};
+    meta.topic = msg.elmo_topic || meta.topic || msg.topic || 'manual';
+    if (msg.setpointDegS !== undefined && msg.setpointDegS !== null) meta.setpointDegS = Number(msg.setpointDegS);
+    const kind = msg.elmo_kind || (msg.topic === 'tilt_brake' ? 'tilt' : 'cmd');
+    debugTransport({ tag: 'INTO_TRANSPORT_UI_CMD', kind: kind, topic: meta.topic, payload: shortValue(msg.payload), _msgid: msg._msgid });
+    actor.send({ type: 'UI.CMD', envelope: { kind: kind, cmd: msg.payload, meta: meta } });
     return null;
 }
 
@@ -248,7 +253,39 @@ const nodes = [
     x: 470,
     y: 160,
     // out0 cmd -> udp out; out1 resp -> parser/debug+meter; out2 events -> debug
-    wires: [[UDP_OUT_ID], ['elmoxs-dbg-resp', 'elmoxs-rate-meter'], ['elmoxs-dbg-evt']],
+    wires: [[UDP_OUT_ID], ['elmoxs-dbg-resp', 'elmoxs-rate-meter', 'elmoxs-link-resp-out'], ['elmoxs-dbg-evt', 'elmoxs-link-events-out']],
+  },
+  {
+    id: 'elmoxs-link-cmd-in',
+    type: 'link in',
+    z: TAB,
+    name: 'ELMO command bus in',
+    links: ['bun-elmo-cmd-out', 'newui-tilt-elmo-cmd-out'],
+    x: 210,
+    y: 380,
+    wires: [['elmoxs-transport']],
+  },
+  {
+    id: 'elmoxs-link-resp-out',
+    type: 'link out',
+    z: TAB,
+    name: 'ELMO response bus out',
+    mode: 'link',
+    links: ['7ea17c20dc6a19cc'],
+    x: 735,
+    y: 220,
+    wires: [],
+  },
+  {
+    id: 'elmoxs-link-events-out',
+    type: 'link out',
+    z: TAB,
+    name: 'ELMO event bus out',
+    mode: 'link',
+    links: [],
+    x: 735,
+    y: 460,
+    wires: [],
   },
   {
     id: 'elmoxs-udp-rx',

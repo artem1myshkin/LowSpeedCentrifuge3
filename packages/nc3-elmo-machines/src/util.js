@@ -13,4 +13,15 @@ function clamp(value, min, max) {
   return value;
 }
 
-module.exports = { ensureCr, clamp };
+function splitElmoCommands(cmd) {
+  if (Array.isArray(cmd)) {
+    return cmd.map((part) => String(part == null ? '' : part).trim()).filter(Boolean);
+  }
+  return String(cmd == null ? '' : cmd)
+    .replace(/\r+/g, ';')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+module.exports = { ensureCr, clamp, splitElmoCommands };

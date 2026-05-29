@@ -286,9 +286,9 @@ isRecording === true
 
 Сценарный менеджер измерения (бракетирование, ждать-готовности, инициализация, переключение разрешения, контроль ошибок) поверх транспорта. Отдельный Function-узел, общается с транспортом через `link` и события `UI.CMD` / `CMD.ACKED|FAILED` / `POLL.BAD_FRAME`. Детали — [scenario-feature-summary.md](scenario-feature-summary.md).
 
-### Этап 3 — миграция legacy `new ui flow` на транспорт (не начато)
+### Этап 3 — миграция legacy `new ui flow` на транспорт (частично выполнено)
 
-Сейчас production-flow продолжает работать с ELMO напрямую через `tcp request :2000` (CommandHandler/ResponseParser). После стабилизации UDP-транспорта и сценария — перевести production на тот же транспорт (или включить ELMO в UDP-only режим на ПЛК). До этого момента **обе схемы сосуществуют**.
+Production-команды `CommandHandler` и `Tilt` теперь отправляются в `ELMO XState (UDP)` через link bus, а ответы возвращаются в существующий `ResponseParser`. Legacy `tcp request :2000` узлы оставлены в `flows.json` как fallback, но отключены. Следующий этап — подключить полноценный `ScenarioManager` runtime к тем же входам/выходам транспорта.
 
 ## 6. Открытые вопросы
 

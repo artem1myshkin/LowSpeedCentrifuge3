@@ -85,7 +85,7 @@ function feedFullStatePoll(h, opts = {}) {
 // Drive to connected.awaiting with one command in flight.
 function connectedWithCmd(opts) {
   const h = makeHarness(opts);
-  h.actor.send({ type: 'UI.CMD', envelope: { id: 'cmdA', kind: 'cmd', cmd: 'JV=100;BG', meta: { topic: 'set_velocity' } } });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'cmdA', kind: 'cmd', cmd: 'JV=100', meta: { topic: 'set_velocity' } } });
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
   return h;
 }
@@ -101,7 +101,8 @@ test('offline -> connecting (probe) -> connected -> sends first queued cmd', () 
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
   assert.deepEqual(h.value(), { connected: 'awaiting' });
   assert.equal(h.ctx().inFlight.id, 'cmdA');
-  assert.deepEqual(h.calls.sendCmd, ['TM', 'JV=100;BG']); // first in-flight dispatched
+  assert.deepEqual(h.calls.sendCmd, ['TM', 'JV=100']); // first atomic command dispatched
+  assert.deepEqual(h.ctx().inFlight.cmds, ['JV=100', 'BG']);
 });
 
 test('ELMO.RESP acks the in-flight cmd, forwards raw with restored topic', () => {
@@ -115,6 +116,34 @@ test('ELMO.RESP acks the in-flight cmd, forwards raw with restored topic', () =>
   assert.deepEqual(h.calls.forwardResp, [{ raw: ';', topic: 'set_velocity' }]);
   assert.equal(acked(h.calls).length, 1);
   assert.equal(acked(h.calls)[0].id, 'cmdA');
+});
+
+test('command batches are sent atomically and reassembled before forwarding', () => {
+  const h = makeHarness();
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: { id: 'cmdBatch', kind: 'cmd', cmd: 'AC=1;DC=2;JV=3;BG', meta: { topic: 'set_velocity' } },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'AC=1');
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'AC;1;' });
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'DC=2');
+  h.actor.send({ type: 'ELMO.RESP', raw: 'DC;2;' });
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'JV=3');
+  h.actor.send({ type: 'ELMO.RESP', raw: 'JV;3;' });
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'BG');
+
+  h.calls.forwardResp.length = 0;
+  h.calls.emitEvent.length = 0;
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+
+  assert.deepEqual(h.value(), { connected: 'idle' });
+  assert.equal(h.calls.forwardResp.length, 1);
+  assert.equal(h.calls.forwardResp[0].topic, 'set_velocity');
+  assert.equal(h.calls.forwardResp[0].raw, 'AC;1;DC;2;JV;3;;');
+  assert.equal(acked(h.calls).length, 1);
+  assert.equal(acked(h.calls)[0].id, 'cmdBatch');
 });
 
 test('single in-flight: a second cmd waits until the first is dispatched', () => {
@@ -382,7 +411,7 @@ test('ingests observed ELMO CR-separated scalar response and returns to measured
   const h = makeHarness({ startNow: 500 });
   h.actor.send({ type: 'CONNECT' });
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
-  h.actor.send({ type: 'UI.CMD', envelope: { id: 'jv', kind: 'cmd', cmd: 'JV=1;BG', meta: { setpointDegS: 360 } } });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'jv', kind: 'cmd', cmd: 'JV=1', meta: { setpointDegS: 360 } } });
   assert.equal(h.ctx().omegaSource, 'setpoint');
 
   h.actor.send({ type: 'ELMO.RESP', raw: 'ok' }); // command ack -> dispatch -> poll can run

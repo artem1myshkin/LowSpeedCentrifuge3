@@ -1,8 +1,8 @@
 # Состояние проекта LowSpeedCentrifuge3
 
-## Актуализация 2026-05-28 (UDP, атомарный poll)
+## Актуализация 2026-05-29 (UDP, атомарный poll, production bus)
 
-Транспорт `ElmoTransport`/XStateMachine переведён с TCP `sit` на **UDP с атомарными командами** (по одной команде-параметру на датаграмму с реассемблированием в логический кадр) и компенсацией Windows-таймера — даёт ~30–32 Гц при цели 30 Гц. Дизайн и журнал решений — `docs/xstate-elmo-design.md`, текущее состояние — `docs/xstate-elmo-status.md`, справочник по файлам пакета — `docs/xstate-elmo-files.md`. Legacy production-flow (`new ui flow`) пока остаётся на TCP `tcp request :2000`.
+Транспорт `ElmoTransport`/XStateMachine переведён с TCP `sit` на **UDP с атомарными командами** (по одной команде-параметру на датаграмму с реассемблированием в логический кадр) и компенсацией Windows-таймера — даёт ~30–32 Гц при цели 30 Гц. Production-контур `BUN flow`/`new ui flow` теперь подключён к этому транспорту через link bus: UI-команды и `tilt_brake` идут в `ELMO XState (UDP)`, ответы возвращаются в существующий `ResponseParser`. Legacy TCP-узлы оставлены в flow, но выключены.
 
 Актуально на: 2026-05-25
 Проект: `C:\Users\Артём\.node-red\projects\LowSpeedCentrifuge3`
@@ -36,13 +36,13 @@ UI Dashboard 2, страницы:
 - MQTT broker `localhost:1883`;
 - Python + `paho-mqtt`, `C:\NC3\nc3_bun.py`, `C:\NC3\nc3_bep.py`;
 - `C:\NC3\settings.json`, `C:\NC3\protocols`, `C:\NC3\data`, `C:\NC3\scenarios`;
-- ELMO TCP `192.168.1.2:2000`, БУН UDP `192.168.1.5:32767`, БЕП UDP `192.168.1.20:20001`.
+- ELMO UDP `192.168.1.2:5001` с локальным bind `:5005`, legacy ELMO TCP `192.168.1.2:2000` оставлен только как отключённый fallback, БУН UDP `192.168.1.5:32767`, БЕП UDP `192.168.1.20:20001`.
 
 `package.json` не фиксирует версии Node-RED узлов — для воспроизводимого развертывания это нужно закрыть.
 
 ## 2. ELMO (угловая скорость)
 
-Транспорт: текстовый `Direct Access TCP/IP`, `192.168.1.2:2000`, команды завершаются `CR`. Обмен через `tcp request`. Логика: `CommandHandler`, `ResponseParser`, `polling ELMO`, `Tilt`.
+Транспорт: UDP `Direct Access` через вкладку `ELMO XState (UDP)`: `udp out` на `192.168.1.2:5001`, `udp in` на локальном `:5005`, команды завершаются `CR`. Логика production: `CommandHandler` и `Tilt` формируют логические команды, link bus передаёт их в `ElmoTransport`, транспорт режет цепочки на атомарные UDP-команды и собирает ответы обратно, `ResponseParser` остаётся единым доменным парсером. Legacy `tcp request :2000` в `BUN flow`/`new ui flow` выключены.
 
 Команды UI: `reread`, `driveInit`, `set_motion_params`, `motor_on/off`, `drive_stop`, `drive_bg`, `drive_home`, `set_resolution`, `set_velocity`/`set_jv`, `set_jp`, `set_absolute_position`, `set_relative_position`, `tilt_brake` (→ `OL[2]`).
 
@@ -56,7 +56,7 @@ UI Dashboard 2, страницы:
 
 ### Опрос состояния
 
-Единственный регулярный repeating inject: `topic = poll_data`, 1 Гц → команда `MS;TM;PX;TM;MO;SO;VX;OL[2];`. `TM` стоит до и после `PX`. Результат парсится в `poll_buffer`, кладется в `global.drive_state`, рассылается в UI и в `angle_buffer`.
+Регулярный опрос владеется `ElmoTransport`: self-clocked poll 1..30 Гц с `timerCompensationMs=8`, атомарные команды `TM`/`PX`/`VX` и периодический state/full-state poll. При raw-записи частота берётся из настроек `advanced.rawDataPollHz` и ограничивается 30 Гц. Старый repeating inject `poll_data` и TCP poll builder выключены.
 
 ## 3. Протоколы, данные и метки времени
 

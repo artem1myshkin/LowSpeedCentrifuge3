@@ -16,7 +16,7 @@ const {
   computeRateHz,
   computePollDelayMs,
 } = require('../src/poll');
-const { ensureCr, clamp } = require('../src/util');
+const { ensureCr, clamp, splitElmoCommands } = require('../src/util');
 const { ticksPerRev, degPerSecToTicks } = require('../src/res');
 
 test('priorityInsert: cmd before poll, stable FIFO within priority', () => {
@@ -46,6 +46,13 @@ test('ensureCr: appends CR once', () => {
   assert.equal(ensureCr('JV=1;BG\r'), 'JV=1;BG\r');
   assert.equal(ensureCr(''), '\r');
   assert.equal(ensureCr(null), '\r');
+});
+
+test('splitElmoCommands: splits semicolon and CR command batches', () => {
+  assert.deepEqual(splitElmoCommands('AC=1;DC=2;JV=3;BG\r'), ['AC=1', 'DC=2', 'JV=3', 'BG']);
+  assert.deepEqual(splitElmoCommands('OL[1]=0;\rCA[18]=262144000;'), ['OL[1]=0', 'CA[18]=262144000']);
+  assert.deepEqual(splitElmoCommands(['ST', 'MO=0']), ['ST', 'MO=0']);
+  assert.deepEqual(splitElmoCommands(';;'), []);
 });
 
 test('clamp', () => {

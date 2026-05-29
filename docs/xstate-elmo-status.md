@@ -1,6 +1,6 @@
 # XState-машина транспорта ELMO — статус
 
-Актуально на: 2026-05-28. Документ для AI-агента: что уже сделано, что НЕ сделано, какие контракты не ломать.
+Актуально на: 2026-05-29. Документ для AI-агента: что уже сделано, что НЕ сделано, какие контракты не ломать.
 
 Полное описание фичи и решений — [xstate-elmo-design.md](xstate-elmo-design.md). Краткий per-file справочник — [xstate-elmo-files.md](xstate-elmo-files.md).
 
@@ -8,10 +8,10 @@
 
 | Слой | Состояние | Где |
 |---|---|---|
-| Пакет `nc3-elmo-machines` | **Готов**, 44 теста зелёные | `packages/nc3-elmo-machines/` |
-| Node-RED-обвязка (вкладка `ELMO XState (UDP)`) | **Готов**, протестирован на стенде | `flows.json`, генератор `flows/elmo-xstate-udp/build-flow.js` |
-| ScenarioManager (Этап 2) | **Не начат** | План — `scenario-feature-summary.md` |
-| Миграция legacy `new ui flow` (Этап 3) | **Не начат** | Production всё ещё TCP `tcp request :2000` |
+| Пакет `nc3-elmo-machines` | **Готов**, 52 теста зелёные | `packages/nc3-elmo-machines/` |
+| Node-RED-обвязка (вкладка `ELMO XState (UDP)`) | **Готова**, production-команды подключены через link bus | `flows.json`, генератор `flows/elmo-xstate-udp/build-flow.js` |
+| ScenarioManager (Этап 2) | **Частично**: parser/helpers и файлы сценариев готовы, runtime-исполнитель ещё не подключён | `packages/nc3-elmo-machines/src/scenario.js`, `scenarios/*.scn` |
+| Миграция legacy `new ui flow` (Этап 3) | **Частично**: UI-команды ELMO/`tilt_brake` идут через XState/UDP, legacy TCP-узлы отключены | `BUN flow`, `new ui flow`, `ELMO XState (UDP)` |
 
 ## Что реализовано (коммиты)
 
@@ -33,8 +33,8 @@
 
 ## Что НЕ реализовано (известные ограничения)
 
-1. **ScenarioManager** (Этап 2). Нет сценарного исполнителя поверх транспорта; запись/измерение пока — через legacy-функции в production-flow. См. `scenario-feature-summary.md` для требований.
-2. **Production-flow всё ещё на TCP.** `new ui flow` использует свои `tcp request :2000` независимо от XState. Если ELMO переконфигурируется на UDP-only, нужно мигрировать и legacy.
+1. **ScenarioManager runtime** (Этап 2). Parser/helpers и три готовых `.scn` файла есть, но нет исполнителя поверх транспорта; запись/измерение пока — через существующие функции production-flow. См. `scenario-feature-summary.md` для требований.
+2. **Legacy TCP fallback** оставлен в `flows.json`, но выключен. Рабочий production-путь ELMO теперь идёт через `ELMO XState (UDP)`.
 3. **`timeBeginPeriod(1)` на хосте** не настроен. Потолок частоты — ~32 Гц на Windows из-за 15.625 мс тика `setTimeout`. Для текущей задачи (нужно ≥4 Гц) не критично.
 4. **Сценарии устойчивости при потерях.** Тестировался на «чистой» сети. Поведение при штормах потерь UDP не валидировано.
 5. **Wrap счётчика `TM`** (uint32 µs, ~71.6 мин) не компенсируется. Для коротких записей не критично.
@@ -47,7 +47,7 @@ cd packages/nc3-elmo-machines
 node --test
 ```
 
-Должно быть `# pass 44` за ~200 мс.
+Должно быть `# pass 52` за ~200–300 мс.
 
 ## Как протестировать на стенде
 

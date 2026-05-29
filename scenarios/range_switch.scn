@@ -1,0 +1,12 @@
+=====
+# Scenario file: high/low range switching with 20 deg/s +/-5 deg/s hysteresis
+Name range_switch
+ResolutionHint auto
+
+-------------------
+5       30   # deg/s    sec
+22      45
+30      60
+18      45
+12      30
+=====
