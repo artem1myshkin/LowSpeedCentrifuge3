@@ -84,6 +84,14 @@ function scenarioOptions(settings, override) {
   };
 }
 
+function computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs) {
+  const target = Math.abs(finite(targetDegSec, 0));
+  const acceleration = Math.abs(finite(accelerationDegSec2, 0));
+  const reserve = Math.max(0, finite(reserveMs, 10000));
+  const rampMs = acceleration > 0 ? (target / acceleration) * 1000 : 0;
+  return Math.max(1, Math.ceil(rampMs + reserve));
+}
+
 function speedAllowedInRange(speedDegSec, resolution, options) {
   const opts = options && options.ranges ? options : scenarioOptions(null, options);
   const absSpeed = Math.abs(finite(speedDegSec, 0));
@@ -232,6 +240,7 @@ module.exports = {
   scenarioOptions,
   speedAllowedInRange,
   selectResolutionForSpeed,
+  computeSpeedReachTimeoutMs,
   parseScenarioText,
   normalizeScenario,
   evaluateSpeedReady,

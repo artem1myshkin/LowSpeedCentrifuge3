@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
   scenarioOptions,
   selectResolutionForSpeed,
+  computeSpeedReachTimeoutMs,
   parseScenarioText,
   normalizeScenario,
   evaluateSpeedReady,
@@ -44,6 +45,13 @@ test('selectResolutionForSpeed rejects low-range absolute max above 360 deg/s', 
   const selected = selectResolutionForSpeed(361, 'low');
   assert.equal(selected.ok, false);
   assert.equal(selected.reason, 'above_low_absolute_max');
+});
+
+test('computeSpeedReachTimeoutMs uses target speed, acceleration and reserve', () => {
+  assert.equal(computeSpeedReachTimeoutMs(8, 0.5), 26000);
+  assert.equal(computeSpeedReachTimeoutMs(-8, 0.5), 26000);
+  assert.equal(computeSpeedReachTimeoutMs(0, 0.5), 10000);
+  assert.equal(computeSpeedReachTimeoutMs(8, 0.5, 5000), 21000);
 });
 
 test('parseScenarioText reads metadata and speed/hold steps', () => {

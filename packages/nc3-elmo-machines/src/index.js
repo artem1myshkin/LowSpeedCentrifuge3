@@ -34,6 +34,7 @@ module.exports = {
   scenarioOptions: scenario.scenarioOptions,
   speedAllowedInRange: scenario.speedAllowedInRange,
   selectResolutionForSpeed: scenario.selectResolutionForSpeed,
+  computeSpeedReachTimeoutMs: scenario.computeSpeedReachTimeoutMs,
   parseScenarioText: scenario.parseScenarioText,
   normalizeScenario: scenario.normalizeScenario,
   evaluateSpeedReady: scenario.evaluateSpeedReady,
