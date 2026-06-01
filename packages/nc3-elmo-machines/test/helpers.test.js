@@ -13,6 +13,7 @@ const {
   buildPollEnvelope,
   shouldExtend,
   omegaDegPerSec,
+  estimateVelocityFromPositionSamples,
   computeRateHz,
   computePollDelayMs,
 } = require('../src/poll');
@@ -121,6 +122,18 @@ test('omegaDegPerSec: ticks/s -> deg/s by resolution', () => {
   assert.ok(Math.abs(omegaDegPerSec(3640888, 'high') - 5) < 1e-3);
   // low: 6553600 ticks/rev; -3276800 ticks/s ~= 180 deg/s (abs).
   assert.ok(Math.abs(omegaDegPerSec(-3276800, 'low') - 180) < 1e-3);
+});
+
+test('estimateVelocityFromPositionSamples: derives signed velocity from PX/TM window', () => {
+  const estimate = estimateVelocityFromPositionSamples([
+    { px: 1000, tm: 1000000 },
+    { px: 1010, tm: 1250000 },
+    { px: 1910.2, tm: 2000000 },
+  ]);
+  assert.ok(estimate);
+  assert.ok(Math.abs(estimate.ticksPerSec - 910.2) < 1e-9);
+  assert.equal(estimate.dtSec, 1);
+  assert.ok(estimateVelocityFromPositionSamples([{ px: 1, tm: 1 }]) === null);
 });
 
 test('computeRateHz: clamp 1..30', () => {

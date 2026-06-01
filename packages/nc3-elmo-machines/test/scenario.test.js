@@ -2,11 +2,16 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const {
   scenarioOptions,
   selectResolutionForSpeed,
   computeSpeedReachTimeoutMs,
+  normalizeScenarioFileName,
+  listScenarioFiles,
   parseScenarioText,
   normalizeScenario,
   evaluateSpeedReady,
@@ -52,6 +57,16 @@ test('computeSpeedReachTimeoutMs uses target speed, acceleration and reserve', (
   assert.equal(computeSpeedReachTimeoutMs(-8, 0.5), 26000);
   assert.equal(computeSpeedReachTimeoutMs(0, 0.5), 10000);
   assert.equal(computeSpeedReachTimeoutMs(8, 0.5, 5000), 21000);
+});
+
+test('listScenarioFiles returns defaults plus .scn files from directory', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nc3-scenarios-'));
+  fs.writeFileSync(path.join(dir, 'custom.scn'), 'Name custom\n-------------------\n1 1\n');
+  fs.writeFileSync(path.join(dir, 'notes.txt'), 'ignore');
+
+  const files = listScenarioFiles(dir, ['high_resolution.scn']);
+  assert.deepEqual(files, ['high_resolution.scn', 'custom.scn']);
+  assert.equal(normalizeScenarioFileName('..\\Тестовый сценарий'), 'Тестовый сценарий.scn');
 });
 
 test('parseScenarioText reads metadata and speed/hold steps', () => {

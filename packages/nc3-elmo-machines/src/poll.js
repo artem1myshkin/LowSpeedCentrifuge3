@@ -106,6 +106,50 @@ function omegaDegPerSec(vx, resolution) {
   return (Math.abs(Number(vx) || 0) / tpr) * 360;
 }
 
+function sampleValue(sample, keys) {
+  for (const key of keys) {
+    if (sample && sample[key] != null && sample[key] !== '') {
+      const n = Number(sample[key]);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return undefined;
+}
+
+function estimateVelocityFromPositionSamples(samples, options) {
+  const o = options || {};
+  const minSpanUs = Math.max(1, Number(o.minSpanUs) || 200000);
+  const maxSpanUs = Math.max(minSpanUs, Number(o.maxSpanUs) || 3000000);
+  const data = Array.isArray(samples)
+    ? samples.map((sample) => ({
+      positionTicks: sampleValue(sample, ['positionTicks', 'position', 'px']),
+      tmUs: sampleValue(sample, ['tmUs', 'tm_us', 'tm']),
+    })).filter((sample) => Number.isFinite(sample.positionTicks) && Number.isFinite(sample.tmUs))
+    : [];
+  if (data.length < 2) return null;
+
+  const last = data[data.length - 1];
+  let first = null;
+  for (let i = data.length - 2; i >= 0; i--) {
+    const candidate = data[i];
+    const dtUs = last.tmUs - candidate.tmUs;
+    if (!(dtUs > 0)) continue;
+    if (dtUs > maxSpanUs) break;
+    first = candidate;
+  }
+  if (!first) return null;
+
+  const dtUs = last.tmUs - first.tmUs;
+  if (dtUs < minSpanUs) return null;
+  const ticksPerSec = (last.positionTicks - first.positionTicks) * 1000000 / dtUs;
+  if (!Number.isFinite(ticksPerSec)) return null;
+  return {
+    ticksPerSec,
+    dtSec: dtUs / 1000000,
+    positionDeltaTicks: last.positionTicks - first.positionTicks,
+  };
+}
+
 // Legacy helper for speed-proportional polling. The runtime scheduler now uses fixed
 // normalPollHz/fastRawPollHz, but this remains exported for callers that still need it.
 function computeRateHz(omegaDegSec, options) {
@@ -160,6 +204,7 @@ module.exports = {
   shouldExtend,
   buildPollEnvelope,
   omegaDegPerSec,
+  estimateVelocityFromPositionSamples,
   computeRateHz,
   computePollDelayMs,
 };

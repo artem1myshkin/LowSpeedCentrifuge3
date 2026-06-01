@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { degPerSecToTicks } = require('./res');
 
 const DEFAULT_SPEED_RANGES = {
@@ -24,6 +26,39 @@ function finite(value, fallback) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizeScenarioFileName(value) {
+  let name = path.basename(String(value || '').trim());
+  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim();
+  if (!name) name = 'scenario.scn';
+  if (!/\.scn$/i.test(name)) name += '.scn';
+  return name;
+}
+
+function listScenarioFiles(baseDir, defaults) {
+  const seen = new Set();
+  const out = [];
+  const add = (name) => {
+    const fileName = normalizeScenarioFileName(name);
+    if (!/\.scn$/i.test(fileName)) return;
+    const key = fileName.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(fileName);
+  };
+
+  (Array.isArray(defaults) ? defaults : []).forEach(add);
+  try {
+    fs.readdirSync(baseDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.scn$/i.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b, 'ru'))
+      .forEach(add);
+  } catch (_) {
+    // Missing scenario directory is handled by the caller/file node on first save.
+  }
+  return out;
 }
 
 function angleDeg(value, fallback) {
@@ -241,6 +276,8 @@ module.exports = {
   speedAllowedInRange,
   selectResolutionForSpeed,
   computeSpeedReachTimeoutMs,
+  normalizeScenarioFileName,
+  listScenarioFiles,
   parseScenarioText,
   normalizeScenario,
   evaluateSpeedReady,
