@@ -4,6 +4,14 @@
 
 Этот файл фиксирует фактические способы взаимодействия между `Node-RED`, приводом `ELMO`, узлом наклона `БУН` и системой `БЕП` в проекте НЦ-3/2.
 
+## Актуализация 2026-06-01
+
+- Основной production-путь ELMO — UDP/XState: `CommandHandler -> ELMO XState (UDP) -> ResponseParser`. Legacy TCP `192.168.1.2:2000` оставлен выключенным fallback.
+- Normal poll: атомарные `TM/PX/VX` 2 Гц; fast raw poll во время записи: атомарные `TM/PX` до 30 Гц.
+- В `low` диапазоне выбранная скорость для UI/сценариев берется из оценки `PX/TM`; raw `VX` сохраняется отдельно как `velocity_raw`.
+- Сценарии работают с runtime-каталогом `C:\NC3\scenarios`; UI умеет редактировать `.scn` файлы через `ScenarioFileService`.
+- Протоколный формат не менялся: сценарный runtime вызывает существующие `open_protocol`, `start_recording`, `record_measurement`, `cancel_recording`.
+
 Документ собран по четырём источникам:
 
 - текущий production-flow `new ui flow` в [flows.json](C:/Users/Артём/.node-red/projects/LowSpeedCentrifuge3/flows.json)
@@ -15,14 +23,14 @@
 
 | Компонент | Роль | Протокол | Адрес / порт | Как связан с `Node-RED` |
 |---|---|---|---|---|
-| `ELMO` | привод внутренней оси, вращение планшайбы | текстовый `Direct Access` (TCP в legacy-flow, UDP в XState-транспорте) | TCP `192.168.1.2:2000` (legacy) / UDP `192.168.1.2:5001` cmd, `:5005` reply (XState) | `tcp request` из `new ui flow`; `udp out`/`udp in` во вкладке `ELMO XState (UDP)` |
+| `ELMO` | привод внутренней оси, вращение планшайбы | текстовый `Direct Access` по UDP/XState, TCP только legacy fallback | UDP `192.168.1.2:5001` cmd, локальный `:5005` reply; TCP `192.168.1.2:2000` выключен | `udp out`/`udp in` во вкладке `ELMO XState (UDP)`, команды приходят из `CommandHandler` |
 | `БУН` | управление внешней осью наклона | `UDP` + `Modbus RTU` поверх UDP | `192.168.1.5:32767` | через внешний MQTT/UDP-шлюз `nc3_bun.py` |
 | `БЕП` | измерение ёмкости/зазора по каналам | кастомный бинарный `UDP` | `192.168.1.20:20001` | через внешний MQTT/UDP-шлюз `nc3_bep.py` и MQTT-топики |
 | `MQTT broker` | внутренняя шина обмена | `MQTT` | `localhost:1883` | основной способ связи `Node-RED` с `БУН/БЕП`-шлюзами |
 
 ## Общая схема
 
-1. `Node-RED` напрямую управляет `ELMO` по `TCP`.
+1. `Node-RED` управляет `ELMO` через единый UDP/XState-транспорт; старый TCP-путь оставлен выключенным fallback.
 2. `Node-RED` не работает с `БУН` напрямую по `UDP`; вместо этого общается с `nc3_bun.py` через `MQTT`.
 3. `Node-RED` не работает с `БЕП` напрямую по `UDP`; вместо этого использует MQTT-шлюз `nc3_bep.py` и отдельную process-обвязку в flow.
 4. Часть логики хранения данных и протоколов реализована прямо в `Node-RED` через `file`, `file in` и `ProtocolManager`.
@@ -32,16 +40,16 @@
 ### Транспорт и endpoint
 
 - Протокол: текстовые команды `ELMO Platinum Direct Access`
-- Legacy production-flow (`new ui flow`): TCP `192.168.1.2:2000` через `tcp request`
-- XState-транспорт (вкладка `ELMO XState (UDP)`): UDP — команды на `192.168.1.2:5001`, ответы на локальный `:5005` (`udp out`/`udp in`)
+- Production-flow: XState/UDP — команды на `192.168.1.2:5001`, ответы на локальный `:5005` (`udp out`/`udp in`)
+- Legacy TCP `192.168.1.2:2000` через `tcp request` сохранен в flow выключенным fallback
 - Команда завершается обязательным `CR` (`\r`)
-- Переход на UDP сделан ради частоты опроса: по TCP `sit` + idle-gap потолок был ~4 Гц; по UDP с атомарными per-параметровыми командами и реассемблированием — ~30–32 Гц. См. [xstate-elmo-design.md](xstate-elmo-design.md). Полная замена production-flow на UDP — отдельный шаг; если ELMO переконфигурирован на UDP, legacy TCP-путь нужно мигрировать.
+- Переход на UDP сделан ради частоты опроса: по TCP `sit` + idle-gap потолок был ~4 Гц; по UDP с атомарными per-параметровыми командами и реассемблированием — ~30–32 Гц. См. [xstate-elmo-design.md](xstate-elmo-design.md).
 
 Важно:
 
 - в рекомендациях по разработке приведены примерные Ethernet-параметры `PP[23]..PP[26]`
 - это справочный пример из документации, а не текущее сетевое значение production-flow
-- фактический адрес в текущем проекте задается прямо в `flows.json` как `192.168.1.2:2000`
+- фактические адреса ELMO в текущем проекте задаются прямо в `flows.json`: UDP `192.168.1.2:5001` и локальный reply bind `:5005`
 
 ### Как `Node-RED` работает с ELMO
 
@@ -52,7 +60,7 @@
 - `polling ELMO`
 - `Tilt`
 
-`Node-RED` получает команды из Vue UI по `msg.topic`, преобразует их в строку команд `ELMO`, отправляет по `TCP`, затем разбирает ответ и собирает снимок состояния для UI.
+`Node-RED` получает команды из Vue UI по `msg.topic`, `CommandHandler` преобразует их в строки команд `ELMO`, транспорт `ELMO XState (UDP)` сериализует очередь и отправляет атомарные UDP-команды, затем `ResponseParser` разбирает ответ и собирает снимок состояния для UI.
 
 ### Команды и параметры, которые реально используются
 
@@ -135,14 +143,14 @@
 
 ### Опрос состояния
 
-В production-flow есть два характерных цикла опроса:
+В legacy TCP-flow были два характерных цикла опроса:
 
 - основной `reread`: `OL[1]`, `TR[1]`, `AF`, `SR`, `MO`, `SO`, `PX`, `VX`, `SP`, `AC`, `DC`
 - регулярный poll (1 Гц, `topic = poll_data`): `MS;TM;PX;TM;MO;SO;VX;OL[2];`
 
-В регулярном poll команда `TM` стоит до и после `PX`. `ResponseParser` собирает обе метки и вычисляет `tm_us = (tm_before + tm_after) / 2` — это оценка времени ELMO в момент чтения `PX`. Именно эта метка, а не системное время Node-RED, используется для буфера протокола (см. раздел про данные).
+В старом TCP regular poll команда `TM` стояла до и после `PX`, а `ResponseParser` вычислял `tm_us = (tm_before + tm_after) / 2`. В текущем UDP/XState poll используется атомарная пара `TM/PX` внутри одного логического кадра; именно метка ELMO, а не системное время Node-RED, используется для буфера протокола (см. раздел про данные).
 
-В актуальном XState/UDP-потоке regular `poll_data` отделен от legacy TCP-пути: обычный опрос идет 2 Гц и содержит `TM/PX/VX`, а быстрый raw-опрос включается только во время записи исходных данных и содержит только `TM/PX`. Для сценарных data-файлов используется простая пара `TM/PX`, без усреднения `TM-PX-TM` и без дополнительных параметров ELMO.
+В актуальном XState/UDP-потоке `poll_data` отделен от legacy TCP-пути: обычный опрос идет 2 Гц и содержит атомарные `TM/PX/VX`, а быстрый raw-опрос включается только во время записи исходных данных и содержит только `TM/PX`. Для сценарных data-файлов используется простая пара `TM/PX`, без усреднения `TM-PX-TM` и без дополнительных параметров ELMO.
 
 ### Как ответы ELMO попадают в UI
 
@@ -155,6 +163,10 @@
 
 - `position`
 - `velocity`
+- `velocity_raw`
+- `velocity_derived`
+- `velocity_source`
+- `velocity_deg_per_sec`
 - `ms`
 - `so`
 - `mo`
@@ -177,6 +189,28 @@
 - `Abort input active`
 - `Drive over temperature`
 - `Motor over temperature`
+
+### Сценарии
+
+Файлы сценариев лежат в `C:\NC3\scenarios` и имеют формат:
+
+```text
+Name <имя>
+ResolutionHint auto
+-------------------
+<скорость_град_с> <выдержка_с>
+```
+
+Комментарии начинаются с `#`. Пакетные helper-функции `parseScenarioText`, `normalizeScenario`, `selectResolutionForSpeed`, `computeSpeedReachTimeoutMs`, `listScenarioFiles` доступны Node-RED через `global.get('nc3')`.
+
+Runtime:
+
+- `ScenarioFileService` читает/пишет `.scn` через file nodes и публикует `scenario_catalog`;
+- `ScenarioManager` на `scenario_start` загружает файл, нормализует шаги и отправляет команды через существующий `CommandHandler`;
+- если шаг требует другой диапазон, runtime отправляет `drive_stop`, затем `set_resolution`, `driveInit` и повторяет текущий шаг;
+- ожидание скорости начинается после `CMD.ACKED` для `set_jv`, timeout = `abs(targetSpeed)/AC + 10 с`;
+- при достижении устойчивого допуска runtime вызывает `start_recording`, после выдержки — `record_measurement`;
+- `scenario_pause`/`scenario_emergency_stop` отменяют текущую запись и сохраняют текущий шаг, `scenario_resume` выполняет этот шаг заново.
 
 ## БУН
 
@@ -458,7 +492,7 @@ UI шлет во flow такие топики:
 - `set_relative_position`
 - `set_resolution`
 
-Они обрабатываются функцией `CommandHandler`, превращаются в текстовые команды `ELMO` и уходят по `TCP`.
+Они обрабатываются функцией `CommandHandler`, превращаются в текстовые команды `ELMO` и уходят в единый `ELMO XState (UDP)` transport.
 
 ### Для БУН
 
@@ -477,7 +511,7 @@ UI шлет:
 
 - UI формирует `tilt_brake`
 - flow превращает его в `OL[2]=...`
-- команда уходит в `ELMO` по `TCP`
+- команда уходит в `ELMO` через `ELMO XState (UDP)`
 
 ### Для БЕП
 
@@ -518,7 +552,7 @@ UI шлет:
 
 - XState/UDP raw-poll для записи исходных данных шлет только `TM/PX`;
 - `ResponseParser` кладет в payload `tm_us` и `position`;
-- `angle_buffer` пишет точки `{ t: tm_us / 1e6, tm_us, angle }` пока `is_recording === true`, обрезая буфер по `recording_duration_sec`;
+- `angle_buffer` пишет точки `{ t: tm_us / 1e6, tm_us, angle, position_ticks, resolution }` пока `is_recording === true`, обрезая буфер по длительности текущей записи;
 - если в ответе нет `tm_us`, точка отбрасывается (системное время не подставляется);
 - data-файл содержит только временную метку ELMO и угол, без `VX`, `MO`, `SO`, `SR` и других параметров ELMO;
 - `ProtocolManager.finalizeRecording` считает скорость линейной регрессией `angle(t)` и пишет в data-файл колонку `Время` сырыми метками `t = tm_us / 1e6` (без вычитания `t0`). На расчет скорости это не влияет — наклон регрессии инвариантен к сдвигу времени.

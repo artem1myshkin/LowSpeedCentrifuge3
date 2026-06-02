@@ -1,10 +1,18 @@
 # Пакет `nc3-elmo-machines` — справочник по файлам
 
-Актуально на: 2026-05-29. Краткая карта: что в каком файле и какие функции. Без полного кода — за деталями в `packages/nc3-elmo-machines/src/`.
+Актуально на: 2026-06-01. Краткая карта: что в каком файле и какие функции. Без полного кода — за деталями в `packages/nc3-elmo-machines/src/`.
 
 Поведение системы целиком — [xstate-elmo-design.md](xstate-elmo-design.md). Текущее состояние — [xstate-elmo-status.md](xstate-elmo-status.md).
 
 `ElmoTransport` — **транспортная** XState-машина (один владелец UDP-канала к ELMO, очередь, опрос), не машина процесса измерения. Машина чистая: весь ввод-вывод вынесен в `effects`, тестируется через `node --test` без Node-RED.
+
+## Актуализация 2026-06-01
+
+- `poll.js` экспортирует `estimateVelocityFromPositionSamples(samples)`: signed-оценка ticks/s из окна `PX/TM` с минимальным span 200 мс и максимальным 3 с. Node-RED `ResponseParser` использует ее для выбранной скорости в `low` диапазоне.
+- `scenario.js` экспортирует `computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs)`, `normalizeScenarioFileName` и `listScenarioFiles`; сценарный timeout теперь вычисляется от скорости и текущего `AC`.
+- `index.js` реэкспортирует новые helpers для Node-RED Function-узлов через `global.get('nc3')`.
+- `ScenarioFileService` находится в `flows.json`, а не в пакете: он читает/пишет runtime-файлы `C:\NC3\scenarios\*.scn`, хранит `global.scenario_files` и `global.scenario_documents`.
+- Текущий `node --test` для пакета: 55 тестов.
 
 ## Актуализация 2026-05-29
 
@@ -31,7 +39,7 @@
 
 ## `index.js`
 
-Реэкспортирует: `createElmoTransport`, `startElmoTransport`, `parseElmoScalars`, `RES`, `ticksPerRev`, `ticksPerDeg`, `degPerSecToTicks`, `priorityInsert`, `dequeue`, `PRIORITY`, `DATA_POLL`, `buildPollEnvelope`, `buildStatePoll`, `buildFullStatePoll`, `computePollDelayMs`, `omegaDegPerSec`, `computeRateHz`, `parseScenarioText`, `normalizeScenario`, `selectResolutionForSpeed`, `evaluateSpeedReady`, `scenarioOptions`, `ensureCr`.
+Реэкспортирует: `createElmoTransport`, `startElmoTransport`, `parseElmoScalars`, `RES`, `ticksPerRev`, `ticksPerDeg`, `degPerSecToTicks`, `priorityInsert`, `dequeue`, `PRIORITY`, `DATA_POLL`, `buildPollEnvelope`, `buildStatePoll`, `buildFullStatePoll`, `computePollDelayMs`, `omegaDegPerSec`, `estimateVelocityFromPositionSamples`, `computeRateHz`, `parseScenarioText`, `normalizeScenario`, `selectResolutionForSpeed`, `computeSpeedReachTimeoutMs`, `normalizeScenarioFileName`, `listScenarioFiles`, `evaluateSpeedReady`, `scenarioOptions`, `ensureCr`, `splitElmoCommands`.
 
 Пакет грузится в Node-RED через `functionGlobalContext` (`global.get('nc3')`), `xstate` — внутренняя зависимость.
 
@@ -124,6 +132,7 @@ UDP + атомарные команды: один логический poll — 
 | `buildPollEnvelope(args)` | Конверт poll: `cmds` (атомарные команды), `cursor`/`parts`, `cmd = cmds[0]`, `required` (полный список ключей), `partRequired` (по каждой части), `priority`, `pollRole`, `meta.topic`. |
 | `shouldExtend(lastExtendedAt, now, statePeriodMs)` | Пора ли добавить медленный state-poll. |
 | `omegaDegPerSec(vx, resolution)` | `VX` (ticks/s) → °/с по разрешению. |
+| `estimateVelocityFromPositionSamples(samples, options)` | Оценка signed ticks/s по окну `PX/TM`; используется для выбранной скорости в `low` диапазоне. |
 | `computeRateHz(omega, options)` | `clamp(|ω|/12, minHz, maxHz)`. |
 | `computePollDelayMs(context, options)` | Задержка до следующего poll. В normal-режиме используется фиксированная частота `normalPollHz` (по умолчанию 2 Гц). В fast-режиме — start-to-start от `fastRawPollHz`. `options.timerCompensationMs` (дефолт 0) вычитается перед `max(1,...)` — компенсация гранулярности Windows-таймера. |
 
@@ -136,6 +145,9 @@ UDP + атомарные команды: один логический poll — 
 | Функция / константа | Назначение |
 |---|---|
 | `DEFAULT_SCENARIO_OPTIONS` | Базовые настройки сценариев: 10 с timeout достижения скорости, 1 с устойчивости, допуск скорости 5 %, гистерезис диапазона 20 ± 5 град/с. |
+| `computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs)` | Timeout ожидания скорости: время разгона `abs(speed)/AC` плюс резерв, сейчас резерв 10 с. |
+| `normalizeScenarioFileName(value)` | Безопасное имя `.scn` без путей и недопустимых символов. |
+| `listScenarioFiles(baseDir, defaults)` | Каталог сценариев: дефолтные файлы плюс `.scn` из runtime-директории. |
 | `parseScenarioText(text)` | Читает `.scn`: параметры до разделителя `-------------------`, затем строки `скорость время`. |
 | `normalizeScenario(parsed, options)` | Проверяет и нормализует шаги, применяет допуски диапазонов и выбирает разрешение для каждого шага. |
 | `selectResolutionForSpeed(speed, currentResolution, options)` | Выбирает `high`/`low` с сохранением текущего диапазона внутри hysteresis-зоны. |
@@ -196,6 +208,7 @@ UDP + атомарные команды: один логический poll — 
 - `elmoTransport.test.js` — поведение машины: connect/poll/ACK/таймауты/fast-raw/offline.
 - `helpers.test.js` — poll/queue/util.
 - `parse.test.js` — парсер.
+- `scenario.test.js` — диапазоны, timeout разгона, список `.scn`, парсер и готовность скорости.
 
 Эффекты и часы мокаются; путь таймаута проверяется инъекцией `ELMO.TIMEOUT`. Все актеры останавливаются в top-level `after`-хуке, чтобы открытые `setTimeout` не задерживали выход node:test.
 

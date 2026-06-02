@@ -1,14 +1,22 @@
 # XState-машина транспорта ELMO — фича и план
 
+## Актуализация 2026-06-01: сценарии и low-resolution speed
+
+`ScenarioManager` реализован и подключен к production-flow. Он использует тот же путь команд, что и ручное управление: `CommandHandler -> ELMO XState (UDP) -> ResponseParser`. Сценарии читаются из `C:\NC3\scenarios`, нормализуются через `nc3.normalizeScenario`, выполняются шаг за шагом через `set_jv`, при необходимости переключают `OL[1]` через `set_resolution` и запускают `Drive Init`, затем продолжают текущий шаг.
+
+Скорость для критерия готовности теперь берется из `payload.velocity_deg_per_sec`. В `high` это значение обычно основано на `VX`, а в `low` при наличии буфера выбирается оценка `PX/TM`, чтобы убрать скачки `VX` на малых скоростях. Raw data poll по-прежнему пишет только `TM/PX`.
+
+Timeout ожидания скорости считается не от старта сценарного шага, а от ACK команды `set_jv`: `abs(targetSpeed)/AC + 10 с`. Время смены разрешения и `Drive Init` в этот timeout не входит.
+
 ## Актуализация 2026-05-29: сценарии поверх транспорта
 
 К транспортной машине добавлен сценарный потребитель, но сам транспорт остался единственным владельцем UDP-канала. `ScenarioManager` живет в `BUN flow`, получает команды UI `scenario_start`/`scenario_stop`, читает `.scn` файл, формирует шаги через `nc3.normalizeScenario`, а затем кладет обычные UI-команды в существующий `CommandHandler`. За счет этого сценарии используют тот же путь, что и ручное управление: валидация диапазонов, пересчет тиков, атомарная очередь UDP и `ResponseParser`.
 
-Критерий готовности шага вынесен из сценарного файла в настройки ПО: `settings.general.speedReadyTolerancePercent` (0..100 %) плюс время устойчивости `advanced.speedStableTimeMs` и timeout `advanced.speedReachTimeoutMs`. Удержание шага и запись протокола начинаются только после устойчивого входа в допуск.
+Критерий готовности шага вынесен из сценарного файла в настройки ПО: `settings.general.speedReadyTolerancePercent` (0..100 %) плюс время устойчивости `advanced.speedStableTimeMs`. Timeout текущей реализации стартует после ACK `set_jv` и вычисляется как `abs(targetSpeed)/AC + 10 с`; `advanced.speedReachTimeoutMs` остался fallback-настройкой evaluator-а.
 
 Poll-контракт уточнен: обычный режим больше не зависит от скорости и работает 2 Гц, быстрый raw-режим включается только на время записи raw-данных и читает только `TM/PX`. Это сохраняет data-файл чистым временным рядом угловых меток, а скорость для `Готов` берется из обычного `TM/PX/VX` до начала записи шага.
 
-Актуально на: 2026-05-28.
+Актуально на: 2026-06-01.
 
 Документ описывает фичу «единая XState-машина транспорта ELMO» целиком: зачем она нужна, какие архитектурные решения принимались по ходу стендовой отладки и какой получился финальный дизайн. Текущее состояние реализации — [xstate-elmo-status.md](xstate-elmo-status.md). Краткая карта файлов и функций — [xstate-elmo-files.md](xstate-elmo-files.md).
 
@@ -290,13 +298,13 @@ rawDataEnabled === true
 
 ## 5. План на будущее
 
-### Этап 2 — `ScenarioManager` (не начато)
+### Этап 2 — `ScenarioManager` (реализовано)
 
-Сценарный менеджер измерения (бракетирование, ждать-готовности, инициализация, переключение разрешения, контроль ошибок) поверх транспорта. Отдельный Function-узел, общается с транспортом через `link` и события `UI.CMD` / `CMD.ACKED|FAILED` / `POLL.BAD_FRAME`. Детали — [scenario-feature-summary.md](scenario-feature-summary.md).
+Сценарный менеджер измерения реализован отдельным Function-узлом в `BUN flow`. Он общается с транспортом через существующие UI-команды и события `CMD.ACKED|FAILED`, читает `.scn` через file node, хранит `global.scenario_state`, запускает авто-протоколирование и поддерживает `scenario_pause`/`scenario_resume`/`scenario_stop`/`scenario_emergency_stop`. Resume повторяет текущий шаг целиком; частичное восстановление выдержки оставлено как отдельное методическое решение. Детали — [scenario-feature-summary.md](scenario-feature-summary.md).
 
-### Этап 3 — миграция legacy `new ui flow` на транспорт (частично выполнено)
+### Этап 3 — миграция legacy `new ui flow` на транспорт (выполнено для ELMO)
 
-Production-команды `CommandHandler` и `Tilt` теперь отправляются в `ELMO XState (UDP)` через link bus, а ответы возвращаются в существующий `ResponseParser`. Legacy `tcp request :2000` узлы оставлены в `flows.json` как fallback, но отключены. Следующий этап — подключить полноценный `ScenarioManager` runtime к тем же входам/выходам транспорта.
+Production-команды `CommandHandler` и `Tilt` теперь отправляются в `ELMO XState (UDP)` через link bus, а ответы возвращаются в существующий `ResponseParser`. Legacy `tcp request :2000` узлы оставлены в `flows.json` как fallback, но отключены.
 
 ## 6. Открытые вопросы
 

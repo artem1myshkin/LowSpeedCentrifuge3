@@ -1,5 +1,17 @@
 # XState-машина транспорта ELMO — статус
 
+## Актуализация 2026-06-01
+
+Текущий production-путь ELMO — `CommandHandler -> ELMO XState (UDP) -> ResponseParser`; legacy TCP оставлен в `flows.json` выключенным fallback. `ScenarioManager` больше не является планом: он выполняет `.scn` файлы из `C:\NC3\scenarios`, переключает диапазоны, запускает `Drive Init`, ждет устойчивой скорости, ведет автоматическую запись шага и поддерживает `Пауза`/`Продолжить`/`Стоп`/`Аварийный стоп`.
+
+Ключевые уточнения после стендовых правок:
+
+- в `low` диапазоне выбранная скорость для UI и сценариев берется из оценки `PX/TM`, а не из скачущего `VX`; `VX` сохраняется как `velocity_raw`;
+- timeout ожидания скорости сценария считается после ACK `set_jv`: `abs(targetSpeed) / AC + 10 с`;
+- быстрый raw poll остается только `TM/PX`; normal poll остается `TM/PX/VX` 2 Гц;
+- файл-редактор сценариев работает через `ScenarioFileService`, `global.scenario_files` и `global.scenario_documents`;
+- `node --test` в `packages/nc3-elmo-machines` проходит: 55 тестов.
+
 ## Актуализация 2026-05-29
 
 Стоп-линия сдвинута: `ScenarioManager` runtime теперь подключен к production-flow. Он не открывает отдельный транспорт, а использует существующий `CommandHandler -> ELMO XState (UDP) -> ResponseParser` и получает события `CMD.ACKED`/`CMD.FAILED` из `ELMO event bus out`.
@@ -10,9 +22,9 @@
 - raw poll: до 30 Гц только при активной записи и флаге raw, `TM/PX`, используется для `angle_buffer`;
 - `CMD.ACKED` и `CMD.FAILED` теперь содержат `topic` и `meta`, чтобы сценарный runtime мог отличить ack `set_jv` от остальных команд.
 
-`node --test` в `packages/nc3-elmo-machines` проходит: 52 теста.
+На 2026-05-29 `node --test` в `packages/nc3-elmo-machines` проходил для тогдашнего набора тестов.
 
-Актуально на: 2026-05-29. Документ для AI-агента: что уже сделано, что НЕ сделано, какие контракты не ломать.
+Актуально на: 2026-06-01. Документ для AI-агента: что уже сделано, что НЕ сделано, какие контракты не ломать.
 
 Полное описание фичи и решений — [xstate-elmo-design.md](xstate-elmo-design.md). Краткий per-file справочник — [xstate-elmo-files.md](xstate-elmo-files.md).
 
@@ -20,10 +32,11 @@
 
 | Слой | Состояние | Где |
 |---|---|---|
-| Пакет `nc3-elmo-machines` | **Готов**, 52 теста зелёные | `packages/nc3-elmo-machines/` |
+| Пакет `nc3-elmo-machines` | **Готов**, 55 тестов зелёные | `packages/nc3-elmo-machines/` |
 | Node-RED-обвязка (вкладка `ELMO XState (UDP)`) | **Готова**, production-команды подключены через link bus | `flows.json`, генератор `flows/elmo-xstate-udp/build-flow.js` |
-| ScenarioManager (Этап 2) | **Готова первая рабочая интеграция**: parser/helpers, `.scn` файлы, UI start/stop, ожидание `Готов`, автозапись протокола | `flows.json`, `packages/nc3-elmo-machines/src/scenario.js`, `scenarios/*.scn` |
-| Миграция legacy `new ui flow` (Этап 3) | **Частично**: UI-команды ELMO/`tilt_brake` идут через XState/UDP, legacy TCP-узлы отключены | `BUN flow`, `new ui flow`, `ELMO XState (UDP)` |
+| ScenarioManager (Этап 2) | **Готов**: `.scn` runtime, диапазоны, ACK-based timeout, авто-протоколирование, pause/resume/stop/emergency-stop | `flows.json`, `packages/nc3-elmo-machines/src/scenario.js`, `scenarios/*.scn` |
+| Scenario UI/editor | **Готов**: каталог `C:\NC3\scenarios`, редактирование файлов, защита от фонового автоперевыбора | `flows.json` |
+| Миграция legacy `new ui flow` (Этап 3) | **Выполнена для ELMO-команд**: UI-команды ELMO/`tilt_brake` идут через XState/UDP, legacy TCP-узлы отключены | `BUN flow`, `new ui flow`, `ELMO XState (UDP)` |
 
 ## Что реализовано (коммиты)
 
@@ -37,7 +50,7 @@
 
 - **Транспорт по UDP**, addr `192.168.1.2:5001`, локальный bind `:5005`. См. `flows.json` узлы `9eebec7a9fcbd4c5` (udp out) и `9dcb69eb8ba2c5f5` (udp in).
 - **Один сериализованный in-flight.** Никогда не отправляй два запроса параллельно — UDP не парный, корреляция запрос/ответ держится на single-in-flight + порядке.
-- **Атомарные команды.** Каждый логический poll — это `cmds: ['TM','PX','VX']` (data), реассемблируется в один логический raw. **Не возвращай батч `TM;PX;VX;` в одну команду** — ELMO отдаёт по датаграмме на параметр.
+- **Атомарные команды.** Каждый логический data-poll — это `cmds: ['TM','PX','VX']`, fast raw — `cmds: ['TM','PX']`; транспорт реассемблирует части в один логический raw. **Не возвращай батч `TM;PX;VX;` в одну команду** — ELMO отдаёт по датаграмме на параметр.
 - **Эффект `sendCmd` (не `sendTcp`)**, нет `resetTcp`/socket-reset (UDP connectionless).
 - **Soft timeout.** Один пропущенный ответ → `idle`, не fault. После `maxMisses` подряд (дефолт 3) → `offline` → self-heal через `RECONNECT_DELAY`.
 - **`pollOptions.timerCompensationMs: 8`** задано в `flows.json` для Windows. Не убирай — без этого 30 Гц цели даёт ~22 Гц фактических.
@@ -45,7 +58,7 @@
 
 ## Что НЕ реализовано (известные ограничения)
 
-1. **Полный pause/resume сценариев** ещё не реализован. Есть штатные `scenario_start`/`scenario_stop`; продолжение после аварии и восстановление остатка выдержки оставлены на следующую итерацию.
+1. **Частичное восстановление выдержки сценария** не реализовано. `scenario_pause`/`scenario_emergency_stop` сохраняют текущий шаг, но `scenario_resume` выполняет шаг заново.
 2. **CommandGate для конфликтующих ручных команд** ещё не выделен. Сейчас `ScenarioManager` отправляет команды через общий путь, но ручной UI не блокируется отдельным арбитром.
 3. **Legacy TCP fallback** оставлен в `flows.json`, но выключен. Рабочий production-путь ELMO теперь идёт через `ELMO XState (UDP)`.
 4. **`timeBeginPeriod(1)` на хосте** не настроен. 30 Гц достигаются компенсацией таймера в Node-RED, но поведение зависит от текущей системной гранулярности Windows.
@@ -60,7 +73,7 @@ cd packages/nc3-elmo-machines
 node --test
 ```
 
-Должно быть `# pass 52` за ~200–300 мс.
+Должно быть `# pass 55` за ~200–300 мс.
 
 ## Как протестировать на стенде
 
@@ -73,6 +86,7 @@ node --test
    - `poll mode: settings/global` — сбросить override обратно в `global.settings`.
 3. Смотреть debug `poll rate (valid frames/sec)` — должно быть ~30–32 Гц на 30 Гц цели.
 4. `POLL.BAD_FRAME` в debug `transport events (out2)` не должны идти. Если идут — это сигнал, что либо контракт сломан, либо ELMO ведёт себя нештатно (см. § рассинхрон ниже).
+5. Для проверки сценариев нужен каталог `C:\NC3\scenarios` с `.scn` файлами. После `git pull` копируй базовые файлы из `scenarios\` в этот каталог; файлы, созданные через UI на стенде, копируй обратно в репозиторий вручную, если они должны попасть в git.
 
 ## Контракты, которые НЕ ломать без согласования
 
@@ -81,6 +95,8 @@ node --test
 - **Выходные `CMD.ACKED`/`CMD.FAILED`/`POLL.BAD_FRAME`** — потребители (UI/сценарий) подписываются на них.
 - **`topic` ответов** (`poll_data`/`poll_state`/`poll_fast`) — `ResponseParser` и `angle_buffer` фильтруют по этим строкам.
 - **Атомарность poll и single-in-flight.** Менять только если ELMO выкатит надёжный «батч-режим» (сейчас стенд показал, что не выкатит).
+- **Выбранная скорость**: для `low` не подменяй обратно на raw `VX`; сценарный критерий должен использовать `velocity_deg_per_sec`/`velocity_source='px_tm'`, если они пришли из `ResponseParser`.
+- **Scenario timeout**: счетчик ожидания скорости стартует только после ACK `set_jv`, а не во время `set_resolution`/`Drive Init`.
 
 ## Где смотреть для понимания
 

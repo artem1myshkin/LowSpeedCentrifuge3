@@ -139,7 +139,7 @@
 <body>
   <div class="page">
     <h1>Схема Потоков Данных: Режим Сценариев</h1>
-    <p class="lead">Целевая схема для реализации автоматического воспроизведения угловой скорости по файлу сценария.</p>
+    <p class="lead">Текущая схема автоматического воспроизведения угловой скорости по файлу сценария.</p>
 
     <div class="lane-grid">
       <section class="lane">
@@ -147,8 +147,8 @@
 
         <div class="box">
           <h2>SpeedTab</h2>
-          <p>Пользователь включает режим сценария и управляет исполнением.</p>
-          <span class="tag blue">Работа по сценарию</span>
+          <p>Пользователь выбирает или редактирует файл сценария и управляет исполнением.</p>
+          <span class="tag blue">Файлы .scn</span>
           <span class="tag blue">Старт</span>
           <span class="tag orange">Пауза</span>
           <span class="tag orange">Продолжить</span>
@@ -164,6 +164,7 @@
             <li>имя файла сценария</li>
             <li>номер шага / общее число шагов</li>
             <li>целевая и фактическая скорость</li>
+            <li>источник скорости: VX или PX/TM</li>
             <li>статус: ready / hold / paused / error</li>
             <li>оставшееся время удержания</li>
           </ul>
@@ -174,9 +175,9 @@
         <div class="lane-title">Scenario Runtime</div>
 
         <div class="box">
-          <h2>Scenario File Loader</h2>
-          <p>Читает файл из <code>C:\NC3\scenarios</code>, валидирует заголовок и строки вида <code>скорость + время удержания</code>.</p>
-          <span class="tag violet">journal_refresh</span>
+          <h2>ScenarioFileService</h2>
+          <p>Ведет каталог <code>C:\NC3\scenarios</code>, читает и сохраняет <code>.scn</code> файлы для UI-редактора.</p>
+          <span class="tag violet">scenario_catalog</span>
           <span class="tag violet">scenario_load</span>
         </div>
 
@@ -188,6 +189,7 @@
             <li>держит state machine сценария</li>
             <li>вычисляет текущий шаг</li>
             <li>решает, нужен ли switch range</li>
+            <li>стартует timeout после ACK set_jv</li>
             <li>ожидает достижения допуска</li>
             <li>запускает таймер удержания</li>
             <li>инициирует автоматическую запись в протокол</li>
@@ -202,7 +204,7 @@
 
         <div class="box">
           <h2>ScenarioReadyEvaluator</h2>
-          <p>Сравнивает текущую скорость с целевой, выдает признак достижения требуемой точности.</p>
+          <p>Сравнивает целевую скорость с <code>velocity_deg_per_sec</code>; для <code>low</code> это значение берется из буфера <code>PX/TM</code>.</p>
         </div>
       </section>
 
@@ -222,8 +224,8 @@
         <div class="arrow">↓</div>
 
         <div class="box">
-          <h2>TCP → ELMO</h2>
-          <p>Отправка команд в привод по TCP.</p>
+          <h2>ELMO XState (UDP)</h2>
+          <p>Единый владелец UDP-канала: атомарные команды, single in-flight, ACK/timeout события.</p>
         </div>
 
         <div class="arrow">↓</div>
@@ -240,7 +242,8 @@
         <div class="box">
           <h2>ResponseParser</h2>
           <ul>
-            <li><code>VX</code> → фактическая скорость</li>
+            <li><code>VX</code> → raw скорость</li>
+            <li><code>PX/TM</code> → выбранная скорость для low</li>
             <li><code>MS</code>, <code>SO</code>, <code>MO</code></li>
             <li><code>SR</code> → диагностика</li>
             <li><code>OL[1]</code> → текущий диапазон</li>
@@ -257,6 +260,7 @@
             <li><code>current_range</code></li>
             <li><code>angle_buffer</code></li>
             <li><code>scenario_state</code></li>
+            <li><code>scenario_files</code>, <code>scenario_documents</code></li>
           </ul>
         </div>
 
@@ -299,17 +303,17 @@
     <div class="notes">
       <div class="note">
         <h3>Аварийная Остановка</h3>
-        <p><code>ScenarioManager</code> должен немедленно зафиксировать состояние, отправить <code>ST</code>, сохранить текущий шаг и причину останова, затем отдать в UI состояние <code>emergency_stop</code>.</p>
+        <p><code>ScenarioManager</code> фиксирует состояние, отменяет активную запись, отправляет <code>ST</code>, сохраняет текущий шаг и причину останова, затем отдает в UI состояние <code>emergency_stop</code>.</p>
       </div>
 
       <div class="note">
         <h3>Продолжение</h3>
-        <p>После снятия причины аварии сценарий должен продолжаться с текущего шага. Для первой версии безопаснее повторно выполнять шаг целиком, а не восстанавливать частично удержанное время.</p>
+        <p>После снятия причины аварии <code>Продолжить</code> запускает текущий шаг заново. Восстановление остатка выдержки пока оставлено вне реализации.</p>
       </div>
 
       <div class="note">
         <h3>Автосмена Диапазона</h3>
-        <p>Если шаг требует другого диапазона, runtime должен остановить движение, переключить диапазон, выполнить инициализацию и затем продолжить тот же шаг без потери сценарного контекста.</p>
+        <p>Если шаг требует другого диапазона, runtime останавливает движение, переключает диапазон, выполняет <code>Drive Init</code> и затем продолжает тот же шаг без потери сценарного контекста.</p>
       </div>
     </div>
   </div>

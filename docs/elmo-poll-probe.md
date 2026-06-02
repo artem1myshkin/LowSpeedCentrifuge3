@@ -1,6 +1,6 @@
 # ELMO TCP poll probe
 
-> **Исторический (TCP).** Этот пробник измерял предел TCP-опроса и подтвердил ~4-Гц потолок `sit` + idle-gap. Проект перешёл на **UDP** — текущую частоту проще смотреть прямо во вкладке `ELMO XState (UDP)` (inject `poll mode: raw fast 30Hz` + debug `poll rate`). См. `docs/xstate-elmo-design.md` (дизайн) и `docs/xstate-elmo-status.md` (текущее состояние).
+> **Исторический (TCP).** Этот пробник измерял предел TCP-опроса и подтвердил ~4-Гц потолок `sit` + idle-gap. Проект перешёл на **UDP** — текущую частоту проще смотреть прямо во вкладке `ELMO XState (UDP)` (inject `poll mode: raw fast 30Hz` + debug `poll rate`). В актуальном runtime normal poll — `TM/PX/VX` 2 Гц, fast raw poll — `TM/PX` до 30 Гц, а скорость в `low` диапазоне выбирается из буфера `PX/TM`. См. `docs/xstate-elmo-design.md` (дизайн) и `docs/xstate-elmo-status.md` (текущее состояние).
 
 Актуально на: 2026-05-27 (TCP-эпоха).
 
@@ -10,7 +10,7 @@
 
 ## Почему этот тест нужен
 
-В Node-RED сейчас используется `tcp request` в режиме `sit` и `FrameSplitter`, который завершает кадр после периода тишины. Если один логический poll состоит из нескольких физических TCP read-команд, то минимальное время такого poll ограничено:
+На момент TCP-теста в Node-RED использовался `tcp request` в режиме `sit` и `FrameSplitter`, который завершал кадр после периода тишины. Если один логический poll состоит из нескольких физических TCP read-команд, то минимальное время такого poll ограничено:
 
 ```text
 logical_poll_time >= command_count * idle_gap_ms + TCP/ELMO overhead
@@ -73,8 +73,8 @@ netstat -ano | findstr 192.168.1.2:2000
 | Режим | Что отправляется | Зачем нужен |
 |---|---|---|
 | `data` | `TM`, `PX`, `VX` отдельными read-командами | Обычный data poll транспорта |
-| `fast-seek` | `VX`, `PX` отдельными read-командами | Быстрый poll до устойчивой скорости |
-| `fast-data` | `VX`, `PX`, `TM` отдельными read-командами | Быстрый raw poll после устойчивой скорости |
+| `fast-seek` | `VX`, `PX` отдельными read-командами | Исторический быстрый poll до устойчивой скорости; в актуальном runtime не используется как отдельный режим |
+| `fast-data` | `VX`, `PX`, `TM` отдельными read-командами | Исторический быстрый raw poll; актуальный UDP fast raw читает только `TM/PX` |
 | `vx` | только `VX` | Проверка максимума для одного регистра |
 | `batch-seek` | один запрос `VX;PX;` | Проверить, выдерживает ли ELMO batch для seek |
 | `batch-data` | один запрос `VX;PX;TM;` | Проверить, выдерживает ли ELMO batch для raw data |
