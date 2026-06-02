@@ -8,14 +8,13 @@ const RES = {
   high: {
     ol1: 0,
     ca18: 262144000,
-    s1_5: 50000000,
+    s1_5: 40,
     kp2: 1e-6,
     sd: 131072000,
     qs: 131072000,
     vh1: 131072000,
     vl1: 131072000,
-    // Physical high-head ceiling is 8 rpm = 48 deg/s; software ranges still default to 20 deg/s.
-    vh2: 34952533,
+    vh2: 3640888,
     er3: 131072000,
     er2: 131072000,
     tr1: 7282,
@@ -26,7 +25,7 @@ const RES = {
   low: {
     ol1: 1,
     ca18: 6553600,
-    s1_5: 7662835,
+    s1_5: 40,
     kp2: 1e-5,
     sd: 3276800,
     qs: 3276800,
