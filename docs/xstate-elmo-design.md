@@ -171,7 +171,7 @@ External package: packages/nc3-elmo-machines/
 | Событие | Когда |
 |---|---|
 | `CMD.ACKED` | Получен ответ на ackable-команду (`kind: 'cmd'\|'tilt'`). `{ id, raw }`. |
-| `CMD.FAILED` | Таймаут на ackable-команде. `{ id, reason: 'timeout' }`. |
+| `CMD.FAILED` | Таймаут на ackable-команде. `{ id, reason: 'timeout' }`; отдельный случай после `MO=1` — `{ reason: 'so_timeout' }`, если `SO` не стал `1` за `soReadyTimeoutMs`. |
 | `POLL.BAD_FRAME` | Атомарная часть/целый кадр poll не прошли валидацию. `{ id, role, missing, part?, cmd, raw }`. |
 
 ### 3.4 Полная state-диаграмма
@@ -192,9 +192,15 @@ stateDiagram-v2
 
         sending --> awaiting : always
 
+        awaiting --> waitingForSoReady : ELMO.RESP [needsSoReadyWait]\n(resetMiss, collectPollPart,\nmarkSoWait)
         awaiting --> sendingNextPart : ELMO.RESP [hasNextPollPart]\n(resetMiss, collectPollPart)
         awaiting --> dispatch        : ELMO.RESP [last part / cmd]\n(resetMiss, ingestResp,\nforwardAndAck,\nenqueueDiagnosticOnBadPoll,\nenqueueConfirmPoll)
         awaiting --> idle            : TIMEOUT [miss<max]\n(failInFlight, bumpMiss, freeInFlight)
+
+        waitingForSoReady --> sendingNextPart : ELMO.RESP [SO=1 and has pending cmd]\n(resetMiss, collectSoReadyPart,\nclearSoWait)
+        waitingForSoReady --> dispatch        : ELMO.RESP [SO=1 and no pending cmd]\n(resetMiss, forwardAndAck,\nenqueueConfirmPoll,\nclearSoWait)
+        waitingForSoReady --> waitingForSoReady : ELMO.RESP [SO!=1] / ELMO.TIMEOUT\n(sendSoPoll)
+        waitingForSoReady --> idle            : after SO_READY_TIMEOUT\n(failSoWait, sendEmergencyStop,\nfreeInFlight, clearSoWait)
 
         sendingNextPart --> awaiting : always
 
@@ -221,6 +227,7 @@ stateDiagram-v2
 | `connecting` | `statusConnecting`, `sendProbe` |
 | `connected.idle` | `statusIdle` |
 | `connected.sending` | `statusBusy`, `takeNext`, `sendInFlight` |
+| `connected.waitingForSoReady` | `statusWaitingSo`, `sendSoPoll` |
 | `connected.sendingNextPart` | `sendInFlight` (следующая `cmds[cursor]`) |
 | `connected.dispatch` | `freeInFlight` |
 

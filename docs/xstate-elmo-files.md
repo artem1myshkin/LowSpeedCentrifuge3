@@ -67,6 +67,7 @@
 | `connectTimeoutMs` | Watchdog probe. | `2000` |
 | `reconnectMs` | Пауза `offline` перед повторным probe. | `1000` |
 | `maxMisses` | Подряд таймаутов до `offline`. | `3` |
+| `soReadyTimeoutMs` | Максимальное ожидание `SO=1` после `MO=1`. | `30000` |
 | `statePeriodMs` | Минимальный период state-poll. | `1000` |
 | `probeCmd` | Команда probe. | `'TM'` |
 | `initialFullState` | Full-state после connect. | `true` |
@@ -74,7 +75,7 @@
 
 ### Контекст (ключевое)
 
-`queue` (приоритетная очередь), `inFlight` (текущий запрос с `cursor`/`parts` для атомарного poll), `resolution`, `vx`, `omegaSource` (`measured`/`setpoint`), `setpointDegS`, `lastExtendedAt`, `missCount`, `pollConfig`/`fastRawActive`, `lastFastPollStartedAt`.
+`queue` (приоритетная очередь), `inFlight` (текущий запрос с `cursor`/`parts` для атомарного poll), `resolution`, `vx`, `omegaSource` (`measured`/`setpoint`), `setpointDegS`, `lastExtendedAt`, `missCount`, `pollConfig`/`fastRawActive`, `lastFastPollStartedAt`, `soWaitStartedAt`.
 
 ### Guards / delays
 
@@ -83,10 +84,14 @@
 | `hasWork` | guard | В очереди есть запрос. |
 | `tooManyMisses` | guard | После инкремента число пропусков достигнет `maxMisses`. |
 | `hasNextPollPart` | guard | Текущий poll — атомарный батч, пришедшая часть валидна и есть ещё команды. |
+| `needsSoReadyWait` | guard | Текущая ackable-команда — `MO=1`, нужно ждать `SO=1` перед продолжением/ACK. |
+| `soReadyAndHasPendingCommandPart` | guard | Ответ `SO` стал `1`, и в батче ещё есть атомарные команды. |
+| `soReady` | guard | Ответ `SO` стал `1`. |
 | `POLL_DELAY` | delay | `computePollDelayMs` для самотактируемого poll. |
 | `TIMEOUT` | delay | Watchdog ответа = `timeoutMs`. |
 | `CONNECT_TIMEOUT` | delay | Watchdog probe = `connectTimeoutMs`. |
 | `RECONNECT_DELAY` | delay | Пауза в `offline` перед повторным probe. |
+| `SO_READY_TIMEOUT` | delay | Watchdog ожидания `SO=1` = `soReadyTimeoutMs`. |
 
 ### Actions
 
@@ -98,23 +103,27 @@
 | `enqueueConfirmPoll` | После `MO=`/`OL[1]=`/`OL[2]=`/`AF=` поставить подтверждающий poll. |
 | `enqueueDiagnosticOnBadPoll` | На невалидный fast-кадр поставить `full_state` с приоритетом `init` и сбросить fast-стабильность. |
 | `takeNext` | Снять головной запрос из очереди; для fast-poll зафиксировать `lastFastPollStartedAt`. |
-| `sendInFlight` / `sendProbe` | Отправить через `sendCmd` текущую команду (`cmds[cursor]`) / probe. |
+| `sendInFlight` / `sendProbe` / `sendSoPoll` | Отправить через `sendCmd` текущую команду (`cmds[cursor]`) / probe / разовый опрос `SO`. |
 | `collectPollPart` | Принять валидную часть атомарного poll: добавить raw в `parts`, инкрементировать `cursor`. |
+| `collectSoReadyPart` | Добавить ответ `SO;1;` к реассемблируемому raw перед продолжением батча. |
 | `ingestResp` | Из реассемблированного `rawFor(env,raw)` обновить контекст и fast-стабильность. Не заменяет `ResponseParser`. |
 | `forwardAndAck` | Валидировать через `responseValidation`; невалидно → `POLL.BAD_FRAME` (с `part`/`cmd`); валидно → `forwardResp` + (для команд) `CMD.ACKED`. |
 | `failInFlight` | Для команды — `CMD.FAILED` (`reason: 'timeout'`). |
+| `failSoWait` | Для команды — `CMD.FAILED` (`reason: 'so_timeout'`). |
+| `sendEmergencyStop` | Отправить аварийные `ST`, `MO=0` после таймаута `SO`. |
 | `bumpMiss` / `resetMiss` | Инкремент/сброс счётчика пропусков. |
+| `markSoWait` / `clearSoWait` | Зафиксировать/сбросить начало ожидания `SO=1`. |
 | `freeInFlight` | Очистить `inFlight`. |
 | `configurePoll` | Применить `POLL.CONFIG`. |
-| `statusOffline`/`Connecting`/`Idle`/`Busy` | `node.status(...)`. |
+| `statusOffline`/`Connecting`/`Idle`/`Busy`/`WaitingSo` | `node.status(...)`. |
 
 ### Внутренние хелперы
 
-`normalizeEnvelope` (нормализация конверта), `pollRoleOf`/`topicFor`/`isAckable`, `hasPollRole`/`hasAnyFastPoll`/…`InFlight` (dedup), `isBatchPoll`/`cursorOf`/`commandFor`/`rawFor` (атомарный multi-part: какая команда сейчас и как склеить части), `validatePollResponse` / `validateCurrentPollPart` / `responseValidation` (валидация целого кадра, текущей части, и их комбинации), `confirmPollRoleFor`, `normalizePollConfig`/`shouldFastPoll`/`fastPollRoleFor`.
+`normalizeEnvelope` (нормализация конверта), `pollRoleOf`/`topicFor`/`isAckable`, `hasPollRole`/`hasAnyFastPoll`/…`InFlight` (dedup), `isBatchPoll`/`cursorOf`/`commandFor`/`rawFor` (атомарный multi-part: какая команда сейчас и как склеить части), `validatePollResponse` / `validateCurrentPollPart` / `responseValidation` (валидация целого кадра, текущей части, и их комбинации), `isMoOnCommand`/`soReadyFromRaw`, `confirmPollRoleFor`, `normalizePollConfig`/`shouldFastPoll`/`fastPollRoleFor`.
 
 ### Состояния
 
-`offline` → `connecting` → `connected{idle, sending, awaiting, sendingNextPart, dispatch}` → (на ошибке) `offline`. Полная state-диаграмма с переходами — в [xstate-elmo-design.md §3.4](xstate-elmo-design.md).
+`offline` → `connecting` → `connected{idle, sending, awaiting, waitingForSoReady, sendingNextPart, dispatch}` → (на ошибке) `offline`. Полная state-диаграмма с переходами — в [xstate-elmo-design.md §3.4](xstate-elmo-design.md).
 
 Входные события: `UI.CMD`, `POLL.TICK`, `POLL.FULL_STATE`, `POLL.CONFIG`, `CONNECT`, `ELMO.RESP`, `ELMO.TIMEOUT`.
 

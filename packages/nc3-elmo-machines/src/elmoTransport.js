@@ -30,6 +30,7 @@ const { clamp, splitElmoCommands } = require('./util');
 //   connectTimeoutMs        -> probe watchdog while connecting (default 2000)
 //   reconnectMs             -> delay before re-probing after going offline (default 1000)
 //   maxMisses               -> consecutive reply timeouts before the link is offline (default 3)
+//   soReadyTimeoutMs        -> max wait after MO=1 until SO becomes 1 (default 30000)
 //   statePeriodMs           -> minimal state-poll cadence (default 1000)
 //   probeCmd                -> liveness probe sent on connect (default single TM read)
 //   initialFullState        -> enqueue full-state poll after connect/recover (default true)
@@ -49,6 +50,7 @@ function createElmoTransport(effects) {
   const connectTimeoutMs = e.connectTimeoutMs == null ? 2000 : e.connectTimeoutMs;
   const reconnectMs = e.reconnectMs == null ? 1000 : e.reconnectMs;
   const maxMisses = e.maxMisses == null ? 3 : e.maxMisses;
+  const soReadyTimeoutMs = e.soReadyTimeoutMs == null ? 30000 : e.soReadyTimeoutMs;
   const statePeriodMs = e.statePeriodMs == null ? 1000 : e.statePeriodMs;
   const probeCmd = e.probeCmd || 'TM';
   const initialFullState = e.initialFullState !== false;
@@ -206,14 +208,34 @@ function createElmoTransport(effects) {
     return commandListFor(env).some((cmd) => pattern.test(String(cmd || '').toUpperCase()));
   }
 
+  function isMoOnCommand(cmd) {
+    return /\bMO\s*=\s*1\b/.test(String(cmd || '').toUpperCase());
+  }
+
+  function needsSoReadyWait(env) {
+    return isAckable(env) && isMoOnCommand(commandFor(env));
+  }
+
+  function hasPendingCommandPart(env) {
+    return isMultiPart(env) && cursorOf(env) < env.cmds.length;
+  }
+
+  function soReadyAndHasPendingCommandPart(env, raw) {
+    return soReadyFromRaw(raw) && hasPendingCommandPart(env);
+  }
+
+  function soReadyFromRaw(raw) {
+    return parseElmoScalars(raw).so === 1;
+  }
+
   function confirmPollRoleFor(env) {
     if (!isAckable(env)) return null;
     const meta = env.meta || {};
     if (meta.confirmPollRole) return meta.confirmPollRole;
-    if (commandRequests(env, /\bMO\s*=/)) return 'state';
     if (commandRequests(env, /\bOL\[1\]\s*=/)) return 'full_state';
     if (commandRequests(env, /\bOL\[2\]\s*=/)) return 'full_state';
     if (commandRequests(env, /\bAF\s*=/)) return 'full_state';
+    if (commandRequests(env, /\bMO\s*=/)) return 'state';
     return null;
   }
 
@@ -242,12 +264,16 @@ function createElmoTransport(effects) {
         if (env.kind === 'poll' && !validateCurrentPollPart(env, event.raw).ok) return false;
         return cursorOf(env) < env.cmds.length - 1;
       },
+      needsSoReadyWait: ({ context }) => needsSoReadyWait(context.inFlight),
+      soReadyAndHasPendingCommandPart: ({ context, event }) => soReadyAndHasPendingCommandPart(context.inFlight, event.raw),
+      soReady: ({ event }) => soReadyFromRaw(event.raw),
     },
     delays: {
       POLL_DELAY: ({ context }) => computePollDelayMs({ ...context, nowMs: now() }, pollOptions),
       TIMEOUT: () => timeoutMs,
       CONNECT_TIMEOUT: () => connectTimeoutMs,
       RECONNECT_DELAY: () => reconnectMs,
+      SO_READY_TIMEOUT: () => soReadyTimeoutMs,
     },
     actions: {
       configurePoll: assign(({ context, event }) => {
@@ -396,8 +422,26 @@ function createElmoTransport(effects) {
         };
       }),
 
+      collectSoReadyPart: assign(({ context, event }) => {
+        const env = context.inFlight;
+        if (!isMultiPart(env)) return {};
+        return {
+          inFlight: {
+            ...env,
+            parts: (env.parts || []).concat([event.raw]),
+          },
+        };
+      }),
+
+      markSoWait: assign(() => ({ soWaitStartedAt: now() })),
+      clearSoWait: assign({ soWaitStartedAt: 0 }),
+
       sendProbe: () => {
         sendCmd(probeCmd);
+      },
+
+      sendSoPoll: () => {
+        sendCmd('SO');
       },
 
       forwardAndAck: ({ context, event }) => {
@@ -424,6 +468,24 @@ function createElmoTransport(effects) {
         if (isAckable(env)) emitEvent({ type: 'CMD.FAILED', id: env.id, reason: 'timeout', topic: topicFor(env), meta: env.meta || {} });
       },
 
+      failSoWait: ({ context }) => {
+        const env = context.inFlight;
+        if (!isAckable(env)) return;
+        emitEvent({
+          type: 'CMD.FAILED',
+          id: env.id,
+          reason: 'so_timeout',
+          message: 'SO did not become 1 within ' + soReadyTimeoutMs + ' ms after MO=1',
+          topic: topicFor(env),
+          meta: env.meta || {},
+        });
+      },
+
+      sendEmergencyStop: () => {
+        sendCmd('ST');
+        sendCmd('MO=0');
+      },
+
       bumpMiss: assign(({ context }) => ({ missCount: (Number(context.missCount) || 0) + 1 })),
       resetMiss: assign({ missCount: 0 }),
       freeInFlight: assign({ inFlight: null }),
@@ -432,6 +494,7 @@ function createElmoTransport(effects) {
       statusConnecting: () => setStatus({ fill: 'yellow', shape: 'ring', text: 'ELMO connecting' }),
       statusIdle: () => setStatus({ fill: 'green', shape: 'dot', text: 'ELMO online' }),
       statusBusy: () => setStatus({ fill: 'blue', shape: 'dot', text: 'ELMO busy' }),
+      statusWaitingSo: () => setStatus({ fill: 'yellow', shape: 'dot', text: 'ELMO waiting SO=1' }),
     },
   }).createMachine({
     id: 'transport',
@@ -452,6 +515,7 @@ function createElmoTransport(effects) {
         fastStableCount: 0,
         lastFastVx: undefined,
         lastFastPollStartedAt: 0,
+        soWaitStartedAt: 0,
       };
     },
     initial: 'offline',
@@ -514,6 +578,7 @@ function createElmoTransport(effects) {
               // Multi-part: if the just-arrived part validated and more atomic commands remain,
               // collect it and send the next; otherwise dispatch the (whole, reassembled) frame.
               'ELMO.RESP': [
+                { guard: 'needsSoReadyWait', target: 'waitingForSoReady', actions: ['resetMiss', 'collectPollPart', 'markSoWait'] },
                 { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: ['resetMiss', 'collectPollPart'] },
                 { target: 'dispatch', actions: ['resetMiss', 'ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'] },
               ],
@@ -521,6 +586,23 @@ function createElmoTransport(effects) {
                 { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
                 { target: 'idle', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
               ],
+            },
+          },
+          waitingForSoReady: {
+            entry: ['statusWaitingSo', 'sendSoPoll'],
+            after: {
+              SO_READY_TIMEOUT: {
+                target: 'idle',
+                actions: ['failSoWait', 'sendEmergencyStop', 'freeInFlight', 'clearSoWait'],
+              },
+            },
+            on: {
+              'ELMO.RESP': [
+                { guard: 'soReadyAndHasPendingCommandPart', target: 'sendingNextPart', actions: ['resetMiss', 'collectSoReadyPart', 'clearSoWait'] },
+                { guard: 'soReady', target: 'dispatch', actions: ['resetMiss', 'forwardAndAck', 'enqueueConfirmPoll', 'clearSoWait'] },
+                { actions: ['resetMiss', 'sendSoPoll'] },
+              ],
+              'ELMO.TIMEOUT': { actions: ['sendSoPoll'] },
             },
           },
           sendingNextPart: {

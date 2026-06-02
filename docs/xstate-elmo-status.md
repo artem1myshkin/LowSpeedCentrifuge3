@@ -1,6 +1,6 @@
 # XState-машина транспорта ELMO — статус
 
-## Актуализация 2026-06-01
+## Актуализация 2026-06-02
 
 Текущий production-путь ELMO — `CommandHandler -> ELMO XState (UDP) -> ResponseParser`; legacy TCP оставлен в `flows.json` выключенным fallback. `ScenarioManager` больше не является планом: он выполняет `.scn` файлы из `C:\NC3\scenarios`, переключает диапазоны, запускает `Drive Init`, ждет устойчивой скорости, ведет автоматическую запись шага и поддерживает `Пауза`/`Продолжить`/`Стоп`/`Аварийный стоп`.
 
@@ -10,21 +10,10 @@
 - timeout ожидания скорости сценария считается после ACK `set_jv`: `abs(targetSpeed) / AC + 10 с`;
 - быстрый raw poll остается только `TM/PX`; normal poll остается `TM/PX/VX` 2 Гц;
 - файл-редактор сценариев работает через `ScenarioFileService`, `global.scenario_files` и `global.scenario_documents`;
-- `node --test` в `packages/nc3-elmo-machines` проходит: 55 тестов.
+- после любого `MO=1` транспорт ждёт `SO=1` до 30 секунд; если `SO` не стал `1`, он отдаёт `CMD.FAILED(reason: 'so_timeout')` и отправляет аварийные `ST`, `MO=0`.
+- `node --test` в `packages/nc3-elmo-machines` проходит: 59 тестов.
 
-## Актуализация 2026-05-29
-
-Стоп-линия сдвинута: `ScenarioManager` runtime теперь подключен к production-flow. Он не открывает отдельный транспорт, а использует существующий `CommandHandler -> ELMO XState (UDP) -> ResponseParser` и получает события `CMD.ACKED`/`CMD.FAILED` из `ELMO event bus out`.
-
-Текущий контракт poll:
-
-- обычный poll: фиксированные 2 Гц, `TM/PX/VX`, используется для UI и ожидания `Готов` в сценарии;
-- raw poll: до 30 Гц только при активной записи и флаге raw, `TM/PX`, используется для `angle_buffer`;
-- `CMD.ACKED` и `CMD.FAILED` теперь содержат `topic` и `meta`, чтобы сценарный runtime мог отличить ack `set_jv` от остальных команд.
-
-На 2026-05-29 `node --test` в `packages/nc3-elmo-machines` проходил для тогдашнего набора тестов.
-
-Актуально на: 2026-06-01. Документ для AI-агента: что уже сделано, что НЕ сделано, какие контракты не ломать.
+Актуально на: 2026-06-02. Документ для AI-агента: что уже сделано, что НЕ сделано, какие контракты не ломать.
 
 Полное описание фичи и решений — [xstate-elmo-design.md](xstate-elmo-design.md). Краткий per-file справочник — [xstate-elmo-files.md](xstate-elmo-files.md).
 
@@ -32,7 +21,7 @@
 
 | Слой | Состояние | Где |
 |---|---|---|
-| Пакет `nc3-elmo-machines` | **Готов**, 55 тестов зелёные | `packages/nc3-elmo-machines/` |
+| Пакет `nc3-elmo-machines` | **Готов**, 59 тестов зелёные | `packages/nc3-elmo-machines/` |
 | Node-RED-обвязка (вкладка `ELMO XState (UDP)`) | **Готова**, production-команды подключены через link bus | `flows.json`, генератор `flows/elmo-xstate-udp/build-flow.js` |
 | ScenarioManager (Этап 2) | **Готов**: `.scn` runtime, диапазоны, ACK-based timeout, авто-протоколирование, pause/resume/stop/emergency-stop | `flows.json`, `packages/nc3-elmo-machines/src/scenario.js`, `scenarios/*.scn` |
 | Scenario UI/editor | **Готов**: каталог `C:\NC3\scenarios`, редактирование файлов, защита от фонового автоперевыбора | `flows.json` |
@@ -53,6 +42,7 @@
 - **Атомарные команды.** Каждый логический data-poll — это `cmds: ['TM','PX','VX']`, fast raw — `cmds: ['TM','PX']`; транспорт реассемблирует части в один логический raw. **Не возвращай батч `TM;PX;VX;` в одну команду** — ELMO отдаёт по датаграмме на параметр.
 - **Эффект `sendCmd` (не `sendTcp`)**, нет `resetTcp`/socket-reset (UDP connectionless).
 - **Soft timeout.** Один пропущенный ответ → `idle`, не fault. После `maxMisses` подряд (дефолт 3) → `offline` → self-heal через `RECONNECT_DELAY`.
+- **Ожидание `SO=1` после `MO=1`.** Транспорт переходит в `waitingForSoReady`, опрашивает `SO` и ждёт до `soReadyTimeoutMs` (дефолт 30000 мс). Таймаут → `CMD.FAILED(reason: 'so_timeout')` + аварийные `ST`, `MO=0`.
 - **`pollOptions.timerCompensationMs: 8`** задано в `flows.json` для Windows. Не убирай — без этого 30 Гц цели даёт ~22 Гц фактических.
 - **Подтверждающий poll** после `MO=`, `OL[1]=`, `OL[2]=`, `AF=` — это часть контракта; меняешь — обновляй `confirmPollRoleFor` и тесты.
 
@@ -73,7 +63,7 @@ cd packages/nc3-elmo-machines
 node --test
 ```
 
-Должно быть `# pass 55` за ~200–300 мс.
+Должно быть `# pass 59` за ~200–400 мс.
 
 ## Как протестировать на стенде
 
@@ -90,7 +80,7 @@ node --test
 
 ## Контракты, которые НЕ ломать без согласования
 
-- **API `effects`** (`sendCmd`, `forwardResp`, `emitEvent`, `setStatus`, `now`, `timeoutMs`, `connectTimeoutMs`, `reconnectMs`, `maxMisses`, `statePeriodMs`, `probeCmd`, `initialFullState`, `pollOptions`). Это контракт между пакетом и Node-RED-обвязкой.
+- **API `effects`** (`sendCmd`, `forwardResp`, `emitEvent`, `setStatus`, `now`, `timeoutMs`, `connectTimeoutMs`, `reconnectMs`, `maxMisses`, `soReadyTimeoutMs`, `statePeriodMs`, `probeCmd`, `initialFullState`, `pollOptions`). Это контракт между пакетом и Node-RED-обвязкой.
 - **События `UI.CMD`/`POLL.TICK`/`POLL.FULL_STATE`/`POLL.CONFIG`/`CONNECT`/`ELMO.RESP`/`ELMO.TIMEOUT`** — входной API машины.
 - **Выходные `CMD.ACKED`/`CMD.FAILED`/`POLL.BAD_FRAME`** — потребители (UI/сценарий) подписываются на них.
 - **`topic` ответов** (`poll_data`/`poll_state`/`poll_fast`) — `ResponseParser` и `angle_buffer` фильтруют по этим строкам.
