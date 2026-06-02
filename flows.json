@@ -133,7 +133,8 @@
             "96ec2f9c8b972482",
             "b8a80758dd566f2c",
             "9eb053a6223523bf",
-            "d0b617334d6037e0"
+            "d0b617334d6037e0",
+            "069cbbdd2fffd53f"
         ],
         "x": -6,
         "y": 39,
@@ -2657,8 +2658,6 @@
         "g": "103337ebd466ad7c",
         "name": "link in 5",
         "links": [
-            "61d2121e662421a5",
-            "4e889732f239b9ce",
             "elmoxs-link-resp-out"
         ],
         "x": 895,
@@ -2709,7 +2708,8 @@
         "g": "103337ebd466ad7c",
         "name": "link in 6",
         "links": [
-            "defeba9f1c3e6b14"
+            "defeba9f1c3e6b14",
+            "069cbbdd2fffd53f"
         ],
         "x": 225,
         "y": 540,
@@ -2748,7 +2748,8 @@
         "name": "link in 7",
         "links": [
             "2558473b04e740c5",
-            "defeba9f1c3e6b14"
+            "defeba9f1c3e6b14",
+            "069cbbdd2fffd53f"
         ],
         "x": 195,
         "y": 160,
@@ -2911,7 +2912,7 @@
         "y": 460,
         "wires": [
             [
-                "scenario-manager"
+                "96ec2f9c8b972482"
             ]
         ]
     },
@@ -2953,10 +2954,11 @@
         "links": [
             "elmoxs-link-events-out",
             "2bf42c6651257b16",
-            "d0b617334d6037e0"
+            "d0b617334d6037e0",
+            "96ec2f9c8b972482"
         ],
         "x": 765,
-        "y": 400,
+        "y": 380,
         "wires": [
             [
                 "scenario-manager"
@@ -2970,7 +2972,9 @@
         "g": "103337ebd466ad7c",
         "name": "link out 5",
         "mode": "link",
-        "links": [],
+        "links": [
+            "scenario-elmo-events-in"
+        ],
         "x": 1255,
         "y": 460,
         "wires": []
@@ -3018,6 +3022,108 @@
         ],
         "x": 1205,
         "y": 300,
+        "wires": []
+    },
+    {
+        "id": "scenario-file-service",
+        "type": "function",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "ScenarioFileService",
+        "func": "// ScenarioFileService: file-backed editor for .scn files in C:\\NC3\\scenarios.\nvar topic = msg.topic;\nvar BASE_DIR = 'C:\\\\NC3\\\\scenarios';\nvar DEFAULT_FILES = ['high_resolution.scn', 'low_resolution.scn', 'range_switch.scn'];\n\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction basename(value) {\n    var parts = String(value || '').split(/[\\\\/]/);\n    return parts.length ? parts[parts.length - 1] : '';\n}\nfunction safeFileName(value) {\n    var name = basename(value || '').replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_').trim();\n    if (!name) name = 'scenario.scn';\n    if (!/\\.scn$/i.test(name)) name += '.scn';\n    return name;\n}\nfunction scenarioPath(name) {\n    return BASE_DIR + '\\\\' + safeFileName(name);\n}\nfunction unique(list) {\n    var seen = {};\n    var out = [];\n    (list || []).forEach(function(item) {\n        var name = safeFileName(item);\n        var key = name.toLowerCase();\n        if (!seen[key]) {\n            seen[key] = true;\n            out.push(name);\n        }\n    });\n    return out;\n}\nfunction diskScenarioFiles() {\n    var api = global.get('nc3') || {};\n    if (typeof api.listScenarioFiles === 'function') {\n        try {\n            return api.listScenarioFiles(BASE_DIR, DEFAULT_FILES);\n        } catch (e) {\n            node.warn('scenario list failed: ' + e.message);\n        }\n    }\n    return DEFAULT_FILES.slice();\n}\nfunction scenarioFiles() {\n    return unique(diskScenarioFiles().concat(global.get('scenario_files') || []));\n}\nfunction saveScenarioFiles(files) {\n    global.set('scenario_files', unique(files));\n}\nfunction documents() {\n    var docs = global.get('scenario_documents') || {};\n    return docs && typeof docs === 'object' ? docs : {};\n}\nfunction textFromPayload(value) {\n    if (value === undefined || value === null) return '';\n    if (typeof value === 'string') return value;\n    if (typeof Buffer !== 'undefined' && Buffer.isBuffer && Buffer.isBuffer(value)) return value.toString('utf8');\n    if (Array.isArray(value)) return value.map(function(ch) { return String.fromCharCode(Number(ch) || 0); }).join('');\n    if (value.type === 'Buffer' && Array.isArray(value.data)) {\n        return value.data.map(function(ch) { return String.fromCharCode(Number(ch) || 0); }).join('');\n    }\n    if (value.data && Array.isArray(value.data)) {\n        return value.data.map(function(ch) { return String.fromCharCode(Number(ch) || 0); }).join('');\n    }\n    if (value.payload !== undefined) return textFromPayload(value.payload);\n    return String(value);\n}\nfunction parseSummary(text, fileName) {\n    var meta = { Name: safeFileName(fileName).replace(/\\.scn$/i, ''), ResolutionHint: 'auto' };\n    var steps = [];\n    var inSteps = false;\n    var numericPair = /^[-+]?\\d+(?:[.,]\\d+)?\\s+[-+]?\\d+(?:[.,]\\d+)?(?:\\s|$)/;\n    textFromPayload(text).replace(/^\\uFEFF/, '').replace(/\\r/g, '').split('\\n').forEach(function(line) {\n        var trimmed = line.trim();\n        if (!trimmed || trimmed.charAt(0) === '#') return;\n        if (/^-{3,}$/.test(trimmed)) { inSteps = true; return; }\n        if (trimmed === '=====') return;\n        var data = line.split('#')[0].trim();\n        if (!data) return;\n        var parts = data.split(/\\s+/);\n        var isStep = inSteps || numericPair.test(data);\n        if (!isStep) {\n            if (parts.length >= 2) meta[parts[0]] = parts.slice(1).join(' ');\n            return;\n        }\n        if (parts.length >= 2) {\n            var speed = Number(String(parts[0]).replace(',', '.'));\n            var hold = Number(String(parts[1]).replace(',', '.'));\n            if (isFinite(speed) && isFinite(hold) && hold > 0) steps.push({ speed_deg_per_sec: speed, hold_sec: hold });\n        }\n    });\n    return { meta: meta, steps: steps };\n}\nfunction makeDoc(fileName, text) {\n    var name = safeFileName(fileName);\n    var summary = parseSummary(text, name);\n    return {\n        file_name: name,\n        path: scenarioPath(name),\n        text: textFromPayload(text),\n        meta: summary.meta,\n        steps: summary.steps,\n        updated_at: Date.now(),\n    };\n}\nfunction catalogPayload(extra) {\n    var payload = {\n        base_dir: BASE_DIR,\n        files: scenarioFiles(),\n        documents: clone(documents()),\n    };\n    if (extra && typeof extra === 'object') {\n        Object.keys(extra).forEach(function(k) { payload[k] = extra[k]; });\n    }\n    return { topic: 'scenario_catalog', payload: payload };\n}\nfunction errorMsg(message) {\n    return { topic: 'scenario_error', payload: { message: message } };\n}\n\nif (topic === 'reread' || topic === 'scenario_catalog_refresh') {\n    var reads = scenarioFiles().map(function(name) {\n        return { topic: 'scenario_file_content', filename: scenarioPath(name), file_name: name };\n    });\n    return [catalogPayload(), reads.length ? reads : null, null, null];\n}\n\nif (topic === 'scenario_file_request') {\n    var reqName = safeFileName(msg.payload && (msg.payload.file_name || msg.payload.file) || msg.file_name);\n    return [null, { topic: 'scenario_file_content', filename: scenarioPath(reqName), file_name: reqName }, null, null];\n}\n\nif (topic === 'scenario_file_content') {\n    var contentName = safeFileName(msg.file_name || (msg.payload && msg.payload.file_name) || msg.filename);\n    if (msg.error) return [errorMsg('\\u041d\\u0435 \\u0443\\u0434\\u0430\\u043b\\u043e\\u0441\\u044c \\u043f\\u0440\\u043e\\u0447\\u0438\\u0442\\u0430\\u0442\\u044c \\u0441\\u0446\\u0435\\u043d\\u0430\\u0440\\u0438\\u0439 ' + contentName + ': ' + msg.error), null, null, null];\n    var docs = documents();\n    docs[contentName] = makeDoc(contentName, msg.payload);\n    global.set('scenario_documents', docs);\n    saveScenarioFiles(scenarioFiles().concat([contentName]));\n    return [\n        {\n            topic: 'scenario_file_content',\n            payload: docs[contentName],\n        },\n        null,\n        null,\n        null,\n    ];\n}\n\nif (topic === 'scenario_save') {\n    var payload = msg.payload && typeof msg.payload === 'object' ? msg.payload : {};\n    var saveName = safeFileName(payload.file_name || payload.file || payload.name);\n    var text = String(payload.text || '');\n    if (!text.trim()) return [errorMsg('\\u041d\\u0435\\u043b\\u044c\\u0437\\u044f \\u0441\\u043e\\u0445\\u0440\\u0430\\u043d\\u0438\\u0442\\u044c \\u043f\\u0443\\u0441\\u0442\\u043e\\u0439 \\u0441\\u0446\\u0435\\u043d\\u0430\\u0440\\u0438\\u0439'), null, null, null];\n    var saveDocs = documents();\n    saveDocs[saveName] = makeDoc(saveName, text);\n    global.set('scenario_documents', saveDocs);\n    saveScenarioFiles(scenarioFiles().concat([saveName]));\n    var savedPayload = catalogPayload({ file_name: saveName }).payload;\n    savedPayload.documents = clone(saveDocs);\n    return [\n        [\n            { topic: 'scenario_file_saved', payload: savedPayload },\n            { topic: 'scenario_catalog', payload: savedPayload },\n        ],\n        null,\n        { topic: 'scenario_file_saved', filename: scenarioPath(saveName), file_name: saveName, payload: text },\n        null,\n    ];\n}\n\nif (topic === 'scenario_delete') {\n    var deleteName = safeFileName(msg.payload && (msg.payload.file_name || msg.payload.file) || msg.file_name);\n    var files = scenarioFiles().filter(function(name) { return name !== deleteName; });\n    var deleteDocs = documents();\n    delete deleteDocs[deleteName];\n    global.set('scenario_documents', deleteDocs);\n    saveScenarioFiles(files);\n    var deletePayload = catalogPayload({ file_name: deleteName }).payload;\n    deletePayload.documents = clone(deleteDocs);\n    return [\n        [\n            { topic: 'scenario_file_deleted', payload: deletePayload },\n            { topic: 'scenario_catalog', payload: deletePayload },\n        ],\n        null,\n        null,\n        { topic: 'scenario_file_deleted', filename: scenarioPath(deleteName), file_name: deleteName, payload: '' },\n    ];\n}\n\nreturn null;",
+        "outputs": 4,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 800,
+        "y": 520,
+        "wires": [
+            [
+                "069cbbdd2fffd53f"
+            ],
+            [
+                "scenario-editor-file-read"
+            ],
+            [
+                "scenario-editor-file-write"
+            ],
+            [
+                "scenario-editor-file-delete"
+            ]
+        ]
+    },
+    {
+        "id": "scenario-editor-file-read",
+        "type": "file in",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "Read scenario for editor",
+        "filename": "filename",
+        "filenameType": "msg",
+        "format": "utf8",
+        "chunk": false,
+        "sendError": true,
+        "encoding": "none",
+        "allProps": false,
+        "x": 1070,
+        "y": 520,
+        "wires": [
+            [
+                "scenario-file-service"
+            ]
+        ]
+    },
+    {
+        "id": "scenario-editor-file-write",
+        "type": "file",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "Write scenario file",
+        "filename": "filename",
+        "filenameType": "msg",
+        "appendNewline": false,
+        "createDir": true,
+        "overwriteFile": "true",
+        "encoding": "utf8",
+        "x": 1050,
+        "y": 560,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "scenario-editor-file-delete",
+        "type": "file",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "Delete scenario file",
+        "filename": "filename",
+        "filenameType": "msg",
+        "appendNewline": false,
+        "createDir": false,
+        "overwriteFile": "delete",
+        "encoding": "none",
+        "x": 1050,
+        "y": 600,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "069cbbdd2fffd53f",
+        "type": "link out",
+        "z": "ac37a9949da4d9d6",
+        "g": "103337ebd466ad7c",
+        "name": "link out 4",
+        "mode": "link",
+        "links": [
+            "5f65b6086231c61f",
+            "e36224cf5a7a94e1"
+        ],
+        "x": 975,
+        "y": 480,
         "wires": []
     },
     {
@@ -3707,93 +3813,5 @@
         "x": 1055,
         "y": 220,
         "wires": []
-    },
-    {
-        "id": "scenario-file-service",
-        "type": "function",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "ScenarioFileService",
-        "func": "// ScenarioFileService: file-backed editor for .scn files in C:\\NC3\\scenarios.\nvar topic = msg.topic;\nvar BASE_DIR = 'C:\\\\NC3\\\\scenarios';\nvar DEFAULT_FILES = ['high_resolution.scn', 'low_resolution.scn', 'range_switch.scn'];\n\nfunction clone(v) { return JSON.parse(JSON.stringify(v)); }\nfunction basename(value) {\n    var parts = String(value || '').split(/[\\\\/]/);\n    return parts.length ? parts[parts.length - 1] : '';\n}\nfunction safeFileName(value) {\n    var name = basename(value || '').replace(/[<>:\"/\\\\|?*\\x00-\\x1F]/g, '_').trim();\n    if (!name) name = 'scenario.scn';\n    if (!/\\.scn$/i.test(name)) name += '.scn';\n    return name;\n}\nfunction scenarioPath(name) {\n    return BASE_DIR + '\\\\' + safeFileName(name);\n}\nfunction unique(list) {\n    var seen = {};\n    var out = [];\n    (list || []).forEach(function(item) {\n        var name = safeFileName(item);\n        var key = name.toLowerCase();\n        if (!seen[key]) {\n            seen[key] = true;\n            out.push(name);\n        }\n    });\n    return out;\n}\nfunction diskScenarioFiles() {\n    var api = global.get('nc3') || {};\n    if (typeof api.listScenarioFiles === 'function') {\n        try {\n            return api.listScenarioFiles(BASE_DIR, DEFAULT_FILES);\n        } catch (e) {\n            node.warn('scenario list failed: ' + e.message);\n        }\n    }\n    return DEFAULT_FILES.slice();\n}\nfunction scenarioFiles() {\n    return unique(diskScenarioFiles().concat(global.get('scenario_files') || []));\n}\nfunction saveScenarioFiles(files) {\n    global.set('scenario_files', unique(files));\n}\nfunction documents() {\n    var docs = global.get('scenario_documents') || {};\n    return docs && typeof docs === 'object' ? docs : {};\n}\nfunction textFromPayload(value) {\n    if (value === undefined || value === null) return '';\n    if (typeof value === 'string') return value;\n    if (typeof Buffer !== 'undefined' && Buffer.isBuffer && Buffer.isBuffer(value)) return value.toString('utf8');\n    if (Array.isArray(value)) return value.map(function(ch) { return String.fromCharCode(Number(ch) || 0); }).join('');\n    if (value.type === 'Buffer' && Array.isArray(value.data)) {\n        return value.data.map(function(ch) { return String.fromCharCode(Number(ch) || 0); }).join('');\n    }\n    if (value.data && Array.isArray(value.data)) {\n        return value.data.map(function(ch) { return String.fromCharCode(Number(ch) || 0); }).join('');\n    }\n    if (value.payload !== undefined) return textFromPayload(value.payload);\n    return String(value);\n}\nfunction parseSummary(text, fileName) {\n    var meta = { Name: safeFileName(fileName).replace(/\\.scn$/i, ''), ResolutionHint: 'auto' };\n    var steps = [];\n    var inSteps = false;\n    var numericPair = /^[-+]?\\d+(?:[.,]\\d+)?\\s+[-+]?\\d+(?:[.,]\\d+)?(?:\\s|$)/;\n    textFromPayload(text).replace(/^\\uFEFF/, '').replace(/\\r/g, '').split('\\n').forEach(function(line) {\n        var trimmed = line.trim();\n        if (!trimmed || trimmed.charAt(0) === '#') return;\n        if (/^-{3,}$/.test(trimmed)) { inSteps = true; return; }\n        if (trimmed === '=====') return;\n        var data = line.split('#')[0].trim();\n        if (!data) return;\n        var parts = data.split(/\\s+/);\n        var isStep = inSteps || numericPair.test(data);\n        if (!isStep) {\n            if (parts.length >= 2) meta[parts[0]] = parts.slice(1).join(' ');\n            return;\n        }\n        if (parts.length >= 2) {\n            var speed = Number(String(parts[0]).replace(',', '.'));\n            var hold = Number(String(parts[1]).replace(',', '.'));\n            if (isFinite(speed) && isFinite(hold) && hold > 0) steps.push({ speed_deg_per_sec: speed, hold_sec: hold });\n        }\n    });\n    return { meta: meta, steps: steps };\n}\nfunction makeDoc(fileName, text) {\n    var name = safeFileName(fileName);\n    var summary = parseSummary(text, name);\n    return {\n        file_name: name,\n        path: scenarioPath(name),\n        text: textFromPayload(text),\n        meta: summary.meta,\n        steps: summary.steps,\n        updated_at: Date.now(),\n    };\n}\nfunction catalogPayload(extra) {\n    var payload = {\n        base_dir: BASE_DIR,\n        files: scenarioFiles(),\n        documents: clone(documents()),\n    };\n    if (extra && typeof extra === 'object') {\n        Object.keys(extra).forEach(function(k) { payload[k] = extra[k]; });\n    }\n    return { topic: 'scenario_catalog', payload: payload };\n}\nfunction errorMsg(message) {\n    return { topic: 'scenario_error', payload: { message: message } };\n}\n\nif (topic === 'reread' || topic === 'scenario_catalog_refresh') {\n    var reads = scenarioFiles().map(function(name) {\n        return { topic: 'scenario_file_content', filename: scenarioPath(name), file_name: name };\n    });\n    return [catalogPayload(), reads.length ? reads : null, null, null];\n}\n\nif (topic === 'scenario_file_request') {\n    var reqName = safeFileName(msg.payload && (msg.payload.file_name || msg.payload.file) || msg.file_name);\n    return [null, { topic: 'scenario_file_content', filename: scenarioPath(reqName), file_name: reqName }, null, null];\n}\n\nif (topic === 'scenario_file_content') {\n    var contentName = safeFileName(msg.file_name || (msg.payload && msg.payload.file_name) || msg.filename);\n    if (msg.error) return [errorMsg('\\u041d\\u0435 \\u0443\\u0434\\u0430\\u043b\\u043e\\u0441\\u044c \\u043f\\u0440\\u043e\\u0447\\u0438\\u0442\\u0430\\u0442\\u044c \\u0441\\u0446\\u0435\\u043d\\u0430\\u0440\\u0438\\u0439 ' + contentName + ': ' + msg.error), null, null, null];\n    var docs = documents();\n    docs[contentName] = makeDoc(contentName, msg.payload);\n    global.set('scenario_documents', docs);\n    saveScenarioFiles(scenarioFiles().concat([contentName]));\n    return [\n        {\n            topic: 'scenario_file_content',\n            payload: docs[contentName],\n        },\n        null,\n        null,\n        null,\n    ];\n}\n\nif (topic === 'scenario_save') {\n    var payload = msg.payload && typeof msg.payload === 'object' ? msg.payload : {};\n    var saveName = safeFileName(payload.file_name || payload.file || payload.name);\n    var text = String(payload.text || '');\n    if (!text.trim()) return [errorMsg('\\u041d\\u0435\\u043b\\u044c\\u0437\\u044f \\u0441\\u043e\\u0445\\u0440\\u0430\\u043d\\u0438\\u0442\\u044c \\u043f\\u0443\\u0441\\u0442\\u043e\\u0439 \\u0441\\u0446\\u0435\\u043d\\u0430\\u0440\\u0438\\u0439'), null, null, null];\n    var saveDocs = documents();\n    saveDocs[saveName] = makeDoc(saveName, text);\n    global.set('scenario_documents', saveDocs);\n    saveScenarioFiles(scenarioFiles().concat([saveName]));\n    var savedPayload = catalogPayload({ file_name: saveName }).payload;\n    savedPayload.documents = clone(saveDocs);\n    return [\n        [\n            { topic: 'scenario_file_saved', payload: savedPayload },\n            { topic: 'scenario_catalog', payload: savedPayload },\n        ],\n        null,\n        { topic: 'scenario_file_saved', filename: scenarioPath(saveName), file_name: saveName, payload: text },\n        null,\n    ];\n}\n\nif (topic === 'scenario_delete') {\n    var deleteName = safeFileName(msg.payload && (msg.payload.file_name || msg.payload.file) || msg.file_name);\n    var files = scenarioFiles().filter(function(name) { return name !== deleteName; });\n    var deleteDocs = documents();\n    delete deleteDocs[deleteName];\n    global.set('scenario_documents', deleteDocs);\n    saveScenarioFiles(files);\n    var deletePayload = catalogPayload({ file_name: deleteName }).payload;\n    deletePayload.documents = clone(deleteDocs);\n    return [\n        [\n            { topic: 'scenario_file_deleted', payload: deletePayload },\n            { topic: 'scenario_catalog', payload: deletePayload },\n        ],\n        null,\n        null,\n        { topic: 'scenario_file_deleted', filename: scenarioPath(deleteName), file_name: deleteName, payload: '' },\n    ];\n}\n\nreturn null;",
-        "outputs": 4,
-        "timeout": "",
-        "noerr": 0,
-        "initialize": "",
-        "finalize": "",
-        "libs": [],
-        "x": 800,
-        "y": 520,
-        "wires": [
-            [
-                "2c823494d7f38024",
-                "f0893e7d43d9e2b8"
-            ],
-            [
-                "scenario-editor-file-read"
-            ],
-            [
-                "scenario-editor-file-write"
-            ],
-            [
-                "scenario-editor-file-delete"
-            ]
-        ]
-    },
-    {
-        "id": "scenario-editor-file-read",
-        "type": "file in",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "Read scenario for editor",
-        "filename": "filename",
-        "filenameType": "msg",
-        "format": "utf8",
-        "chunk": false,
-        "sendError": true,
-        "encoding": "none",
-        "allProps": false,
-        "x": 1060,
-        "y": 520,
-        "wires": [
-            [
-                "scenario-file-service"
-            ]
-        ]
-    },
-    {
-        "id": "scenario-editor-file-write",
-        "type": "file",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "Write scenario file",
-        "filename": "filename",
-        "filenameType": "msg",
-        "appendNewline": false,
-        "createDir": true,
-        "overwriteFile": "true",
-        "encoding": "utf8",
-        "x": 1060,
-        "y": 560,
-        "wires": [
-            []
-        ]
-    },
-    {
-        "id": "scenario-editor-file-delete",
-        "type": "file",
-        "z": "ac37a9949da4d9d6",
-        "g": "103337ebd466ad7c",
-        "name": "Delete scenario file",
-        "filename": "filename",
-        "filenameType": "msg",
-        "appendNewline": false,
-        "createDir": false,
-        "overwriteFile": "delete",
-        "encoding": "none",
-        "x": 1060,
-        "y": 600,
-        "wires": [
-            []
-        ]
     }
 ]
