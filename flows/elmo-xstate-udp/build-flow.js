@@ -42,8 +42,10 @@ function readPollConfigFromGlobals() {
         isRecordingRaw: !!global.get('is_recording_raw'),
         rawDataEnabled: !!global.get('recording_save_raw_data'),
         fastRawPollingEnabled: advanced.fastRawPollingEnabled !== false,
+        lowVelocityPollingEnabled: advanced.lowVelocityPollingEnabled !== false,
         normalPollHz: 2,
         fastRawPollHz: clamp(finiteNumber(advanced.rawDataPollHz, 30), 1, 30),
+        lowVelocityPollHz: clamp(finiteNumber(advanced.lowVelocityPollHz, 10), 1, 30),
         fastStableSamples: Math.round(clamp(finiteNumber(advanced.fastStableSamples, 3), 1, 50)),
         fastStableToleranceTicks: Math.max(0, finiteNumber(advanced.fastStableToleranceTicks, 1000))
     };
@@ -119,8 +121,10 @@ function readPollConfigFromGlobals() {
         isRecordingRaw: !!global.get('is_recording_raw'),
         rawDataEnabled: !!global.get('recording_save_raw_data'),
         fastRawPollingEnabled: advanced.fastRawPollingEnabled !== false,
+        lowVelocityPollingEnabled: advanced.lowVelocityPollingEnabled !== false,
         normalPollHz: 2,
         fastRawPollHz: clamp(finiteNumber(advanced.rawDataPollHz, 30), 1, 30),
+        lowVelocityPollHz: clamp(finiteNumber(advanced.lowVelocityPollHz, 10), 1, 30),
         fastStableSamples: Math.round(clamp(finiteNumber(advanced.fastStableSamples, 3), 1, 50)),
         fastStableToleranceTicks: Math.max(0, finiteNumber(advanced.fastStableToleranceTicks, 1000))
     };
@@ -226,8 +230,10 @@ function fastCfg(hz, recording) {
     isRecordingRaw: recording,
     rawDataEnabled: recording,
     fastRawPollingEnabled: true,
+    lowVelocityPollingEnabled: true,
     normalPollHz: 2,
     fastRawPollHz: hz,
+    lowVelocityPollHz: 10,
     fastStableSamples: 3,
     fastStableToleranceTicks: 1000,
   };

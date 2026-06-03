@@ -36,8 +36,9 @@ const { clamp, splitElmoCommands } = require('./util');
 //   initialFullState        -> enqueue full-state poll after connect/recover (default true)
 //   pollOptions             -> { normalPollHz, minHz, maxHz, analogParam } for poll scheduling/payload
 // input.pollConfig:
-//   { isRecording, isRecordingRaw, rawDataEnabled, normalPollHz, fastRawPollHz, ... } toggles the fast raw
-//   recording poll path without coupling the machine to Node-RED globals.
+//   { isRecording, isRecordingRaw, rawDataEnabled, normalPollHz, fastRawPollHz, lowVelocityPollHz, ... }
+//   toggles the fast raw recording and low-resolution velocity poll paths without coupling the
+//   machine to Node-RED globals.
 
 function createElmoTransport(effects) {
   const e = effects || {};
@@ -52,6 +53,8 @@ function createElmoTransport(effects) {
   const maxMisses = e.maxMisses == null ? 3 : e.maxMisses;
   const soReadyTimeoutMs = e.soReadyTimeoutMs == null ? 30000 : e.soReadyTimeoutMs;
   const statePeriodMs = e.statePeriodMs == null ? 1000 : e.statePeriodMs;
+  const motionPollDelayMs = e.motionPollDelayMs == null ? 500 : e.motionPollDelayMs;
+  const motionDoneTimeoutMs = e.motionDoneTimeoutMs == null ? 120000 : e.motionDoneTimeoutMs;
   const probeCmd = e.probeCmd || 'TM';
   const initialFullState = e.initialFullState !== false;
   const pollOptions = e.pollOptions || {};
@@ -71,16 +74,27 @@ function createElmoTransport(effects) {
       isRecordingRaw: cfg.isRecordingRaw === true,
       rawDataEnabled: cfg.rawDataEnabled === true,
       fastRawPollingEnabled: cfg.fastRawPollingEnabled !== false,
+      lowVelocityPollingEnabled: cfg.lowVelocityPollingEnabled !== false,
       normalPollHz: clamp(finiteNumber(cfg.normalPollHz, 2), 1, 30),
       fastRawPollHz: clamp(finiteNumber(cfg.fastRawPollHz, 30), 1, 30),
+      lowVelocityPollHz: clamp(finiteNumber(cfg.lowVelocityPollHz, 10), 1, 30),
       fastStableSamples: Math.round(clamp(finiteNumber(cfg.fastStableSamples, 3), 1, 50)),
       fastStableToleranceTicks: Math.max(0, finiteNumber(cfg.fastStableToleranceTicks, 1000)),
     };
   }
 
-  function shouldFastPoll(config) {
+  function shouldFastRawPoll(config) {
     const cfg = normalizePollConfig(config);
     return cfg.fastRawPollingEnabled && cfg.isRecording && cfg.isRecordingRaw && cfg.rawDataEnabled;
+  }
+
+  function shouldLowVelocityPoll(config, resolution) {
+    const cfg = normalizePollConfig(config);
+    return cfg.lowVelocityPollingEnabled && resolution === 'low';
+  }
+
+  function fastDataPollActive(context) {
+    return !!(context.fastRawActive || context.lowVelocityPollActive);
   }
 
   function isFastPollRole(role) {
@@ -95,10 +109,13 @@ function createElmoTransport(effects) {
     const src = env || {};
     const kind = src.kind || 'cmd';
     const cmds = splitElmoCommands(src.cmds || src.cmd);
+    const priority = typeof src.priority === 'number'
+      ? src.priority
+      : (isOperatorAbortEnvelope(src) ? PRIORITY.init + 1 : (PRIORITY[kind] || 0));
     return {
       id: src.id || nextId(),
       kind,
-      priority: typeof src.priority === 'number' ? src.priority : (PRIORITY[kind] || 0),
+      priority,
       cmd: cmds[0] || src.cmd,
       cmds: cmds.length ? cmds : undefined,
       cursor: 0,
@@ -204,16 +221,41 @@ function createElmoTransport(effects) {
     return env.cmd ? [env.cmd] : [];
   }
 
+  function topicOfEnvelope(env) {
+    return (env && env.meta && env.meta.topic) || (env && env.topic) || '';
+  }
+
   function commandRequests(env, pattern) {
     return commandListFor(env).some((cmd) => pattern.test(String(cmd || '').toUpperCase()));
+  }
+
+  function envelopeRequests(env, pattern) {
+    return splitElmoCommands(env && (env.cmds || env.cmd)).some((cmd) => pattern.test(String(cmd || '').toUpperCase()));
+  }
+
+  function isOperatorAbortEnvelope(env) {
+    const topic = topicOfEnvelope(env);
+    return topic === 'drive_stop' || topic === 'motor_off' || envelopeRequests(env, /\bST\b|\bMO\s*=\s*0\b/);
   }
 
   function isMoOnCommand(cmd) {
     return /\bMO\s*=\s*1\b/.test(String(cmd || '').toUpperCase());
   }
 
+  function isBgCommand(cmd) {
+    return /\bBG\b/.test(String(cmd || '').toUpperCase());
+  }
+
   function needsSoReadyWait(env) {
     return isAckable(env) && isMoOnCommand(commandFor(env));
+  }
+
+  function needsMotionDoneWait(env) {
+    return isAckable(env) && env.meta && env.meta.waitForMotionDone === true && isBgCommand(commandFor(env));
+  }
+
+  function canOperatorAbort(env) {
+    return !!env;
   }
 
   function hasPendingCommandPart(env) {
@@ -226,6 +268,11 @@ function createElmoTransport(effects) {
 
   function soReadyFromRaw(raw) {
     return parseElmoScalars(raw).so === 1;
+  }
+
+  function motionDoneFromRaw(raw) {
+    const ms = parseElmoScalars(raw).ms;
+    return ms === 0 || ms === 1;
   }
 
   function confirmPollRoleFor(env) {
@@ -267,6 +314,13 @@ function createElmoTransport(effects) {
       needsSoReadyWait: ({ context }) => needsSoReadyWait(context.inFlight),
       soReadyAndHasPendingCommandPart: ({ context, event }) => soReadyAndHasPendingCommandPart(context.inFlight, event.raw),
       soReady: ({ event }) => soReadyFromRaw(event.raw),
+      needsMotionDoneWait: ({ context }) => needsMotionDoneWait(context.inFlight),
+      motionDone: ({ event }) => motionDoneFromRaw(event.raw),
+      operatorAbortCommand: ({ context, event }) => canOperatorAbort(context.inFlight) && isOperatorAbortEnvelope(event.envelope),
+      motionWaitTimedOut: ({ context }) => {
+        const startedAt = Number(context.motionWaitStartedAt) || 0;
+        return startedAt > 0 && now() - startedAt >= motionDoneTimeoutMs;
+      },
     },
     delays: {
       POLL_DELAY: ({ context }) => computePollDelayMs({ ...context, nowMs: now() }, pollOptions),
@@ -274,13 +328,16 @@ function createElmoTransport(effects) {
       CONNECT_TIMEOUT: () => connectTimeoutMs,
       RECONNECT_DELAY: () => reconnectMs,
       SO_READY_TIMEOUT: () => soReadyTimeoutMs,
+      MOTION_POLL_DELAY: () => motionPollDelayMs,
     },
     actions: {
       configurePoll: assign(({ context, event }) => {
         const pollConfig = normalizePollConfig(event.config);
-        const fastRawActive = shouldFastPoll(pollConfig);
-        const patch = { pollConfig, fastRawActive };
-        if (fastRawActive !== context.fastRawActive || !fastRawActive) {
+        const fastRawActive = shouldFastRawPoll(pollConfig);
+        const lowVelocityPollActive = shouldLowVelocityPoll(pollConfig, context.resolution);
+        const wasFastDataActive = fastDataPollActive(context);
+        const patch = { pollConfig, fastRawActive, lowVelocityPollActive };
+        if (fastDataPollActive(patch) !== wasFastDataActive || !fastDataPollActive(patch)) {
           patch.fastStable = false;
           patch.fastStableCount = 0;
           patch.lastFastVx = undefined;
@@ -312,7 +369,10 @@ function createElmoTransport(effects) {
         if (f.tm !== undefined) patch.tm = f.tm;
         if (f.px !== undefined) patch.px = f.px;
         if (f.vx !== undefined) { patch.vx = f.vx; patch.omegaSource = 'measured'; }
-        if (f.resolution) patch.resolution = f.resolution;
+        if (f.resolution) {
+          patch.resolution = f.resolution;
+          patch.lowVelocityPollActive = shouldLowVelocityPoll(context.pollConfig, f.resolution);
+        }
         if (f.ol1 !== undefined) patch.ol1 = f.ol1;
         if (f.ol2 !== undefined) patch.ol2 = f.ol2;
         if (f.mo !== undefined) patch.mo = f.mo;
@@ -331,19 +391,18 @@ function createElmoTransport(effects) {
         const t = now();
         let queue = context.queue;
         let lastExtendedAt = context.lastExtendedAt;
-        if (context.fastRawActive) {
+        if (fastDataPollActive(context)) {
           const role = fastPollRoleFor(context);
           const hasDiagnostic = hasPollRole(queue, 'full_state') || hasPollRoleInFlight(context, 'full_state');
           if (!hasDiagnostic && !hasAnyFastPoll(queue) && !hasAnyFastPollInFlight(context)) {
             queue = priorityInsert(queue, buildPollEnvelope({ id: nextId(), role, options: pollOptions }));
           }
-          return { queue, lastExtendedAt };
-        }
-        if (!hasPollRole(queue, 'data') && !hasPollRoleInFlight(context, 'data')) {
+        } else if (!hasPollRole(queue, 'data') && !hasPollRoleInFlight(context, 'data')) {
           queue = priorityInsert(queue, buildPollEnvelope({ id: nextId(), role: 'data', options: pollOptions }));
         }
         if (
-          shouldExtend(context.lastExtendedAt, t, statePeriodMs)
+          !context.fastRawActive
+          && shouldExtend(context.lastExtendedAt, t, statePeriodMs)
           && !hasPollRole(queue, 'state')
           && !hasPollRoleInFlight(context, 'state')
         ) {
@@ -408,6 +467,11 @@ function createElmoTransport(effects) {
         if (context.inFlight) sendCmd(commandFor(context.inFlight));
       },
 
+      emitStarted: ({ context }) => {
+        const env = context.inFlight;
+        if (isAckable(env)) emitEvent({ type: 'CMD.STARTED', id: env.id, topic: topicFor(env), meta: env.meta || {} });
+      },
+
       // After a part validates, append its raw and advance the cursor; sendingNextPart then
       // emits the next atomic command.
       collectPollPart: assign(({ context, event }) => {
@@ -444,6 +508,18 @@ function createElmoTransport(effects) {
         sendCmd('SO');
       },
 
+      sendMotionPoll: () => {
+        sendCmd('MS');
+      },
+
+      markMotionWait: assign(({ context }) => (context.motionWaitStartedAt ? {} : { motionWaitStartedAt: now() })),
+      clearMotionWait: assign({ motionWaitStartedAt: 0 }),
+
+      ingestMotionPoll: assign(({ event }) => {
+        const f = parseElmoScalars(event.raw);
+        return f.ms !== undefined ? { ms: f.ms } : {};
+      }),
+
       forwardAndAck: ({ context, event }) => {
         const env = context.inFlight;
         const { raw, validation } = responseValidation(env, event.raw);
@@ -468,6 +544,11 @@ function createElmoTransport(effects) {
         if (isAckable(env)) emitEvent({ type: 'CMD.FAILED', id: env.id, reason: 'timeout', topic: topicFor(env), meta: env.meta || {} });
       },
 
+      failInFlightAborted: ({ context }) => {
+        const env = context.inFlight;
+        if (isAckable(env)) emitEvent({ type: 'CMD.FAILED', id: env.id, reason: 'operator_aborted', topic: topicFor(env), meta: env.meta || {} });
+      },
+
       failSoWait: ({ context }) => {
         const env = context.inFlight;
         if (!isAckable(env)) return;
@@ -476,6 +557,26 @@ function createElmoTransport(effects) {
           id: env.id,
           reason: 'so_timeout',
           message: 'SO did not become 1 within ' + soReadyTimeoutMs + ' ms after MO=1',
+          topic: topicFor(env),
+          meta: env.meta || {},
+        });
+      },
+
+      completeMotionWait: ({ context, event }) => {
+        const env = context.inFlight;
+        if (!isAckable(env)) return;
+        forwardResp(event.raw, topicFor(env));
+        emitEvent({ type: 'CMD.COMPLETED', id: env.id, raw: event.raw, topic: topicFor(env), meta: env.meta || {} });
+      },
+
+      failMotionWait: ({ context }) => {
+        const env = context.inFlight;
+        if (!isAckable(env)) return;
+        emitEvent({
+          type: 'CMD.FAILED',
+          id: env.id,
+          reason: 'motion_timeout',
+          message: 'Motion did not complete within ' + motionDoneTimeoutMs + ' ms after BG',
           topic: topicFor(env),
           meta: env.meta || {},
         });
@@ -495,6 +596,7 @@ function createElmoTransport(effects) {
       statusIdle: () => setStatus({ fill: 'green', shape: 'dot', text: 'ELMO online' }),
       statusBusy: () => setStatus({ fill: 'blue', shape: 'dot', text: 'ELMO busy' }),
       statusWaitingSo: () => setStatus({ fill: 'yellow', shape: 'dot', text: 'ELMO waiting SO=1' }),
+      statusWaitingMotion: () => setStatus({ fill: 'yellow', shape: 'dot', text: 'ELMO waiting motion done' }),
     },
   }).createMachine({
     id: 'transport',
@@ -510,12 +612,14 @@ function createElmoTransport(effects) {
         lastExtendedAt: 0,
         missCount: 0,
         pollConfig,
-        fastRawActive: shouldFastPoll(pollConfig),
+        fastRawActive: shouldFastRawPoll(pollConfig),
+        lowVelocityPollActive: shouldLowVelocityPoll(pollConfig, (input && input.resolution) || 'high'),
         fastStable: false,
         fastStableCount: 0,
         lastFastVx: undefined,
         lastFastPollStartedAt: 0,
         soWaitStartedAt: 0,
+        motionWaitStartedAt: 0,
       };
     },
     initial: 'offline',
@@ -562,7 +666,7 @@ function createElmoTransport(effects) {
             always: { guard: 'hasWork', target: 'sending' },
           },
           sending: {
-            entry: ['statusBusy', 'takeNext', 'sendInFlight'],
+            entry: ['statusBusy', 'takeNext', 'emitStarted', 'sendInFlight'],
             always: 'awaiting',
           },
           awaiting: {
@@ -575,10 +679,15 @@ function createElmoTransport(effects) {
               ],
             },
             on: {
+              'UI.CMD': [
+                { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearSoWait', 'clearMotionWait', 'enqueueCmd'] },
+                { actions: 'enqueueCmd' },
+              ],
               // Multi-part: if the just-arrived part validated and more atomic commands remain,
               // collect it and send the next; otherwise dispatch the (whole, reassembled) frame.
               'ELMO.RESP': [
                 { guard: 'needsSoReadyWait', target: 'waitingForSoReady', actions: ['resetMiss', 'collectPollPart', 'markSoWait'] },
+                { guard: 'needsMotionDoneWait', target: 'waitingForMotionDone', actions: ['resetMiss', 'markMotionWait'] },
                 { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: ['resetMiss', 'collectPollPart'] },
                 { target: 'dispatch', actions: ['resetMiss', 'ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'] },
               ],
@@ -597,12 +706,47 @@ function createElmoTransport(effects) {
               },
             },
             on: {
+              'UI.CMD': [
+                { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearSoWait', 'enqueueCmd'] },
+                { actions: 'enqueueCmd' },
+              ],
               'ELMO.RESP': [
                 { guard: 'soReadyAndHasPendingCommandPart', target: 'sendingNextPart', actions: ['resetMiss', 'collectSoReadyPart', 'clearSoWait'] },
                 { guard: 'soReady', target: 'dispatch', actions: ['resetMiss', 'forwardAndAck', 'enqueueConfirmPoll', 'clearSoWait'] },
                 { actions: ['resetMiss', 'sendSoPoll'] },
               ],
               'ELMO.TIMEOUT': { actions: ['sendSoPoll'] },
+            },
+          },
+          waitingForMotionDone: {
+            entry: ['statusWaitingMotion', 'sendMotionPoll'],
+            on: {
+              'UI.CMD': [
+                { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearMotionWait', 'enqueueCmd'] },
+                { actions: 'enqueueCmd' },
+              ],
+              'ELMO.RESP': [
+                { guard: 'motionDone', target: 'dispatch', actions: ['resetMiss', 'ingestMotionPoll', 'completeMotionWait', 'clearMotionWait', 'enqueueConfirmPoll'] },
+                { target: 'motionPollPause', actions: ['resetMiss', 'ingestMotionPoll'] },
+              ],
+              'ELMO.TIMEOUT': [
+                { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failMotionWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait'] },
+                { target: 'motionPollPause', actions: ['bumpMiss'] },
+              ],
+            },
+          },
+          motionPollPause: {
+            on: {
+              'UI.CMD': [
+                { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearMotionWait', 'enqueueCmd'] },
+                { actions: 'enqueueCmd' },
+              ],
+            },
+            after: {
+              MOTION_POLL_DELAY: [
+                { guard: 'motionWaitTimedOut', target: 'idle', actions: ['failMotionWait', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait'] },
+                { target: 'waitingForMotionDone' },
+              ],
             },
           },
           sendingNextPart: {

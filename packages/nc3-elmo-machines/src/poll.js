@@ -173,9 +173,10 @@ function computePollDelayMs(context, options) {
   const ctx = context || {};
   const o = options || {};
   const compensation = Math.max(0, Number(o.timerCompensationMs) || 0);
-  if (ctx.fastRawActive) {
+  if (ctx.fastRawActive || ctx.lowVelocityPollActive) {
     const cfg = ctx.pollConfig || {};
-    const hz = clamp(Number(cfg.fastRawPollHz) || 30, 1, 30);
+    const configuredHz = ctx.fastRawActive ? cfg.fastRawPollHz : cfg.lowVelocityPollHz;
+    const hz = clamp(Number(configuredHz) || (ctx.fastRawActive ? 30 : 10), 1, 30);
     const targetMs = 1000 / hz;
     const startedAt = Number(ctx.lastFastPollStartedAt) || 0;
     const nowMs = Number(ctx.nowMs) || 0;

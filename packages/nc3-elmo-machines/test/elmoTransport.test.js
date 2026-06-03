@@ -36,7 +36,9 @@ function makeHarness(opts = {}) {
   };
   if (opts.maxMisses != null) effects.maxMisses = opts.maxMisses;
   if (opts.soReadyTimeoutMs != null) effects.soReadyTimeoutMs = opts.soReadyTimeoutMs;
-  const input = { resolution: 'high' };
+  if (opts.motionPollDelayMs != null) effects.motionPollDelayMs = opts.motionPollDelayMs;
+  if (opts.motionDoneTimeoutMs != null) effects.motionDoneTimeoutMs = opts.motionDoneTimeoutMs;
+  const input = { resolution: opts.resolution || 'high' };
   if (opts.pollConfig) input.pollConfig = opts.pollConfig;
   const actor = createActor(createElmoTransport(effects), { input }).start();
   createdActors.push(actor);
@@ -44,6 +46,7 @@ function makeHarness(opts = {}) {
 }
 
 function acked(calls) { return calls.emitEvent.filter((e) => e.type === 'CMD.ACKED'); }
+function completed(calls) { return calls.emitEvent.filter((e) => e.type === 'CMD.COMPLETED'); }
 function failed(calls) { return calls.emitEvent.filter((e) => e.type === 'CMD.FAILED'); }
 function badPoll(calls) { return calls.emitEvent.filter((e) => e.type === 'POLL.BAD_FRAME'); }
 
@@ -178,6 +181,72 @@ test('command batch waits for SO=1 after MO=1 before continuing', () => {
   assert.equal(h.ctx().inFlight.pollRole, 'state');
 });
 
+test('waitForMotionDone command completes only after MS reports motion done', async () => {
+  const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 1000 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: {
+      id: 'init',
+      kind: 'cmd',
+      cmd: 'MO=1;PR=1;BG',
+      meta: { topic: 'driveInit', waitForMotionDone: true },
+    },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SO;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PR;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS');
+  assert.equal(acked(h.calls).filter((e) => e.id === 'init').length, 0);
+  assert.equal(completed(h.calls).length, 0);
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MS;2;' });
+  assert.deepEqual(h.value(), { connected: 'motionPollPause' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS');
+
+  h.calls.forwardResp.length = 0;
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MS;0;' });
+
+  assert.equal(completed(h.calls).at(-1).id, 'init');
+  assert.equal(completed(h.calls).at(-1).topic, 'driveInit');
+  assert.equal(h.calls.forwardResp[0].topic, 'driveInit');
+  assert.equal(h.ctx().inFlight.pollRole, 'state');
+});
+
+test('operator stop aborts waitForMotionDone command and preempts the queue', () => {
+  const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 1000 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: {
+      id: 'init',
+      kind: 'cmd',
+      cmd: 'MO=1;PR=1;BG',
+      meta: { topic: 'driveInit', waitForMotionDone: true },
+    },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SO;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PR;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: { id: 'stop', kind: 'cmd', cmd: 'ST', meta: { topic: 'drive_stop' } },
+  });
+
+  assert.equal(failed(h.calls).at(-1).id, 'init');
+  assert.equal(failed(h.calls).at(-1).reason, 'operator_aborted');
+  assert.equal(h.ctx().inFlight.id, 'stop');
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'ST');
+});
+
 test('single MO=1 command waits for SO=1 before ack', () => {
   const h = makeHarness();
   h.actor.send({
@@ -221,7 +290,7 @@ test('single in-flight: a second cmd waits until the first is dispatched', () =>
   const h = connectedWithCmd();
   const sentBefore = h.calls.sendCmd.length;
 
-  h.actor.send({ type: 'UI.CMD', envelope: { id: 'cmdB', kind: 'cmd', cmd: 'ST', meta: { topic: 'drive_stop' } } });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'cmdB', kind: 'cmd', cmd: 'JV=200', meta: { topic: 'set_velocity' } } });
   assert.deepEqual(h.value(), { connected: 'awaiting' });
   assert.equal(h.ctx().inFlight.id, 'cmdA'); // still A
   assert.equal(h.calls.sendCmd.length, sentBefore); // B not sent yet
@@ -229,7 +298,21 @@ test('single in-flight: a second cmd waits until the first is dispatched', () =>
   h.actor.send({ type: 'ELMO.RESP', raw: 'ok-A' });
   assert.deepEqual(h.value(), { connected: 'awaiting' });
   assert.equal(h.ctx().inFlight.id, 'cmdB'); // now B
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'JV=200');
+});
+
+test('operator stop aborts a regular in-flight command and preempts queued work', () => {
+  const h = connectedWithCmd();
+
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'cmdB', kind: 'cmd', cmd: 'JV=200', meta: { topic: 'set_velocity' } } });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'stop', kind: 'cmd', cmd: 'ST', meta: { topic: 'drive_stop' } } });
+
+  assert.equal(failed(h.calls).at(-1).id, 'cmdA');
+  assert.equal(failed(h.calls).at(-1).reason, 'operator_aborted');
+  assert.deepEqual(h.value(), { connected: 'awaiting' });
+  assert.equal(h.ctx().inFlight.id, 'stop');
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'ST');
+  assert.equal(h.ctx().queue[0].id, 'cmdB');
 });
 
 test('request timeout fails the in-flight cmd and keeps the link up (no socket reset)', () => {
@@ -357,6 +440,43 @@ test('fast raw polling uses TM/PX data poll and suppresses periodic state poll',
   assert.equal(h.calls.forwardResp[0].raw, 'TM;100;PX;-10;');
 });
 
+test('low resolution uses 10 Hz TM/PX poll for derived velocity without raw recording', () => {
+  const h = makeHarness({
+    startNow: 2000,
+    resolution: 'low',
+    pollConfig: {
+      isRecording: false,
+      isRecordingRaw: false,
+      rawDataEnabled: false,
+      lowVelocityPollHz: 10,
+    },
+  });
+  h.actor.send({ type: 'CONNECT' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe' });
+
+  h.actor.send({ type: 'POLL.TICK' });
+  assert.equal(h.ctx().fastRawActive, false);
+  assert.equal(h.ctx().lowVelocityPollActive, true);
+  assert.equal(h.ctx().inFlight.pollRole, 'fast_data');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['TM', 'PX']);
+  assert.equal(h.ctx().queue.length, 1);
+  assert.equal(h.ctx().queue[0].pollRole, 'state');
+});
+
+test('full-state low range response activates low velocity poll path', () => {
+  const h = makeHarness({ startNow: 2000, initialFullState: true });
+  h.actor.send({ type: 'CONNECT' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'TM;1;' });
+  feedFullStatePoll(h, { ol1: 'OL[1];1;' });
+
+  assert.equal(h.ctx().resolution, 'low');
+  assert.equal(h.ctx().lowVelocityPollActive, true);
+
+  h.actor.send({ type: 'POLL.TICK' });
+  assert.equal(h.ctx().inFlight.pollRole, 'fast_data');
+  assert.deepEqual(h.ctx().inFlight.cmds, ['TM', 'PX']);
+});
+
 test('fast raw polling stays on TM/PX at 30 Hz', () => {
   const h = makeHarness({
     startNow: 2000,
@@ -417,7 +537,7 @@ test('poll dedup: only one poll in flight/queue at a time', () => {
   assert.equal(h.ctx().queue.length, 0);
 });
 
-test('ingests VX/OL[1] from a poll response while normal cadence stays 2 Hz', () => {
+test('ingests VX/OL[1] from a poll response and enables low-range 10 Hz cadence', () => {
   const { computePollDelayMs } = require('../src/poll');
   const h = makeHarness({ startNow: 500 });
   h.actor.send({ type: 'CONNECT' });
@@ -432,7 +552,7 @@ test('ingests VX/OL[1] from a poll response while normal cadence stays 2 Hz', ()
   assert.equal(c.vx, -3276800);
   assert.equal(c.resolution, 'low');
   assert.equal(c.omegaSource, 'measured');
-  assert.equal(computePollDelayMs(c), 500);
+  assert.equal(computePollDelayMs(c), 100);
 });
 
 test('drops invalid data poll frames and emits POLL.BAD_FRAME', () => {
@@ -554,18 +674,17 @@ test('startElmoTransport returns a started actor in offline with given resolutio
   actor.stop();
 });
 
-test('a cmd preempts a queued poll (priority)', () => {
+test('operator stop aborts an in-flight poll immediately', () => {
   const h = makeHarness({ startNow: 500 });
   h.actor.send({ type: 'CONNECT' });
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe' }); // connected.idle
 
   h.actor.send({ type: 'POLL.TICK' }); // poll in flight (awaiting TM part)
   h.actor.send({ type: 'UI.CMD', envelope: { id: 'cmdX', kind: 'cmd', cmd: 'ST', meta: { topic: 'drive_stop' } } });
-  // queue currently: [cmdX] (poll is in flight, deduped)
-  assert.equal(h.ctx().queue[0].id, 'cmdX');
-
-  h.actor.send({ type: 'ELMO.RESP', raw: 'poll-data' }); // first atomic reply missing TM -> dispatch (BAD_FRAME) -> idle -> send cmdX
   assert.equal(h.ctx().inFlight.id, 'cmdX');
+  assert.equal(h.ctx().queue.length, 0);
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'ST');
+  assert.equal(failed(h.calls).length, 0);
 });
 
 test('LEAN_POLL constant lists the data fields', () => {
