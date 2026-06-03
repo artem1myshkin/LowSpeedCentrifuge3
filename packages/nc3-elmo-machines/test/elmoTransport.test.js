@@ -85,6 +85,13 @@ function feedFullStatePoll(h, opts = {}) {
   h.actor.send({ type: 'ELMO.RESP', raw: opts.ol2 || 'OL[2];1;' });
 }
 
+function feedMotionStatusPoll(h, opts = {}) {
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.ms || 'MS;2;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.tm || 'TM;100;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.px || 'PX;10;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.vx || 'VX;1;' });
+}
+
 // Drive to connected.awaiting with one command in flight.
 function connectedWithCmd(opts) {
   const h = makeHarness(opts);
@@ -203,18 +210,26 @@ test('waitForMotionDone command completes only after MS reports motion done', as
   assert.equal(acked(h.calls).filter((e) => e.id === 'init').length, 0);
   assert.equal(completed(h.calls).length, 0);
 
-  h.actor.send({ type: 'ELMO.RESP', raw: 'MS;2;' });
+  feedMotionStatusPoll(h, { ms: 'MS;2;', tm: 'TM;100;', px: 'PX;10;', vx: 'VX;5;' });
   assert.deepEqual(h.value(), { connected: 'motionPollPause' });
+  assert.equal(h.calls.forwardResp.at(-1).topic, 'poll_data');
+  assert.equal(h.calls.forwardResp.at(-1).raw, 'MS;2;TM;100;PX;10;VX;5;');
+  assert.equal(h.ctx().ms, 2);
+  assert.equal(h.ctx().tm, 100);
+  assert.equal(h.ctx().px, 10);
+  assert.equal(h.ctx().vx, 5);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS');
 
   h.calls.forwardResp.length = 0;
-  h.actor.send({ type: 'ELMO.RESP', raw: 'MS;0;' });
+  feedMotionStatusPoll(h, { ms: 'MS;0;', tm: 'TM;200;', px: 'PX;20;', vx: 'VX;0;' });
 
   assert.equal(completed(h.calls).at(-1).id, 'init');
   assert.equal(completed(h.calls).at(-1).topic, 'driveInit');
-  assert.equal(h.calls.forwardResp[0].topic, 'driveInit');
+  assert.equal(completed(h.calls).at(-1).raw, 'MS;0;TM;200;PX;20;VX;0;');
+  assert.equal(h.calls.forwardResp[0].topic, 'poll_data');
+  assert.equal(h.calls.forwardResp[0].raw, 'MS;0;TM;200;PX;20;VX;0;');
   assert.equal(h.ctx().inFlight.pollRole, 'state');
 });
 

@@ -6,6 +6,8 @@ const { buildPollEnvelope, shouldExtend, computePollDelayMs } = require('./poll'
 const { parseElmoScalars } = require('./parse');
 const { clamp, splitElmoCommands } = require('./util');
 
+const MOTION_STATUS_POLL_CMDS = ['MS', 'TM', 'PX', 'VX'];
+
 // ElmoTransport — single serialized owner of the ELMO UDP link (plan §4, reworked for UDP).
 //
 // UDP model: ELMO listens on a UDP port and answers each command datagram with exactly one
@@ -275,6 +277,25 @@ function createElmoTransport(effects) {
     return ms === 0 || ms === 1;
   }
 
+  function motionPollCursorOf(context) {
+    return Math.max(0, Number(context && context.motionPollCursor) || 0);
+  }
+
+  function motionPollCmdsOf(context) {
+    return Array.isArray(context && context.motionPollCmds) && context.motionPollCmds.length
+      ? context.motionPollCmds
+      : MOTION_STATUS_POLL_CMDS;
+  }
+
+  function motionPollCommandFor(context) {
+    const cmds = motionPollCmdsOf(context);
+    return cmds[Math.min(motionPollCursorOf(context), cmds.length - 1)];
+  }
+
+  function motionPollRawFor(context, raw) {
+    return ((context && context.motionPollParts) || []).concat([raw]).join('');
+  }
+
   function confirmPollRoleFor(env) {
     if (!isAckable(env)) return null;
     const meta = env.meta || {};
@@ -315,7 +336,8 @@ function createElmoTransport(effects) {
       soReadyAndHasPendingCommandPart: ({ context, event }) => soReadyAndHasPendingCommandPart(context.inFlight, event.raw),
       soReady: ({ event }) => soReadyFromRaw(event.raw),
       needsMotionDoneWait: ({ context }) => needsMotionDoneWait(context.inFlight),
-      motionDone: ({ event }) => motionDoneFromRaw(event.raw),
+      hasNextMotionPollPart: ({ context }) => motionPollCursorOf(context) < motionPollCmdsOf(context).length - 1,
+      motionDoneAfterMotionPoll: ({ context, event }) => motionDoneFromRaw(motionPollRawFor(context, event.raw)),
       operatorAbortCommand: ({ context, event }) => canOperatorAbort(context.inFlight) && isOperatorAbortEnvelope(event.envelope),
       motionWaitTimedOut: ({ context }) => {
         const startedAt = Number(context.motionWaitStartedAt) || 0;
@@ -508,17 +530,41 @@ function createElmoTransport(effects) {
         sendCmd('SO');
       },
 
-      sendMotionPoll: () => {
-        sendCmd('MS');
+      startMotionPoll: assign(() => ({
+        motionPollCmds: MOTION_STATUS_POLL_CMDS,
+        motionPollCursor: 0,
+        motionPollParts: [],
+      })),
+
+      sendMotionPollPart: ({ context }) => {
+        sendCmd(motionPollCommandFor(context));
       },
 
       markMotionWait: assign(({ context }) => (context.motionWaitStartedAt ? {} : { motionWaitStartedAt: now() })),
       clearMotionWait: assign({ motionWaitStartedAt: 0 }),
+      clearMotionPoll: assign({ motionPollCmds: [], motionPollCursor: 0, motionPollParts: [] }),
 
-      ingestMotionPoll: assign(({ event }) => {
-        const f = parseElmoScalars(event.raw);
-        return f.ms !== undefined ? { ms: f.ms } : {};
+      collectMotionPollPart: assign(({ context, event }) => ({
+        motionPollParts: (context.motionPollParts || []).concat([event.raw]),
+      })),
+
+      advanceMotionPoll: assign(({ context }) => ({
+        motionPollCursor: motionPollCursorOf(context) + 1,
+      })),
+
+      ingestMotionPoll: assign(({ context, event }) => {
+        const f = parseElmoScalars(motionPollRawFor(context, event.raw));
+        const patch = {};
+        if (f.tm !== undefined) patch.tm = f.tm;
+        if (f.px !== undefined) patch.px = f.px;
+        if (f.vx !== undefined) { patch.vx = f.vx; patch.omegaSource = 'measured'; }
+        if (f.ms !== undefined) patch.ms = f.ms;
+        return patch;
       }),
+
+      forwardMotionPollData: ({ context, event }) => {
+        forwardResp(motionPollRawFor(context, event.raw), 'poll_data');
+      },
 
       forwardAndAck: ({ context, event }) => {
         const env = context.inFlight;
@@ -565,8 +611,8 @@ function createElmoTransport(effects) {
       completeMotionWait: ({ context, event }) => {
         const env = context.inFlight;
         if (!isAckable(env)) return;
-        forwardResp(event.raw, topicFor(env));
-        emitEvent({ type: 'CMD.COMPLETED', id: env.id, raw: event.raw, topic: topicFor(env), meta: env.meta || {} });
+        const raw = motionPollRawFor(context, event.raw);
+        emitEvent({ type: 'CMD.COMPLETED', id: env.id, raw, topic: topicFor(env), meta: env.meta || {} });
       },
 
       failMotionWait: ({ context }) => {
@@ -620,6 +666,9 @@ function createElmoTransport(effects) {
         lastFastPollStartedAt: 0,
         soWaitStartedAt: 0,
         motionWaitStartedAt: 0,
+        motionPollCmds: [],
+        motionPollCursor: 0,
+        motionPollParts: [],
       };
     },
     initial: 'offline',
@@ -719,32 +768,54 @@ function createElmoTransport(effects) {
             },
           },
           waitingForMotionDone: {
-            entry: ['statusWaitingMotion', 'sendMotionPoll'],
+            entry: ['statusWaitingMotion', 'startMotionPoll', 'sendMotionPollPart'],
             on: {
               'UI.CMD': [
-                { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearMotionWait', 'enqueueCmd'] },
+                { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll', 'enqueueCmd'] },
                 { actions: 'enqueueCmd' },
               ],
               'ELMO.RESP': [
-                { guard: 'motionDone', target: 'dispatch', actions: ['resetMiss', 'ingestMotionPoll', 'completeMotionWait', 'clearMotionWait', 'enqueueConfirmPoll'] },
-                { target: 'motionPollPause', actions: ['resetMiss', 'ingestMotionPoll'] },
+                { guard: 'hasNextMotionPollPart', target: 'sendingMotionPollPart', actions: ['resetMiss', 'collectMotionPollPart', 'advanceMotionPoll'] },
+                { guard: 'motionDoneAfterMotionPoll', target: 'dispatch', actions: ['resetMiss', 'ingestMotionPoll', 'forwardMotionPollData', 'completeMotionWait', 'clearMotionWait', 'clearMotionPoll', 'enqueueConfirmPoll'] },
+                { target: 'motionPollPause', actions: ['resetMiss', 'ingestMotionPoll', 'forwardMotionPollData', 'clearMotionPoll'] },
               ],
               'ELMO.TIMEOUT': [
-                { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failMotionWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait'] },
-                { target: 'motionPollPause', actions: ['bumpMiss'] },
+                { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failMotionWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll'] },
+                { target: 'motionPollPause', actions: ['bumpMiss', 'clearMotionPoll'] },
+              ],
+            },
+          },
+          sendingMotionPollPart: {
+            entry: 'sendMotionPollPart',
+            always: 'waitingForMotionPollPart',
+          },
+          waitingForMotionPollPart: {
+            on: {
+              'UI.CMD': [
+                { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll', 'enqueueCmd'] },
+                { actions: 'enqueueCmd' },
+              ],
+              'ELMO.RESP': [
+                { guard: 'hasNextMotionPollPart', target: 'sendingMotionPollPart', actions: ['resetMiss', 'collectMotionPollPart', 'advanceMotionPoll'] },
+                { guard: 'motionDoneAfterMotionPoll', target: 'dispatch', actions: ['resetMiss', 'ingestMotionPoll', 'forwardMotionPollData', 'completeMotionWait', 'clearMotionWait', 'clearMotionPoll', 'enqueueConfirmPoll'] },
+                { target: 'motionPollPause', actions: ['resetMiss', 'ingestMotionPoll', 'forwardMotionPollData', 'clearMotionPoll'] },
+              ],
+              'ELMO.TIMEOUT': [
+                { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failMotionWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll'] },
+                { target: 'motionPollPause', actions: ['bumpMiss', 'clearMotionPoll'] },
               ],
             },
           },
           motionPollPause: {
             on: {
               'UI.CMD': [
-                { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearMotionWait', 'enqueueCmd'] },
+                { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll', 'enqueueCmd'] },
                 { actions: 'enqueueCmd' },
               ],
             },
             after: {
               MOTION_POLL_DELAY: [
-                { guard: 'motionWaitTimedOut', target: 'idle', actions: ['failMotionWait', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait'] },
+                { guard: 'motionWaitTimedOut', target: 'idle', actions: ['failMotionWait', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll'] },
                 { target: 'waitingForMotionDone' },
               ],
             },
