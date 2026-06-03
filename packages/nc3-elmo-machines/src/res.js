@@ -14,7 +14,10 @@ const RES = {
     qs: 131072000,
     vh1: 131072000,
     vl1: 131072000,
-    vh2: 3640888,
+    // Physical high-head ceiling is 8 rpm = 48 deg/s; software ranges still default to 20 deg/s.
+    // effectiveResParams() clamps this down to the configured settings range, so the program
+    // range must NOT be lower than the settings range (was 3640888 = 5 deg/s, which capped scenarios).
+    vh2: 34952533,
     er3: 131072000,
     er2: 131072000,
     tr1: 7282,
@@ -25,7 +28,10 @@ const RES = {
   low: {
     ol1: 1,
     ca18: 6553600,
-    s1_5: 40,
+    // STAND-TEST HYPOTHESIS: reverted to the pre-2e564fe value (7662835) to check whether the
+    // low heads assert SO=1 after driveInit. Diverges from the ТЗ head-switch table (S1[5]=40),
+    // which the high heads tolerate; low never reached SO-ready with S1[5]=40.
+    s1_5: 7662835,
     kp2: 1e-5,
     sd: 3276800,
     qs: 3276800,
