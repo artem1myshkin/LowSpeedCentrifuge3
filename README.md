@@ -22,6 +22,8 @@
 
 10. Do not add module-style JavaScript to `ui-template` nodes. The current Dashboard 2 templates may use the documented Options API wrapper, but helper logic must stay self-contained and must not use `import`, `require`, or CommonJS.
 
+11. Dashboard 2 `ui-template` nodes that receive backend messages must keep `passthru` disabled (`passthru=false`) unless a deliberate echo path is required and documented. With `passthru=true`, incoming backend messages are emitted from the template output and can create feedback/rerender loops when the template is wired back to backend services.
+
 Node-RED references used for these rules:
 
 - [Writing Functions](https://nodered.org/docs/user-guide/writing-functions)
