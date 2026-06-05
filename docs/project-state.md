@@ -169,7 +169,15 @@ UI Dashboard 2, страницы:
 
 ## 7. Удаленное управление
 
-`activeSession` выставляется из `_client`, если `remoteControl` включен и подключился не `127.0.0.1`. `Настройка` определяет `isActiveUser` по IP. Backend не валидирует владельца команды, большинство кнопок не заблокированы по праву сессии. Для production нужен единый command gate перед опасными командами.
+Remote-control переведен из изолированного пилота в production UI-вкладки. В `flows.json` есть общий `RemoteControlService`, subflow `CommandGate`, targeted `remote_state` для Dashboard socket-клиентов и общий UI-паттерн claim/display-only/E-stop.
+
+Эксперимент в LAN 2026-06-05 подтвердил базовую модель: local и remote получают разные `remote_state`, remote claim выставляет `ownerIp`, local уходит в display-only, remote-owner получает `canControl:true`. На основании эксперимента production-вкладки подключены через `RC route <tab>` и `RC gate <tab>`: `Угловая скорость`, `Сценарии`, `БУН`, `BEP`, `Настройка`, `Журнал`, `Мониторинг`.
+
+Флаг режима берется из `settings.general.remoteControl`: `SettingsNormalize` дополнительно отправляет `remote_flag` в `RemoteControlService`. Legacy-цепочка `Remote? -> correct ip? -> Set session` отключена от `ui-control`, чтобы не было параллельной модели владения. `Мониторинг` переведен на `passthru=false`, потому что production-шаблон теперь принимает backend `remote_state`.
+
+Backend enforcement выполняется в `CommandGate`; UI guard вокруг `this.send` нужен только для удобного поведения кнопок. Local в remote-mode может снять только `remoteControl:false` и отправить `emergency_stop`; remote-owner может управлять; remote non-owner блокируется. `Remote Emergency Stop` отправляет `drive_stop`, `motor_off`, `tilt_brake`, `scenario_emergency_stop` и `journal_event`.
+
+Актуальная спецификация, выводы пилота и LAN acceptance checklist: [remote-control-plan.md](remote-control-plan.md).
 
 ## 8. Глобальный контекст
 
@@ -191,7 +199,9 @@ UI Dashboard 2, страницы:
 | `scenario_state` | `ScenarioManager` | Текущий сценарий, шаг, статус, таймеры, pause/resume |
 | `scenario_files` / `scenario_documents` | `ScenarioFileService` | Каталог и кэш файлов `.scn` из `C:\NC3\scenarios` |
 | `bun_angle` / `bun_brake` | БУН-контур / `ResponseParser` | Угол наклона / тормоз `OL[2]` |
-| `activeSession` | `ui-control` | Активная удаленная сессия |
+| `activeSession` | legacy remote-скелет | Не используется production remote-control; legacy-цепочка отключена от `ui-control` |
+| `remoteSession` | `RemoteControlService` | Состояние remote-mode: флаг, owner socket/IP/role |
+| `connectedClients` | `RemoteControlService` | Подключенные Dashboard socket-клиенты для targeted `remote_state` |
 | `use_calib`, `vN_*` | калибровка | Коэффициенты БЕП/энкодеров |
 
 Рекомендация: добавить в live-state `updated_at`/`source`/`quality`/`error` для отличия свежих данных от устаревших (сейчас stale-detection нет).
@@ -219,7 +229,7 @@ P0:
 1. Починить запуск `nc3_bep.py` (`exec` должен запускать `python C:\NC3\nc3_bep.py` или supervisor).
 2. Привести топики БЕП flow к контракту `nc3_bep.py` или написать адаптер.
 3. Добавить timestamps/stale-detection для `drive_state`, БУН, БЕП и понятные error-сообщения UI при TCP/MQTT/file/exec ошибках.
-4. Единый `CommandGate` перед командами ELMO/БУН/БЕП (владелец сессии, состояние привода, нет активного сценария, интерлок `set_resolution` при движении/включенном приводе).
+4. Расширить `CommandGate` интерлоками состояния установки: движение/включенный привод для `set_resolution`, активный сценарий для ручных конфликтующих команд, offline/stale hardware-state.
 
 P1:
 
