@@ -1,5 +1,13 @@
 # Состояние проекта LowSpeedCentrifuge3
 
+## Актуализация 2026-06-08: удаленное управление в production UI
+
+Remote-control перенесен из пилотной страницы на все production UI-вкладки. В `flows.json` есть отдельный flow-tab `Remote Control` с `RemoteControlService`, subflow `CommandGate`, targeted `remote_state` и шинами для journal/emergency/debug-сообщений. Тестовая Dashboard-страница `/remote-control-test` удалена.
+
+Флаг режима берется из `settings.general.remoteControl`, а `RemoteControlService` синхронизирует состояние с настройками при connect/change/refresh. Local в remote-mode видит display-only UI, может выполнить `E-stop` и снять remote-mode отдельной кнопкой `Выключить удаленное управление` в баннере настроек. Remote-клиент берет владение кнопкой `Взять управление`; только remote-owner получает `canControl:true`.
+
+Все production `ui-template` имеют `passthru=false` и общий UI-lock: при `!canControl` кнопки, поля ввода и switches выглядят неактивными и не принимают клики/ввод, кроме разрешенных кнопок remote-banner. Backend enforcement остается в `CommandGate`.
+
 ## Актуализация 2026-06-04: журнал событий и графики протоколов
 
 Вкладка `Журнал` (`/journal`) расширена и считается полноэкранной рабочей страницей. Внутри нее две логические подвкладки:
@@ -41,7 +49,7 @@
 
 Транспорт `ElmoTransport`/XStateMachine переведён с TCP `sit` на **UDP с атомарными командами** (по одной команде-параметру на датаграмму с реассемблированием в логический кадр) и компенсацией Windows-таймера — даёт ~30–32 Гц при цели 30 Гц. Production-контур `BUN flow`/`new ui flow` теперь подключён к этому транспорту через link bus: UI-команды и `tilt_brake` идут в `ELMO XState (UDP)`, ответы возвращаются в существующий `ResponseParser`. Legacy TCP-узлы оставлены в flow, но выключены.
 
-Актуально на: 2026-06-04
+Актуально на: 2026-06-08
 Проект: `C:\Users\Артём\.node-red\projects\LowSpeedCentrifuge3`
 Runtime-окружение: `C:\NC3`
 Документация ТЗ: `C:\Users\Артём\Documents\NC3`
@@ -58,6 +66,8 @@ Runtime-окружение: `C:\NC3`
 2. `new ui flow` — основной UI-контур: БУН, БЕП, мониторинг, журнал, протоколы.
 3. `BUN flow` — управление угловой скоростью ELMO (название историческое; это привод планшайбы), регулярный poll, буфер протокола, сценарный runtime и редактор файлов.
 4. `SETTINGS flow` — UI настроек.
+5. `ELMO XState (UDP)` — единый UDP-транспорт ELMO и production link bus.
+6. `Remote Control` — `RemoteControlService`, `CommandGate` и remote-control link bus.
 
 UI Dashboard 2, страницы:
 
@@ -211,6 +221,7 @@ Backend enforcement выполняется в `CommandGate`; UI guard вокру
 ## 9. Что реализовано
 
 - Операторский UI: угловая скорость, БУН/БЕП, мониторинг, настройки, журнал.
+- Удаленное управление production UI: local display-only, remote claim/owner, backend `CommandGate`, local `E-stop` и local release remote-mode из баннера настроек.
 - Ручное управление приводом: `MO`, `ST`, `JV`, `JP`, `PA`, `PR`, `Drive Init`.
 - Чтение положения/скорости/статусов ELMO, диапазоны high/low и ограничения скорости.
 - Сохранение/загрузка настроек в `C:\NC3\settings.json` (`SettingsNormalize`/`SettingsPersist`/`file`), единый язык, диапазоны скоростей.

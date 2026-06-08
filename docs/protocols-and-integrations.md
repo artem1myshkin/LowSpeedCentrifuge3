@@ -4,6 +4,12 @@
 
 Этот файл фиксирует фактические способы взаимодействия между `Node-RED`, приводом `ELMO`, узлом наклона `БУН` и системой `БЕП` в проекте НЦ-3/2.
 
+## Актуализация 2026-06-08
+
+- Production Dashboard-команды проходят через remote-control route/gate перед попаданием в ELMO/БУН/БЕП/настройки/журнал.
+- `RemoteControlService` ведет targeted `remote_state` по Dashboard socket-клиентам, синхронизирует `remoteEnabled` с `settings.general.remoteControl` и публикует события в persistent journal.
+- Все production `ui-template` для backend-сообщений работают с `passthru=false`, чтобы `remote_state`, `logs_update` и другие backend-снимки не превращались в feedback loop.
+
 ## Актуализация 2026-06-01
 
 - Основной production-путь ELMO — UDP/XState: `CommandHandler -> ELMO XState (UDP) -> ResponseParser`. Legacy TCP `192.168.1.2:2000` оставлен выключенным fallback.
@@ -34,6 +40,19 @@
 2. `Node-RED` не работает с `БУН` напрямую по `UDP`; вместо этого общается с `nc3_bun.py` через `MQTT`.
 3. `Node-RED` не работает с `БЕП` напрямую по `UDP`; вместо этого использует MQTT-шлюз `nc3_bep.py` и отдельную process-обвязку в flow.
 4. Часть логики хранения данных и протоколов реализована прямо в `Node-RED` через `file`, `file in` и `ProtocolManager`.
+5. Dashboard-команды перед доменными обработчиками проходят через `RC route <tab>` и `CommandGate`, который применяет remote ownership и пропускает только разрешенные view-only/emergency/release-топики.
+
+## Remote-control command path
+
+Remote-control не меняет физические протоколы ELMO/БУН/БЕП, но меняет входной контракт команд из Dashboard:
+
+1. Production `ui-template` отправляет команду через `this.send({ topic, payload })`.
+2. `RC route <tab>` отделяет служебные remote-топики (`remote_claim`, `remote_release`, `remote_refresh`) и отправляет их в `RemoteControlService`.
+3. Рабочие команды идут через subflow `CommandGate`.
+4. Разрешенный выход gate возвращается в прежние доменные обработчики: `CommandHandler`, `ScenarioManager`, `ScenarioFileService`, Tilt/БУН, BEP MQTT/config, `SettingsNormalize`, `ProtocolManager`, `EventLogService`.
+5. Заблокированный выход gate уходит в debug bus `RC PROD BLOCKED`.
+
+`CommandGate` разрешает local `emergency_stop`, local release remote-mode через `settings_aply` с `remoteControl:false`, remote-owner команды и view-only refresh/open-file топики. Остальные local/remote non-owner рабочие команды в remote-mode блокируются. Это backend enforcement; CSS/JS-блокировки в Dashboard нужны только для клиентского UX.
 
 ## ELMO
 

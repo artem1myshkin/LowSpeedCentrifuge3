@@ -1,6 +1,6 @@
 # Пакет `nc3-elmo-machines` — справочник по файлам
 
-Актуально на: 2026-06-01. Краткая карта: что в каком файле и какие функции. Без полного кода — за деталями в `packages/nc3-elmo-machines/src/`.
+Актуально на: 2026-06-08. Краткая карта: что в каком файле и какие функции. Без полного кода — за деталями в `packages/nc3-elmo-machines/src/`.
 
 Поведение системы целиком — [xstate-elmo-design.md](xstate-elmo-design.md). Текущее состояние — [xstate-elmo-status.md](xstate-elmo-status.md).
 
@@ -12,7 +12,7 @@
 - `scenario.js` экспортирует `computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs)`, `normalizeScenarioFileName` и `listScenarioFiles`; сценарный timeout теперь вычисляется от скорости и текущего `AC`.
 - `index.js` реэкспортирует новые helpers для Node-RED Function-узлов через `global.get('nc3')`.
 - `ScenarioFileService` находится в `flows.json`, а не в пакете: он читает/пишет runtime-файлы `C:\NC3\scenarios\*.scn`, хранит `global.scenario_files` и `global.scenario_documents`.
-- Текущий `node --test` для пакета: 55 тестов.
+- Текущий `node --test` для пакета: 59 тестов.
 
 ## Актуализация 2026-05-29
 
