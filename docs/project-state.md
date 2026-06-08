@@ -177,7 +177,7 @@ Remote-control переведен из изолированного пилота
 
 Backend enforcement выполняется в `CommandGate`; UI guard вокруг `this.send` нужен только для удобного поведения кнопок. Local в remote-mode может снять только `remoteControl:false` и отправить `emergency_stop`; remote-owner может управлять; remote non-owner блокируется. `Remote Emergency Stop` отправляет `drive_stop`, `motor_off`, `tilt_brake`, `scenario_emergency_stop` и `journal_event`.
 
-После production-переноса тестовая Dashboard-страница `/remote-control-test` и pilot UI/debug-узлы удалены. Сервисные remote-control узлы находятся на flow-tab `Remote Control`. Все production `ui-template` получают root-класс `remote-locked` при `!canControl`, чтобы кнопки и поля визуально выглядели неактивными.
+После production-переноса тестовая Dashboard-страница `/remote-control-test` и pilot UI/debug-узлы удалены. Сервисные remote-control узлы находятся на flow-tab `Remote Control`. Все production `ui-template` получают root-класс `remote-locked` при `!canControl`: кнопки, поля ввода и switches выглядят неактивными и блокируются по `pointer-events`, кроме кнопок remote-banner (`Взять управление`, local `E-stop`). На localhost снятие remote-mode выполняется отдельной кнопкой `Выключить удаленное управление` в баннере настроек; switch внутри формы остается заблокированным вместе с остальными настройками.
 
 Актуальная спецификация, выводы пилота и LAN acceptance checklist: [remote-control-plan.md](remote-control-plan.md).
 
