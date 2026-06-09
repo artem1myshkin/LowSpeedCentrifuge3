@@ -272,8 +272,24 @@ function createElmoTransport(effects) {
     return parseElmoScalars(raw).so === 1;
   }
 
-  function motionDoneFromRaw(raw) {
-    const ms = parseElmoScalars(raw).ms;
+  function motionDoneTimeoutFor(env) {
+    const n = Number(env && env.meta && env.meta.motionDoneTimeoutMs);
+    return Number.isFinite(n) && n > 0 ? n : motionDoneTimeoutMs;
+  }
+
+  function motionDoneFromRaw(raw, env) {
+    const f = parseElmoScalars(raw);
+    const ms = f.ms;
+    const meta = (env && env.meta) || {};
+    const target = Number(meta.targetPosition);
+    if (Number.isFinite(target) && f.px !== undefined) {
+      const tolerance = Math.max(0, finiteNumber(meta.positionToleranceTicks, 0));
+      const velocityTolerance = Math.max(0, finiteNumber(meta.velocityToleranceTicks, 0));
+      const positionDone = Math.abs(Number(f.px) - target) <= tolerance;
+      const notMoving = ms === 0 || ms === 1 || ms === 3
+        || (f.vx !== undefined && Math.abs(Number(f.vx)) <= velocityTolerance);
+      return positionDone && notMoving;
+    }
     return ms === 0 || ms === 1;
   }
 
@@ -337,11 +353,11 @@ function createElmoTransport(effects) {
       soReady: ({ event }) => soReadyFromRaw(event.raw),
       needsMotionDoneWait: ({ context }) => needsMotionDoneWait(context.inFlight),
       hasNextMotionPollPart: ({ context }) => motionPollCursorOf(context) < motionPollCmdsOf(context).length - 1,
-      motionDoneAfterMotionPoll: ({ context, event }) => motionDoneFromRaw(motionPollRawFor(context, event.raw)),
+      motionDoneAfterMotionPoll: ({ context, event }) => motionDoneFromRaw(motionPollRawFor(context, event.raw), context.inFlight),
       operatorAbortCommand: ({ context, event }) => canOperatorAbort(context.inFlight) && isOperatorAbortEnvelope(event.envelope),
       motionWaitTimedOut: ({ context }) => {
         const startedAt = Number(context.motionWaitStartedAt) || 0;
-        return startedAt > 0 && now() - startedAt >= motionDoneTimeoutMs;
+        return startedAt > 0 && now() - startedAt >= motionDoneTimeoutFor(context.inFlight);
       },
     },
     delays: {
@@ -618,11 +634,12 @@ function createElmoTransport(effects) {
       failMotionWait: ({ context }) => {
         const env = context.inFlight;
         if (!isAckable(env)) return;
+        const timeout = motionDoneTimeoutFor(env);
         emitEvent({
           type: 'CMD.FAILED',
           id: env.id,
           reason: 'motion_timeout',
-          message: 'Motion did not complete within ' + motionDoneTimeoutMs + ' ms after BG',
+          message: 'Motion did not complete within ' + timeout + ' ms after BG',
           topic: topicFor(env),
           meta: env.meta || {},
         });

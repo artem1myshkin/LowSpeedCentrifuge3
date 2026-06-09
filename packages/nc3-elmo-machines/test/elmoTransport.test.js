@@ -233,6 +233,40 @@ test('waitForMotionDone command completes only after MS reports motion done', as
   assert.equal(h.ctx().inFlight.pollRole, 'state');
 });
 
+test('waitForMotionDone accepts non-moving MS only when PA target is reached', async () => {
+  const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 1000 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: {
+      id: 'init-pa',
+      kind: 'cmd',
+      cmd: 'PA=1000;BG',
+      meta: {
+        topic: 'driveInit',
+        waitForMotionDone: true,
+        targetPosition: 1000,
+        positionToleranceTicks: 5,
+        velocityToleranceTicks: 2,
+      },
+    },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PA;1000;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+
+  feedMotionStatusPoll(h, { ms: 'MS;3;', tm: 'TM;100;', px: 'PX;900;', vx: 'VX;0;' });
+  assert.equal(completed(h.calls).length, 0);
+  assert.deepEqual(h.value(), { connected: 'motionPollPause' });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  feedMotionStatusPoll(h, { ms: 'MS;3;', tm: 'TM;200;', px: 'PX;1003;', vx: 'VX;0;' });
+
+  assert.equal(completed(h.calls).at(-1).id, 'init-pa');
+  assert.equal(completed(h.calls).at(-1).topic, 'driveInit');
+});
+
 test('operator stop aborts waitForMotionDone command and preempts the queue', () => {
   const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 1000 });
   h.actor.send({
