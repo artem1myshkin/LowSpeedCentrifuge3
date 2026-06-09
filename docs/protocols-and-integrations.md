@@ -227,7 +227,7 @@ Runtime:
 - `ScenarioFileService` читает/пишет `.scn` через file nodes и публикует `scenario_catalog`;
 - `ScenarioManager` на `scenario_start` загружает файл, нормализует шаги и отправляет команды через существующий `CommandHandler`;
 - если шаг требует другой диапазон, runtime отправляет `drive_stop`, затем `set_resolution`, `driveInit` и повторяет текущий шаг;
-- ожидание скорости начинается после `CMD.ACKED` для `set_jv`, timeout = `abs(targetSpeed)/AC + 10 с`;
+- ожидание скорости начинается после `CMD.ACKED` для `set_jp`, timeout = `abs(targetSpeed)/AC + 10 с`;
 - при достижении устойчивого допуска runtime вызывает `start_recording`, после выдержки — `record_measurement`;
 - `scenario_pause`/`scenario_emergency_stop` отменяют текущую запись и сохраняют текущий шаг, `scenario_resume` выполняет этот шаг заново.
 

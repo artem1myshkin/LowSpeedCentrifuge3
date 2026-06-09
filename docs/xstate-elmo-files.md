@@ -141,7 +141,7 @@ UDP + атомарные команды: один логический poll — 
 | `buildPollEnvelope(args)` | Конверт poll: `cmds` (атомарные команды), `cursor`/`parts`, `cmd = cmds[0]`, `required` (полный список ключей), `partRequired` (по каждой части), `priority`, `pollRole`, `meta.topic`. |
 | `shouldExtend(lastExtendedAt, now, statePeriodMs)` | Пора ли добавить медленный state-poll. |
 | `omegaDegPerSec(vx, resolution)` | `VX` (ticks/s) → °/с по разрешению. |
-| `estimateVelocityFromPositionSamples(samples, options)` | Оценка signed ticks/s по окну `PX/TM`; используется для выбранной скорости в `low` диапазоне. |
+| `estimateVelocityFromPositionSamples(samples, options)` | Оценка signed ticks/s по окну `PX/TM`; Node-RED `ResponseParser` использует ее как выбранную скорость в `high` и `low`, когда буфер свежий. |
 | `computeRateHz(omega, options)` | `clamp(|ω|/12, minHz, maxHz)`. |
 | `computePollDelayMs(context, options)` | Задержка до следующего poll. В normal-режиме используется фиксированная частота `normalPollHz` (по умолчанию 2 Гц). В fast-режиме — start-to-start от `fastRawPollHz`. `options.timerCompensationMs` (дефолт 0) вычитается перед `max(1,...)` — компенсация гранулярности Windows-таймера. |
 

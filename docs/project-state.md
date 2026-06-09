@@ -27,9 +27,9 @@ Remote-control перенесен из пилотной страницы на в
 
 `ScenarioManager` теперь поддерживает `scenario_start`, `scenario_pause`, `scenario_resume`, `scenario_stop`, `scenario_emergency_stop`. Пауза и аварийный стоп отменяют текущую запись, отправляют `drive_stop` и сохраняют текущий шаг; `Продолжить` запускает этот шаг заново. Частичное восстановление уже отработанного времени выдержки не реализовано намеренно, чтобы не смешивать неполное окно измерения с протоколом.
 
-Таймаут достижения скорости начинается только после `CMD.ACKED` для `set_jv`. Значение вычисляется как `abs(targetSpeed) / AC + 10 с`, где `AC` берется из текущих параметров движения в град/с² с учетом активного разрешения. Это исключает учет времени, потраченного на смену разрешения и `Drive Init`.
+Таймаут достижения скорости начинается только после `CMD.ACKED` для `set_jp`. Значение вычисляется как `abs(targetSpeed) / AC + 10 с`, где `AC` берется из текущих параметров движения в град/с² с учетом активного разрешения. Это исключает учет времени, потраченного на смену разрешения и `Drive Init`.
 
-В низком разрешении выбранная фактическая скорость для UI и сценариев берется не из скачущего `VX`, а из буфера меток `PX/TM`. `ResponseParser` отдает `velocity_raw`, `velocity_derived`, `velocity_source` и `velocity_deg_per_sec`; для `low` при наличии оценки выбирается `velocity_source='px_tm'`, для `high` остается `VX`.
+При свежем буфере `PX/TM` выбранная фактическая скорость для UI и сценариев берется из него и в `high`, и в `low`; `VX` сохраняется как `velocity_raw` и используется только как fallback, пока буфер не готов или устарел.
 
 Настройки приведены к фактическому поведению: блок `Период опроса` удален, legacy-ключи `readPeriodRotation/readPeriodTilt/readPeriodBEP` вычищаются при нормализации, `Длительность файла данных` вынесена из продвинутых настроек. Продвинутые настройки оставлены для raw-опроса, диапазонов, допуска/устойчивости и сценарных таймаутов. При `set_resolution` физические `SP/AC/DC` сохраняются в град/с и град/с² и пересчитываются в тики нового разрешения с учетом текущих ограничений.
 
@@ -37,7 +37,7 @@ Remote-control перенесен из пилотной страницы на в
 
 ## Актуализация 2026-05-29: сценарии и буфер
 
-`ScenarioManager` подключен в `BUN flow` поверх текущего `ELMO XState (UDP)`: вкладка `Угловая скорость` отправляет `scenario_start`/`scenario_stop`, менеджер читает файлы из `C:\NC3\scenarios`, нормализует шаги через `nc3.normalizeScenario`, отправляет `set_jv`/`set_resolution`/`driveInit` через существующий `CommandHandler`, слушает `CMD.ACKED`/`CMD.FAILED` из transport event bus и `poll_data` из `ResponseParser`.
+`ScenarioManager` подключен в `BUN flow` поверх текущего `ELMO XState (UDP)`: вкладка `Угловая скорость` отправляет `scenario_start`/`scenario_stop`, менеджер читает файлы из `C:\NC3\scenarios`, нормализует шаги через `nc3.normalizeScenario`, отправляет `set_jp`/`set_resolution`/`driveInit` через существующий `CommandHandler`, слушает `CMD.ACKED`/`CMD.FAILED` из transport event bus и `poll_data` из `ResponseParser`.
 
 Сценарный шаг начинает выдержку только после устойчивого достижения скорости. Критерий задается настройкой `settings.general.speedReadyTolerancePercent` на вкладке `Настройка`, диапазон 0..100 %, а время устойчивости остается в `advanced.speedStableTimeMs`. Timeout ожидания скорости при выполнении шага вычисляется от текущего ускорения: `abs(targetSpeed)/AC + 10 с`; `advanced.speedReachTimeoutMs` остается fallback для evaluator-а.
 
@@ -105,7 +105,7 @@ UI Dashboard 2, страницы:
 
 Регулярный опрос владеется `ElmoTransport`: normal `poll_data` идет фиксированно 2 Гц атомарными командами `TM`/`PX`/`VX`, state/full-state poll читает `MO/SO/SR` и `MS/MO/SO/SR/AF/OL[1]/OL[2]`. При raw-записи включается быстрый `fast_data` только `TM`/`PX`; частота берётся из `advanced.rawDataPollHz`, ограничивается 30 Гц, и компенсируется `timerCompensationMs=8`. Старый repeating inject `poll_data` и TCP poll builder выключены.
 
-Для `low` фактическая скорость выбирается из оценки по буферу `PX/TM`, потому что `VX` на малой скорости скачет крупными квантами. Для диагностики в payload сохраняются оба значения: `velocity_raw` (`VX`) и `velocity_derived` (`PX/TM`), а поле `velocity_source` показывает, какое значение выбрано.
+При свежем буфере `PX/TM` фактическая скорость выбирается из оценки по временным меткам и в `high`, и в `low`; `VX` остается в payload как `velocity_raw` и fallback, пока буфер не готов или устарел.
 
 ## 3. Протоколы, данные и метки времени
 

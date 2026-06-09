@@ -8,8 +8,8 @@ Production Dashboard-команды теперь дополнительно пр
 
 Ключевые уточнения после стендовых правок:
 
-- в `low` диапазоне выбранная скорость для UI и сценариев берется из оценки `PX/TM`, а не из скачущего `VX`; `VX` сохраняется как `velocity_raw`;
-- timeout ожидания скорости сценария считается после ACK `set_jv`: `abs(targetSpeed) / AC + 10 с`;
+- свежий буфер `PX/TM` используется как выбранная скорость для UI и сценариев и в `high`, и в `low`; `VX` сохраняется как `velocity_raw` и fallback, пока буфер не готов или устарел;
+- timeout ожидания скорости сценария считается после ACK `set_jp`: `abs(targetSpeed) / AC + 10 с`;
 - быстрый raw poll остается только `TM/PX`; normal poll остается `TM/PX/VX` 2 Гц;
 - файл-редактор сценариев работает через `ScenarioFileService`, `global.scenario_files` и `global.scenario_documents`;
 - после любого `MO=1` транспорт ждёт `SO=1` до 30 секунд; если `SO` не стал `1`, он отдаёт `CMD.FAILED(reason: 'so_timeout')` и отправляет аварийные `ST`, `MO=0`.
@@ -87,8 +87,8 @@ node --test
 - **Выходные `CMD.ACKED`/`CMD.FAILED`/`POLL.BAD_FRAME`** — потребители (UI/сценарий) подписываются на них.
 - **`topic` ответов** (`poll_data`/`poll_state`/`poll_fast`) — `ResponseParser` и `angle_buffer` фильтруют по этим строкам.
 - **Атомарность poll и single-in-flight.** Менять только если ELMO выкатит надёжный «батч-режим» (сейчас стенд показал, что не выкатит).
-- **Выбранная скорость**: для `low` не подменяй обратно на raw `VX`; сценарный критерий должен использовать `velocity_deg_per_sec`/`velocity_source='px_tm'`, если они пришли из `ResponseParser`.
-- **Scenario timeout**: счетчик ожидания скорости стартует только после ACK `set_jv`, а не во время `set_resolution`/`Drive Init`.
+- **Выбранная скорость**: не подменяй свежую `TM/PX`-оценку обратно на raw `VX`; сценарный критерий должен использовать `velocity_deg_per_sec` / `velocity_source='tm_px_buffer'`, если они пришли из `ResponseParser`.
+- **Scenario timeout**: счетчик ожидания скорости стартует только после ACK `set_jp`, а не во время `set_resolution`/`Drive Init`.
 
 ## Где смотреть для понимания
 

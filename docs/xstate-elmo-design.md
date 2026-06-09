@@ -6,17 +6,17 @@ Production Dashboard-команды теперь могут проходить �
 
 ## Актуализация 2026-06-01: сценарии и low-resolution speed
 
-`ScenarioManager` реализован и подключен к production-flow. Он использует тот же путь команд, что и ручное управление: `CommandHandler -> ELMO XState (UDP) -> ResponseParser`. Сценарии читаются из `C:\NC3\scenarios`, нормализуются через `nc3.normalizeScenario`, выполняются шаг за шагом через `set_jv`, при необходимости переключают `OL[1]` через `set_resolution` и запускают `Drive Init`, затем продолжают текущий шаг.
+`ScenarioManager` реализован и подключен к production-flow. Он использует тот же путь команд, что и ручное управление: `CommandHandler -> ELMO XState (UDP) -> ResponseParser`. Сценарии читаются из `C:\NC3\scenarios`, нормализуются через `nc3.normalizeScenario`, выполняются шаг за шагом через `set_jp`, при необходимости переключают `OL[1]` через `set_resolution` и запускают `Drive Init`, затем продолжают текущий шаг.
 
-Скорость для критерия готовности теперь берется из `payload.velocity_deg_per_sec`. В `high` это значение обычно основано на `VX`, а в `low` при наличии буфера выбирается оценка `PX/TM`, чтобы убрать скачки `VX` на малых скоростях. Raw data poll по-прежнему пишет только `TM/PX`.
+Скорость для критерия готовности берется из `payload.velocity_deg_per_sec`. При свежем буфере `PX/TM` это значение выбирается и в `high`, и в `low`; `VX` сохраняется как `velocity_raw` и используется только как fallback, пока буфер не готов или устарел. Raw data poll по-прежнему пишет только `TM/PX`.
 
-Timeout ожидания скорости считается не от старта сценарного шага, а от ACK команды `set_jv`: `abs(targetSpeed)/AC + 10 с`. Время смены разрешения и `Drive Init` в этот timeout не входит.
+Timeout ожидания скорости считается не от старта сценарного шага, а от ACK команды `set_jp`: `abs(targetSpeed)/AC + 10 с`. Время смены разрешения и `Drive Init` в этот timeout не входит.
 
 ## Актуализация 2026-05-29: сценарии поверх транспорта
 
 К транспортной машине добавлен сценарный потребитель, но сам транспорт остался единственным владельцем UDP-канала. `ScenarioManager` живет в `BUN flow`, получает команды UI `scenario_start`/`scenario_stop`, читает `.scn` файл, формирует шаги через `nc3.normalizeScenario`, а затем кладет обычные UI-команды в существующий `CommandHandler`. За счет этого сценарии используют тот же путь, что и ручное управление: валидация диапазонов, пересчет тиков, атомарная очередь UDP и `ResponseParser`.
 
-Критерий готовности шага вынесен из сценарного файла в настройки ПО: `settings.general.speedReadyTolerancePercent` (0..100 %) плюс время устойчивости `advanced.speedStableTimeMs`. Timeout текущей реализации стартует после ACK `set_jv` и вычисляется как `abs(targetSpeed)/AC + 10 с`; `advanced.speedReachTimeoutMs` остался fallback-настройкой evaluator-а.
+Критерий готовности шага вынесен из сценарного файла в настройки ПО: `settings.general.speedReadyTolerancePercent` (0..100 %) плюс время устойчивости `advanced.speedStableTimeMs`. Timeout текущей реализации стартует после ACK `set_jp` и вычисляется как `abs(targetSpeed)/AC + 10 с`; `advanced.speedReachTimeoutMs` остался fallback-настройкой evaluator-а.
 
 Poll-контракт уточнен: обычный режим больше не зависит от скорости и работает 2 Гц, быстрый raw-режим включается только на время записи raw-данных и читает только `TM/PX`. Это сохраняет data-файл чистым временным рядом угловых меток, а скорость для `Готов` берется из обычного `TM/PX/VX` до начала записи шага.
 
