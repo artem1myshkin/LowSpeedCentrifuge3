@@ -119,12 +119,25 @@ function scenarioOptions(settings, override) {
   };
 }
 
-function computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs) {
-  const target = Math.abs(finite(targetDegSec, 0));
+// Ramp budget for reaching targetDegSec from currentDegSec: AC limits speeding up, DC limits
+// slowing down; a sign reversal decelerates through zero first, then accelerates. Callers that
+// omit current/deceleration get the legacy from-zero acceleration ramp.
+function computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs, currentDegSec, decelerationDegSec2) {
+  const target = finite(targetDegSec, 0);
+  const current = finite(currentDegSec, 0);
   const acceleration = Math.abs(finite(accelerationDegSec2, 0));
+  const deceleration = Math.abs(finite(decelerationDegSec2, 0)) || acceleration;
   const reserve = Math.max(0, finite(reserveMs, 10000));
-  const rampMs = acceleration > 0 ? (target / acceleration) * 1000 : 0;
-  return Math.max(1, Math.ceil(rampMs + reserve));
+  let rampSec = 0;
+  if (target === 0 || current === 0 || (target > 0) === (current > 0)) {
+    const delta = Math.abs(target) - Math.abs(current);
+    if (delta > 0) rampSec = acceleration > 0 ? delta / acceleration : 0;
+    else rampSec = deceleration > 0 ? -delta / deceleration : 0;
+  } else {
+    rampSec = (deceleration > 0 ? Math.abs(current) / deceleration : 0)
+      + (acceleration > 0 ? Math.abs(target) / acceleration : 0);
+  }
+  return Math.max(1, Math.ceil(rampSec * 1000 + reserve));
 }
 
 function speedAllowedInRange(speedDegSec, resolution, options) {

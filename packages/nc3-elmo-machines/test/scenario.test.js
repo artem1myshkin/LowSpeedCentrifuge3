@@ -59,6 +59,19 @@ test('computeSpeedReachTimeoutMs uses target speed, acceleration and reserve', (
   assert.equal(computeSpeedReachTimeoutMs(8, 0.5, 5000), 21000);
 });
 
+test('computeSpeedReachTimeoutMs budgets deceleration from the current speed', () => {
+  // Slow-down 10 -> 0.1 deg/s at DC=0.5: ramp 19.8 s + 10 s reserve.
+  assert.equal(computeSpeedReachTimeoutMs(0.1, 0.5, 10000, 10, 0.5), 29800);
+  // Speed-up 2 -> 8 deg/s uses AC, not DC.
+  assert.equal(computeSpeedReachTimeoutMs(8, 0.5, 10000, 2, 0.25), 22000);
+  // Reversal -10 -> +5: 10/DC(0.5)=20 s through zero, then 5/AC(0.5)=10 s.
+  assert.equal(computeSpeedReachTimeoutMs(5, 0.5, 10000, -10, 0.5), 40000);
+  // Stop step 10 -> 0 decelerates at DC.
+  assert.equal(computeSpeedReachTimeoutMs(0, 0.5, 10000, 10, 0.25), 50000);
+  // Missing deceleration falls back to the acceleration rate.
+  assert.equal(computeSpeedReachTimeoutMs(0.1, 0.5, 10000, 10), 29800);
+});
+
 test('listScenarioFiles returns defaults plus .scn files from directory', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nc3-scenarios-'));
   fs.writeFileSync(path.join(dir, 'custom.scn'), 'Name custom\n-------------------\n1 1\n');

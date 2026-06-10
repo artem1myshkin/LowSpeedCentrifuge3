@@ -296,6 +296,82 @@ test('operator stop aborts waitForMotionDone command and preempts the queue', ()
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'ST');
 });
 
+test('driveInit batch forwards echoes before waits and resolves PA from the fresh PX read', () => {
+  const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 1000 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: {
+      id: 'init-full',
+      kind: 'cmd',
+      cmd: 'MO=0;OL[1]=1;CA[18]=6553600;MO=1;SP=91022;PX;PA=@PX+6553600;BG',
+      meta: {
+        topic: 'driveInit',
+        waitForMotionDone: true,
+        targetPosition: 999, // stale precomputed fallback; must be patched from the PX read
+        positionToleranceTicks: 5,
+        velocityToleranceTicks: 2,
+      },
+    },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'OL[1];1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'CA[18];6553600;' });
+
+  // Entering the SO wait forwards the echoes collected so far (incl. OL[1]) downstream, so
+  // ResponseParser switches the resolution context before the init revolution, not after it.
+  h.calls.forwardResp.length = 0;
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
+  assert.deepEqual(h.value(), { connected: 'waitingForSoReady' });
+  assert.equal(h.calls.forwardResp.length, 1);
+  assert.equal(h.calls.forwardResp[0].topic, 'driveInit');
+  assert.match(h.calls.forwardResp[0].raw, /OL\[1\];1;/);
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SO;1;' });
+  assert.equal(h.calls.sendCmd.at(-1), 'SP=91022');
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SP;91022;' });
+  assert.equal(h.calls.sendCmd.at(-1), 'PX');
+
+  // The PX read right before PA resolves the dynamic target; meta is patched for motion-done.
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PX;1000;' });
+  assert.equal(h.calls.sendCmd.at(-1), 'PA=6554600');
+  assert.equal(h.ctx().inFlight.meta.targetPosition, 6554600);
+  assert.equal(h.ctx().inFlight.meta.basePosition, 1000);
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PA;6554600;' });
+  assert.equal(h.calls.sendCmd.at(-1), 'BG');
+
+  h.calls.forwardResp.length = 0;
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+  assert.equal(h.calls.forwardResp[0].topic, 'driveInit');
+  assert.match(h.calls.forwardResp[0].raw, /PA;6554600;/);
+
+  feedMotionStatusPoll(h, { ms: 'MS;0;', tm: 'TM;200;', px: 'PX;6554600;', vx: 'VX;0;' });
+  assert.equal(completed(h.calls).at(-1).id, 'init-full');
+  assert.equal(completed(h.calls).at(-1).meta.targetPosition, 6554600);
+});
+
+test('rejected batch part (ELMO "?") emits CMD.PART_REJECTED and the batch continues', () => {
+  const h = makeHarness();
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: { id: 'range', kind: 'cmd', cmd: 'OL[1]=1;CA[18]=6553600', meta: { topic: 'set_resolution' } },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+
+  h.actor.send({ type: 'ELMO.RESP', raw: ':?' });
+  const rejected = h.calls.emitEvent.filter((e) => e.type === 'CMD.PART_REJECTED');
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].cmd, 'OL[1]=1');
+  assert.equal(rejected[0].topic, 'set_resolution');
+  assert.equal(rejected[0].raw, ':?');
+  assert.equal(h.calls.sendCmd.at(-1), 'CA[18]=6553600'); // batch still advances
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'CA[18];6553600;' });
+  assert.equal(acked(h.calls).at(-1).id, 'range');
+});
+
 test('single MO=1 command waits for SO=1 before ack', () => {
   const h = makeHarness();
   h.actor.send({

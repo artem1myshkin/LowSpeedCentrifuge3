@@ -252,6 +252,25 @@ function createElmoTransport(effects) {
     return isAckable(env) && isMoOnCommand(commandFor(env));
   }
 
+  // 'PA=@PX<+/-ticks>' — dynamic one-revolution target: the absolute position is computed
+  // from the PX read answered right before this part, not from a poll snapshot taken before
+  // a head switch (stale and scaled in old-resolution ticks). meta.targetPosition is patched
+  // so the motion-done check tracks the resolved target. Falls back to the precomputed
+  // meta.targetPosition when the PX reply does not parse.
+  const DYNAMIC_PA_RE = /^PA=@PX([+-]\d+(?:\.\d+)?)$/i;
+
+  function resolveDynamicPa(cmd, raw, meta) {
+    const m = DYNAMIC_PA_RE.exec(String(cmd == null ? '' : cmd).trim());
+    if (!m) return null;
+    const offset = Number(m[1]);
+    const px = parseElmoScalars(raw).px;
+    const fallbackTarget = Number(meta && meta.targetPosition);
+    const base = Number.isFinite(px) ? px : (Number.isFinite(fallbackTarget) ? fallbackTarget - offset : NaN);
+    if (!Number.isFinite(base)) return null;
+    const target = Math.round(base + offset);
+    return { cmd: 'PA=' + target, targetPosition: target, basePosition: Math.round(base) };
+  }
+
   function needsMotionDoneWait(env) {
     return isAckable(env) && env.meta && env.meta.waitForMotionDone === true && isBgCommand(commandFor(env));
   }
@@ -511,15 +530,27 @@ function createElmoTransport(effects) {
       },
 
       // After a part validates, append its raw and advance the cursor; sendingNextPart then
-      // emits the next atomic command.
+      // emits the next atomic command. If the next command is a dynamic PA token, resolve it
+      // from the reply just collected (the PX read preceding it).
       collectPollPart: assign(({ context, event }) => {
         const env = context.inFlight;
         if (!isMultiPart(env)) return {};
+        const cursor = cursorOf(env) + 1;
+        let cmds = env.cmds;
+        let meta = env.meta;
+        const resolved = cursor < cmds.length ? resolveDynamicPa(cmds[cursor], event.raw, meta) : null;
+        if (resolved) {
+          cmds = cmds.slice();
+          cmds[cursor] = resolved.cmd;
+          meta = { ...meta, targetPosition: resolved.targetPosition, basePosition: resolved.basePosition };
+        }
         return {
           inFlight: {
             ...env,
+            cmds,
+            meta,
             parts: (env.parts || []).concat([event.raw]),
-            cursor: cursorOf(env) + 1,
+            cursor,
           },
         };
       }),
@@ -580,6 +611,36 @@ function createElmoTransport(effects) {
 
       forwardMotionPollData: ({ context, event }) => {
         forwardResp(motionPollRawFor(context, event.raw), 'poll_data');
+      },
+
+      // Forward the reassembled command echoes downstream BEFORE entering a long wait
+      // (SO-ready, motion-done). For waitForMotionDone envelopes the regular forwardAndAck
+      // dispatch never runs, so without this the ResponseParser would not see the
+      // OL[1]/CA[18]/PX echoes of a driveInit batch until after the init revolution —
+      // leaving the poll context on the pre-switch resolution (velocity display off by the
+      // 40x head ratio, commands validated against the old range limits).
+      forwardBatchParts: ({ context, event }) => {
+        const env = context.inFlight;
+        if (!isAckable(env) || !isMultiPart(env)) return;
+        forwardResp(rawFor(env, event.raw), topicFor(env));
+      },
+
+      // ELMO answers with '?' (observed ':?') when it rejects a command. Poll parts are
+      // validated by field, but command batches only advance — surface a rejected write so a
+      // failed OL[1]/CA[18] switch lands in the journal instead of silently degrading the init.
+      reportRejectedPart: ({ context, event }) => {
+        const env = context.inFlight;
+        if (!isAckable(env)) return;
+        const raw = String(event.raw == null ? '' : event.raw);
+        if (raw.indexOf('?') === -1) return;
+        emitEvent({
+          type: 'CMD.PART_REJECTED',
+          id: env.id,
+          cmd: commandFor(env),
+          raw,
+          topic: topicFor(env),
+          meta: env.meta || {},
+        });
       },
 
       forwardAndAck: ({ context, event }) => {
@@ -751,11 +812,13 @@ function createElmoTransport(effects) {
               ],
               // Multi-part: if the just-arrived part validated and more atomic commands remain,
               // collect it and send the next; otherwise dispatch the (whole, reassembled) frame.
+              // reportRejectedPart/forwardBatchParts run before collectPollPart on purpose:
+              // both read the pre-advance cursor / pre-append parts.
               'ELMO.RESP': [
-                { guard: 'needsSoReadyWait', target: 'waitingForSoReady', actions: ['resetMiss', 'collectPollPart', 'markSoWait'] },
-                { guard: 'needsMotionDoneWait', target: 'waitingForMotionDone', actions: ['resetMiss', 'markMotionWait'] },
-                { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: ['resetMiss', 'collectPollPart'] },
-                { target: 'dispatch', actions: ['resetMiss', 'ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'] },
+                { guard: 'needsSoReadyWait', target: 'waitingForSoReady', actions: ['resetMiss', 'reportRejectedPart', 'forwardBatchParts', 'collectPollPart', 'markSoWait'] },
+                { guard: 'needsMotionDoneWait', target: 'waitingForMotionDone', actions: ['resetMiss', 'reportRejectedPart', 'forwardBatchParts', 'markMotionWait'] },
+                { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: ['resetMiss', 'reportRejectedPart', 'collectPollPart'] },
+                { target: 'dispatch', actions: ['resetMiss', 'reportRejectedPart', 'ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'] },
               ],
               'ELMO.TIMEOUT': [
                 { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
