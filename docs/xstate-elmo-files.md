@@ -1,6 +1,6 @@
 # Пакет `nc3-elmo-machines` — справочник по файлам
 
-Актуально на: 2026-06-08. Краткая карта: что в каком файле и какие функции. Без полного кода — за деталями в `packages/nc3-elmo-machines/src/`.
+Актуально на: 2026-06-11. Краткая карта: что в каком файле и какие функции. Без полного кода — за деталями в `packages/nc3-elmo-machines/src/`.
 
 Поведение системы целиком — [xstate-elmo-design.md](xstate-elmo-design.md). Текущее состояние — [xstate-elmo-status.md](xstate-elmo-status.md).
 
@@ -9,10 +9,16 @@
 ## Актуализация 2026-06-01
 
 - `poll.js` экспортирует `estimateVelocityFromPositionSamples(samples)`: signed-оценка ticks/s из окна `PX/TM` с минимальным span 200 мс и максимальным 3 с. Node-RED `ResponseParser` использует ее для выбранной скорости в `low` диапазоне.
-- `scenario.js` экспортирует `computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs)`, `normalizeScenarioFileName` и `listScenarioFiles`; сценарный timeout теперь вычисляется от скорости и текущего `AC`.
+- `scenario.js` экспортирует `computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs, currentDegSec, decelerationDegSec2)`, `normalizeScenarioFileName` и `listScenarioFiles`; сценарный timeout вычисляется от текущей скорости до целевой с учетом `AC/DC`.
 - `index.js` реэкспортирует новые helpers для Node-RED Function-узлов через `global.get('nc3')`.
 - `ScenarioFileService` находится в `flows.json`, а не в пакете: он читает/пишет runtime-файлы `C:\NC3\scenarios\*.scn`, хранит `global.scenario_files` и `global.scenario_documents`.
 - Текущий `node --test` для пакета: 59 тестов.
+
+## Актуализация 2026-06-11
+
+- `scenario.js` в текущем коде учитывает текущую скорость и `DC` при расчете timeout достижения скорости. Старый короткий вариант `abs(target)/AC + reserve` остается частным случаем при отсутствии `currentDegSec`/`decelerationDegSec2`.
+- `evaluateSpeedReady` принимает runtime-состояние проверки первым аргументом и возвращает обновленное состояние с `startedAt`, `stableSince`, `stableMs`, `withinTolerance`, `ready`, `timedOut`.
+- Добавлена корневая память проекта `project-memory/`, где кратко зафиксированы инварианты, не заменяя этот per-file справочник.
 
 ## Актуализация 2026-05-29
 
@@ -154,13 +160,13 @@ UDP + атомарные команды: один логический poll — 
 | Функция / константа | Назначение |
 |---|---|
 | `DEFAULT_SCENARIO_OPTIONS` | Базовые настройки сценариев: 10 с timeout достижения скорости, 1 с устойчивости, допуск скорости 5 %, гистерезис диапазона 20 ± 5 град/с. |
-| `computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs)` | Timeout ожидания скорости: время разгона `abs(speed)/AC` плюс резерв, сейчас резерв 10 с. |
+| `computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs, currentDegSec, decelerationDegSec2)` | Timeout ожидания скорости: учитывает разгон, замедление от текущей скорости и разворот через ноль; при отсутствии текущей скорости сводится к `abs(speed)/AC` плюс резерв. |
 | `normalizeScenarioFileName(value)` | Безопасное имя `.scn` без путей и недопустимых символов. |
 | `listScenarioFiles(baseDir, defaults)` | Каталог сценариев: дефолтные файлы плюс `.scn` из runtime-директории. |
 | `parseScenarioText(text)` | Читает `.scn`: параметры до разделителя `-------------------`, затем строки `скорость время`. |
 | `normalizeScenario(parsed, options)` | Проверяет и нормализует шаги, применяет допуски диапазонов и выбирает разрешение для каждого шага. |
 | `selectResolutionForSpeed(speed, currentResolution, options)` | Выбирает `high`/`low` с сохранением текущего диапазона внутри hysteresis-зоны. |
-| `evaluateSpeedReady(target, measured, state, options)` | Проверяет достижение скорости по процентной погрешности и времени устойчивости. |
+| `evaluateSpeedReady(state, measuredDegSec, targetDegSec, nowMs, settings, override)` | Проверяет достижение скорости по процентной погрешности и времени устойчивости, возвращает обновленное состояние проверки. |
 | `scenarioOptions(settings)` | Собирает runtime-настройки из `settings.general` и `settings.advanced`. |
 
 ---

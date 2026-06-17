@@ -32,4 +32,24 @@ Node-RED references used for these rules:
 
 # Описание проекта
 
-Актуальное состояние проекта описано в `docs/project-state.md`. Контракты интеграций (ELMO/БУН/БЕП, протоколы и данные) — в `docs/protocols-and-integrations.md`. Единый XState-транспорт ELMO (UDP, атомарный poll, быстрый raw-опрос) описан в `docs/xstate-elmo-design.md` (дизайн + журнал решений), `docs/xstate-elmo-status.md` (текущее состояние для AI-агента) и `docs/xstate-elmo-files.md` (per-file справочник). Сценарный режим, формат `.scn`, runtime и редактор файлов описаны в `docs/scenario-feature-summary.md`. Режим удаленного управления, `RemoteControlService`, `CommandGate` и LAN acceptance checklist описаны в `docs/remote-control-plan.md`.
+LowSpeedCentrifuge3 — Node-RED Dashboard 2 проект для стенда НЦ-3/2. Основной production-flow хранится в `flows.json`; reusable-логика транспорта ELMO, парсинга, очередей, пересчета разрешений и сценариев вынесена в `packages/nc3-elmo-machines`.
+
+Перед доработкой проекта читать:
+
+1. `project-memory/README.md` — постоянная память проекта и порядок навигации.
+2. `project-memory/current-state.md` — краткое текущее состояние.
+3. `project-memory/technical-notes.md` — технические инварианты и ограничения.
+4. `docs/project-state.md` — расширенное состояние проекта.
+5. `flows.json` — окончательная истина по текущему Node-RED flow.
+
+Основная документация:
+
+- `docs/operator-manual.md` — руководство оператора в Markdown.
+- `docs/project-state.md` — фактическое состояние проекта, реализованные функции и роадмап.
+- `docs/protocols-and-integrations.md` — интеграции ELMO/БУН/БЕП, протоколы, файлы данных и журнал.
+- `docs/scenario-feature-summary.md` — сценарный режим, формат `.scn`, runtime и UI-редактор.
+- `docs/xstate-elmo-design.md` — дизайн и журнал решений по ELMO XState/UDP.
+- `docs/xstate-elmo-status.md` — краткий статус транспорта ELMO и стоп-линии для доработок.
+- `docs/xstate-elmo-files.md` — per-file справочник пакета `nc3-elmo-machines`.
+
+Runtime-окружение стенда использует `C:\NC3`: настройки, сценарии, протоколы, data-файлы и persistent-журнал событий. Пользовательские runtime-сценарии из `C:\NC3\scenarios` не попадают в git автоматически.

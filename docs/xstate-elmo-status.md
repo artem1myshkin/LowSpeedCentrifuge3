@@ -1,6 +1,10 @@
 # XState-машина транспорта ELMO — статус
 
-## Актуализация 2026-06-08
+## Актуализация 2026-06-11
+
+Добавлена корневая постоянная память проекта `project-memory/`. Для ELMO/XState быстрые инварианты теперь дублируются в `project-memory/technical-notes.md`, а этот документ остается подробной стоп-линией по транспортному слою.
+
+По текущему `scenario.js` timeout достижения скорости сценария учитывает текущую скорость и замедление `DC`, включая случай разворота через ноль. Формула `abs(targetSpeed) / AC + 10 с` остается упрощенным описанием случая разгона от нуля; фактическая реализация шире.
 
 Текущий production-путь ELMO — `CommandHandler -> ELMO XState (UDP) -> ResponseParser`; legacy TCP оставлен в `flows.json` выключенным fallback. `ScenarioManager` больше не является планом: он выполняет `.scn` файлы из `C:\NC3\scenarios`, переключает диапазоны, запускает `Drive Init`, ждет устойчивой скорости, ведет автоматическую запись шага и поддерживает `Пауза`/`Продолжить`/`Стоп`/`Аварийный стоп`.
 
@@ -9,13 +13,13 @@ Production Dashboard-команды теперь дополнительно пр
 Ключевые уточнения после стендовых правок:
 
 - свежий буфер `PX/TM` используется как выбранная скорость для UI и сценариев и в `high`, и в `low`; `VX` сохраняется как `velocity_raw` и fallback, пока буфер не готов или устарел;
-- timeout ожидания скорости сценария считается после ACK `set_jp`: `abs(targetSpeed) / AC + 10 с`;
+- timeout ожидания скорости сценария считается после ACK `set_jp`: от текущей скорости к целевой с учетом `AC`/`DC` и резервом 10 с;
 - быстрый raw poll остается только `TM/PX`; normal poll остается `TM/PX/VX` 2 Гц;
 - файл-редактор сценариев работает через `ScenarioFileService`, `global.scenario_files` и `global.scenario_documents`;
 - после любого `MO=1` транспорт ждёт `SO=1` до 30 секунд; если `SO` не стал `1`, он отдаёт `CMD.FAILED(reason: 'so_timeout')` и отправляет аварийные `ST`, `MO=0`.
 - `node --test` в `packages/nc3-elmo-machines` проходит: 59 тестов.
 
-Актуально на: 2026-06-08. Документ для AI-агента: что уже сделано, что НЕ сделано, какие контракты не ломать.
+Актуально на: 2026-06-11. Документ для AI-агента: что уже сделано, что НЕ сделано, какие контракты не ломать.
 
 Полное описание фичи и решений — [xstate-elmo-design.md](xstate-elmo-design.md). Краткий per-file справочник — [xstate-elmo-files.md](xstate-elmo-files.md).
 
@@ -88,7 +92,7 @@ node --test
 - **`topic` ответов** (`poll_data`/`poll_state`/`poll_fast`) — `ResponseParser` и `angle_buffer` фильтруют по этим строкам.
 - **Атомарность poll и single-in-flight.** Менять только если ELMO выкатит надёжный «батч-режим» (сейчас стенд показал, что не выкатит).
 - **Выбранная скорость**: не подменяй свежую `TM/PX`-оценку обратно на raw `VX`; сценарный критерий должен использовать `velocity_deg_per_sec` / `velocity_source='tm_px_buffer'`, если они пришли из `ResponseParser`.
-- **Scenario timeout**: счетчик ожидания скорости стартует только после ACK `set_jp`, а не во время `set_resolution`/`Drive Init`.
+- **Scenario timeout**: счетчик ожидания скорости стартует только после ACK `set_jp`, а не во время `set_resolution`/`Drive Init`; расчет учитывает текущую скорость, `AC`, `DC` и резерв.
 
 ## Где смотреть для понимания
 
@@ -96,7 +100,7 @@ node --test
 - Карта файлов пакета — [xstate-elmo-files.md](xstate-elmo-files.md).
 - Сценарий измерения (Этап 2) — `scenario-feature-summary.md`.
 - Протоколы и legacy-flow — `protocols-and-integrations.md`.
-- Память проекта — `[[project-xstate-integration]]`.
+- Память проекта — `../project-memory/technical-notes.md` и `../project-memory/current-state.md`.
 
 ## При рассинхроне (`POLL.BAD_FRAME` идут потоком)
 
