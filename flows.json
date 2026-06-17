@@ -1056,7 +1056,6 @@
         "g": "52568354c3badd48",
         "name": "TO BUN",
         "links": [
-            "5daaaf40a6173a82",
             "d0936a4883287a3e",
             "01ebe906f9df9688"
         ],
@@ -1200,8 +1199,7 @@
         "g": "52568354c3badd48",
         "name": "to BEP",
         "links": [
-            "07ff7bd3ca490729",
-            "5daaaf40a6173a82"
+            "07ff7bd3ca490729"
         ],
         "x": 2755,
         "y": 900,
@@ -1844,10 +1842,10 @@
         "z": "5bbcbebf6ff74a86",
         "g": "52568354c3badd48",
         "name": "BUN AutoTilt",
-        "func": "// BUN AutoTilt: normalizes setpoints to integer arcseconds and runs the automatic tilt sequence.\n// Outputs: 1=setpoint MQTT, 2=BUN command MQTT, 3=ELMO tilt brake command.\nvar topic = msg.topic;\n\nfunction finiteNumber(value, fallback) {\n    var n = Number(value);\n    return isFinite(n) ? n : fallback;\n}\nfunction normalizeSetpointSeconds(value) {\n    var n = Number(value);\n    if (!isFinite(n)) return null;\n    var rounded = Math.round(n);\n    if (rounded < -2147483648 || rounded > 2147483647) return null;\n    return rounded;\n}\nfunction isAutoMode(value) {\n    var text = String(value || '').toLowerCase();\n    return text === 'automatic' || text.indexOf('\\u0430\\u0432\\u0442\\u043e\\u043c\\u0430\\u0442') !== -1;\n}\nfunction readConfig() {\n    var settings = global.get('settings') || {};\n    var advanced = settings.advanced || {};\n    return {\n        toleranceSec: Math.max(0, finiteNumber(advanced.tiltAutoToleranceSec, 1)),\n        stableSamples: Math.max(1, Math.round(finiteNumber(advanced.tiltAutoStableSamples, 3))),\n        goDelayMs: Math.max(0, Math.round(finiteNumber(advanced.tiltAutoGoDelayMs, 300))),\n        brakeSettleMs: Math.max(0, Math.round(finiteNumber(advanced.tiltAutoBrakeSettleMs, 300))),\n        timeoutMs: Math.max(1000, Math.round(finiteNumber(advanced.tiltAutoTimeoutMs, 60000)))\n    };\n}\nfunction saveState(state) {\n    flow.set('bun_auto_state', state);\n    global.set('bun_auto_state', state);\n}\nfunction clearTimer(name) {\n    var timer = context.get(name);\n    if (timer) clearTimeout(timer);\n    context.set(name, null);\n}\nfunction clearTimers() {\n    clearTimer('bun_auto_go_timer');\n    clearTimer('bun_auto_timeout_timer');\n    clearTimer('bun_auto_release_timer');\n}\nfunction brakeOnThenRelease(cfg, status) {\n    clearTimer('bun_auto_release_timer');\n    node.send([null, null, { topic: 'tilt_brake', payload: 1 }]);\n    var releaseTimer = setTimeout(function () {\n        var state = flow.get('bun_auto_state') || {};\n        if (status && state.status !== status) return;\n        node.send([null, { topic: 'bun_cmd', payload: 'release' }, null]);\n    }, cfg.brakeSettleMs);\n    context.set('bun_auto_release_timer', releaseTimer);\n}\nfunction scheduleTimeout(target, cfg) {\n    clearTimer('bun_auto_timeout_timer');\n    var timer = setTimeout(function () {\n        var state = flow.get('bun_auto_state') || {};\n        if (state.status !== 'moving' || state.target_seconds !== target) return;\n        state.status = 'timeout';\n        state.completed_at = Date.now();\n        state.last_error = 'Tilt target timeout';\n        saveState(state);\n        node.status({ fill: 'red', shape: 'ring', text: 'auto timeout' });\n        brakeOnThenRelease(cfg, 'timeout');\n    }, cfg.timeoutMs);\n    context.set('bun_auto_timeout_timer', timer);\n}\n\nif (topic === 'tilt_mode') {\n    var mode = String(msg.payload || '');\n    flow.set('bun_mode', mode);\n    var bun = global.get('bun') || {};\n    bun.mode = mode;\n    global.set('bun', bun);\n    return null;\n}\n\nif (topic === 'bun_cmd') {\n    var cmd = String(msg.payload || '').toLowerCase();\n    var active = flow.get('bun_auto_state') || {};\n    if (active.status === 'moving' && cmd !== 'go') {\n        active.status = 'cancelled';\n        active.completed_at = Date.now();\n        active.last_error = '';\n        saveState(active);\n        clearTimers();\n        node.status({ fill: 'grey', shape: 'dot', text: 'auto cancelled' });\n    }\n    return [null, { topic: 'bun_cmd', payload: cmd }, null];\n}\n\nif (topic === 'bun_cmd_setpoint') {\n    var target = normalizeSetpointSeconds(msg.payload);\n    if (target === null) {\n        node.warn('Invalid BUN setpoint: ' + msg.payload);\n        return null;\n    }\n\n    var setpointMsg = { topic: 'bun_cmd_setpoint', payload: target };\n    var bunState = global.get('bun') || {};\n    var mode = msg.mode || flow.get('bun_mode') || bunState.mode;\n    if (!isAutoMode(mode)) {\n        var manualCfg = readConfig();\n        saveState({ status: 'manual_go', target_seconds: target, updated_at: Date.now(), mode: mode || '' });\n        clearTimers();\n        node.status({ fill: 'grey', shape: 'dot', text: 'manual target ' + target + ' sec' });\n        node.send([setpointMsg, null, null]);\n        var manualGoTimer = setTimeout(function () {\n            node.send([null, { topic: 'bun_cmd', payload: 'go' }, null]);\n        }, manualCfg.goDelayMs);\n        context.set('bun_auto_go_timer', manualGoTimer);\n        return null;\n    }\n\n    var cfg = readConfig();\n    var state = {\n        status: 'moving',\n        target_seconds: target,\n        last_angle_seconds: null,\n        error_seconds: null,\n        stable_count: 0,\n        tolerance_sec: cfg.toleranceSec,\n        stable_samples: cfg.stableSamples,\n        timeout_ms: cfg.timeoutMs,\n        started_at: Date.now(),\n        updated_at: Date.now(),\n        last_error: ''\n    };\n    saveState(state);\n    clearTimers();\n    node.status({ fill: 'blue', shape: 'dot', text: 'auto target ' + target + ' sec' });\n\n    node.send([setpointMsg, null, { topic: 'tilt_brake', payload: 0 }]);\n    var goTimer = setTimeout(function () {\n        var current = flow.get('bun_auto_state') || {};\n        if (current.status !== 'moving' || current.target_seconds !== target) return;\n        node.send([null, { topic: 'bun_cmd', payload: 'go' }, null]);\n    }, cfg.goDelayMs);\n    context.set('bun_auto_go_timer', goTimer);\n    scheduleTimeout(target, cfg);\n    return null;\n}\n\nif (topic === 'bun_angle') {\n    var angle = normalizeSetpointSeconds(msg.payload);\n    if (angle === null) return null;\n    global.set('bun_angle', angle);\n\n    var auto = flow.get('bun_auto_state') || {};\n    if (auto.status !== 'moving') return null;\n\n    var config = readConfig();\n    var diff = Math.abs(angle - Number(auto.target_seconds));\n    auto.last_angle_seconds = angle;\n    auto.error_seconds = diff;\n    auto.updated_at = Date.now();\n    auto.stable_count = diff <= config.toleranceSec ? (Number(auto.stable_count) || 0) + 1 : 0;\n    saveState(auto);\n\n    if (auto.stable_count < config.stableSamples) return null;\n\n    auto.status = 'complete';\n    auto.completed_at = Date.now();\n    saveState(auto);\n    clearTimers();\n    node.status({ fill: 'green', shape: 'dot', text: 'auto complete' });\n    brakeOnThenRelease(config, 'complete');\n    return null;\n}\n\nreturn null;",
+        "func": "// BUN AutoTilt: normalizes setpoints to integer arcseconds and runs the automatic tilt sequence.\n// Outputs: 1=setpoint MQTT, 2=BUN command MQTT, 3=ELMO tilt brake command.\nvar topic = msg.topic;\n\nfunction finiteNumber(value, fallback) {\n    var n = Number(value);\n    return isFinite(n) ? n : fallback;\n}\nfunction normalizeSetpointSeconds(value) {\n    var n = Number(value);\n    if (!isFinite(n)) return null;\n    var rounded = Math.round(n);\n    if (rounded < -2147483648 || rounded > 2147483647) return null;\n    return rounded;\n}\nfunction isAutoMode(value) {\n    var text = String(value || '').toLowerCase();\n    return text === 'automatic' || text.indexOf('\\u0430\\u0432\\u0442\\u043e\\u043c\\u0430\\u0442') !== -1;\n}\nfunction readConfig() {\n    var settings = global.get('settings') || {};\n    var advanced = settings.advanced || {};\n    return {\n        toleranceSec: Math.max(0, finiteNumber(advanced.tiltAutoToleranceSec, 1)),\n        stableSamples: Math.max(1, Math.round(finiteNumber(advanced.tiltAutoStableSamples, 3))),\n        goDelayMs: Math.max(0, Math.round(finiteNumber(advanced.tiltAutoGoDelayMs, 300))),\n        brakeSettleMs: Math.max(0, Math.round(finiteNumber(advanced.tiltAutoBrakeSettleMs, 300))),\n        timeoutMs: Math.max(1000, Math.round(finiteNumber(advanced.tiltAutoTimeoutMs, 60000)))\n    };\n}\nfunction saveState(state) {\n    flow.set('bun_auto_state', state);\n    global.set('bun_auto_state', state);\n}\nfunction clearTimer(name) {\n    var timer = context.get(name);\n    if (timer) clearTimeout(timer);\n    context.set(name, null);\n}\nfunction clearTimers() {\n    clearTimer('bun_auto_go_timer');\n    clearTimer('bun_auto_timeout_timer');\n    clearTimer('bun_auto_release_timer');\n}\nfunction brakeOnThenRelease(cfg, status) {\n    clearTimer('bun_auto_release_timer');\n    node.send([null, null, { topic: 'tilt_brake', payload: 1 }]);\n    var releaseTimer = setTimeout(function () {\n        var state = flow.get('bun_auto_state') || {};\n        if (status && state.status !== status) return;\n        node.send([null, { topic: 'bun_cmd', payload: 'release' }, null]);\n    }, cfg.brakeSettleMs);\n    context.set('bun_auto_release_timer', releaseTimer);\n}\nfunction scheduleTimeout(target, cfg) {\n    clearTimer('bun_auto_timeout_timer');\n    var timer = setTimeout(function () {\n        var state = flow.get('bun_auto_state') || {};\n        if (state.status !== 'moving' || state.target_seconds !== target) return;\n        state.status = 'timeout';\n        state.completed_at = Date.now();\n        state.last_error = 'Tilt target timeout';\n        saveState(state);\n        node.status({ fill: 'red', shape: 'ring', text: 'auto timeout' });\n        brakeOnThenRelease(cfg, 'timeout');\n    }, cfg.timeoutMs);\n    context.set('bun_auto_timeout_timer', timer);\n}\n\nif (topic === 'tilt_mode') {\n    var mode = String(msg.payload || '');\n    flow.set('bun_mode', mode);\n    var bun = global.get('bun') || {};\n    bun.mode = mode;\n    global.set('bun', bun);\n    return null;\n}\n\nif (topic === 'bun_cmd') {\n    var cmd = String(msg.payload || '').toLowerCase();\n    var active = flow.get('bun_auto_state') || {};\n    if (active.status === 'moving' && cmd !== 'go') {\n        active.status = 'cancelled';\n        active.completed_at = Date.now();\n        active.last_error = '';\n        saveState(active);\n        clearTimers();\n        node.status({ fill: 'grey', shape: 'dot', text: 'auto cancelled' });\n    }\n    return [null, { topic: 'bun_cmd', payload: cmd }, null];\n}\n\nif (topic === 'bun_cmd_setpoint') {\n    var target = normalizeSetpointSeconds(msg.payload);\n    if (target === null) {\n        node.warn('Invalid BUN setpoint: ' + msg.payload);\n        return null;\n    }\n\n    var setpointMsg = { topic: 'bun_cmd_setpoint', payload: target };\n    var bunState = global.get('bun') || {};\n    var mode = String(msg.mode) || String(flow.get('bun_mode')) || String(bunState.mode);\n    if (!isAutoMode(mode)) {\n        var manualCfg = readConfig();\n        saveState({ status: 'manual_go', target_seconds: target, updated_at: Date.now(), mode: mode || '' });\n        clearTimers();\n        node.status({ fill: 'grey', shape: 'dot', text: 'manual target ' + target + ' sec' });\n        node.send([setpointMsg, null, null]);\n        var manualGoTimer = setTimeout(function () {\n            node.send([null, { topic: 'bun_cmd', payload: 'go' }, null]);\n        }, manualCfg.goDelayMs);\n        context.set('bun_auto_go_timer', manualGoTimer);\n        return null;\n    }\n\n    var cfg = readConfig();\n    var state = {\n        status: 'moving',\n        target_seconds: target,\n        last_angle_seconds: null,\n        error_seconds: null,\n        stable_count: 0,\n        tolerance_sec: cfg.toleranceSec,\n        stable_samples: cfg.stableSamples,\n        timeout_ms: cfg.timeoutMs,\n        started_at: Date.now(),\n        updated_at: Date.now(),\n        last_error: ''\n    };\n    saveState(state);\n    clearTimers();\n    node.status({ fill: 'blue', shape: 'dot', text: 'auto target ' + target + ' sec' });\n\n    node.send([setpointMsg, null, { topic: 'tilt_brake', payload: 0 }]);\n    var goTimer = setTimeout(function () {\n        var current = flow.get('bun_auto_state') || {};\n        if (current.status !== 'moving' || current.target_seconds !== target) return;\n        node.send([null, { topic: 'bun_cmd', payload: 'go' }, null]);\n    }, cfg.goDelayMs);\n    context.set('bun_auto_go_timer', goTimer);\n    scheduleTimeout(target, cfg);\n    return null;\n}\n\nif (topic === 'bun_angle') {\n    var angle = normalizeSetpointSeconds(msg.payload);\n    if (angle === null) return null;\n    global.set('bun_angle', angle);\n\n    var auto = flow.get('bun_auto_state') || {};\n    if (auto.status !== 'moving') return null;\n\n    var config = readConfig();\n    var diff = Math.abs(angle - Number(auto.target_seconds));\n    auto.last_angle_seconds = angle;\n    auto.error_seconds = diff;\n    auto.updated_at = Date.now();\n    auto.stable_count = diff <= config.toleranceSec ? (Number(auto.stable_count) || 0) + 1 : 0;\n    saveState(auto);\n\n    if (auto.stable_count < config.stableSamples) return null;\n\n    auto.status = 'complete';\n    auto.completed_at = Date.now();\n    saveState(auto);\n    clearTimers();\n    node.status({ fill: 'green', shape: 'dot', text: 'auto complete' });\n    brakeOnThenRelease(config, 'complete');\n    return null;\n}\n\nreturn null;",
         "outputs": 3,
         "timeout": 0,
-        "noerr": 11,
+        "noerr": 0,
         "initialize": "",
         "finalize": "",
         "libs": [],
@@ -3039,11 +3037,9 @@
         "links": [
             "5818e895b4a23928",
             "5f65b6086231c61f",
-            "87dff11a3d972228",
             "adbd528db0e5a3fd",
             "d052743e2b95be4c",
             "e36224cf5a7a94e1",
-            "878f14ebaaadae9b",
             "22bf841cc9222640"
         ],
         "x": 585,
@@ -3360,9 +3356,7 @@
         "name": "link in 10",
         "links": [
             "b8a80758dd566f2c",
-            "settings-driveinit-elmo-out",
             "78ddca3d7ba9477b",
-            "7ec899443e5deb4c",
             "61fffc39593d0aa6"
         ],
         "x": 905,
@@ -3708,11 +3702,8 @@
         "name": "RC emergency in",
         "links": [
             "rc-link-emergency-out-newui",
-            "rc-link-emergency-out-settings",
             "2bf42c6651257b16",
-            "a2e6b875d711ee90",
             "0659ed8c764f90fb",
-            "2b068510f01b6630",
             "1190f99e95ea6087",
             "4772e90c1ac0ba0e",
             "010fcd73ba278f85"
@@ -3822,11 +3813,9 @@
         "links": [
             "5818e895b4a23928",
             "5f65b6086231c61f",
-            "87dff11a3d972228",
             "adbd528db0e5a3fd",
             "d052743e2b95be4c",
             "e36224cf5a7a94e1",
-            "878f14ebaaadae9b",
             "22bf841cc9222640"
         ],
         "x": 815,
@@ -4750,9 +4739,7 @@
         "links": [
             "rc-link-remote-service-out-newui",
             "rc-link-remote-service-out-speed",
-            "rc-link-remote-service-out-settings",
             "4597114b50b3a2b9",
-            "97a8a5c2fa29bbb9",
             "abc8bb87490c63e2",
             "5ac23085e03a87a7",
             "74be909f623b50c5",
@@ -4775,13 +4762,8 @@
         "mode": "link",
         "links": [
             "rc-link-remote-state-in-newui",
-            "rc-link-remote-state-in-speed",
-            "rc-link-remote-state-in-settings",
-            "58f14bb5073c2aa8",
             "5f65b6086231c61f",
             "e36224cf5a7a94e1",
-            "87dff11a3d972228",
-            "878f14ebaaadae9b",
             "22bf841cc9222640",
             "d052743e2b95be4c",
             "5818e895b4a23928",
