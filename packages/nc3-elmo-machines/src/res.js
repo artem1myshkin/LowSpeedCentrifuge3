@@ -9,7 +9,7 @@ const RES = {
     ol1: 0,
     ca18: 262144000,
     s1_5: 40,
-    kp2: 1e-6,
+    kp2: 5e-7,
     sd: 131072000,
     qs: 131072000,
     vh1: 131072000,
@@ -30,10 +30,7 @@ const RES = {
   low: {
     ol1: 1,
     ca18: 6553600,
-    // STAND-TEST HYPOTHESIS: reverted to the pre-2e564fe value (7662835) to check whether the
-    // low heads assert SO=1 after driveInit. Diverges from the ТЗ head-switch table (S1[5]=40),
-    // which the high heads tolerate; low never reached SO-ready with S1[5]=40.
-    s1_5: 7662835,
+    s1_5: 40,
     kp2: 1e-5,
     sd: 3276800,
     qs: 3276800,
