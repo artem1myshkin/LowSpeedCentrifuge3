@@ -437,6 +437,7 @@ function createElmoTransport(effects) {
         if (f.ms !== undefined) patch.ms = f.ms;
         if (f.sr !== undefined) patch.sr = f.sr;
         if (f.af !== undefined) patch.af = f.af;
+        if (f.kp2 !== undefined) patch.kp2 = f.kp2;
         if (isFastPollRole(pollRoleOf(context.inFlight)) && f.vx !== undefined) {
           Object.assign(patch, fastStabilityPatch(context, f.vx));
         }
@@ -484,6 +485,13 @@ function createElmoTransport(effects) {
         if (hasPollRole(context.queue, 'full_state') || hasPollRoleInFlight(context, 'full_state')) return {};
         return {
           queue: priorityInsert(context.queue, buildPollEnvelope({ id: nextId(), role: 'full_state', options: pollOptions })),
+        };
+      }),
+
+      enqueueInitialParamsPoll: assign(({ context }) => {
+        if (hasPollRole(context.queue, 'init_params') || hasPollRoleInFlight(context, 'init_params')) return {};
+        return {
+          queue: priorityInsert(context.queue, buildPollEnvelope({ id: nextId(), role: 'init_params', options: pollOptions })),
         };
       }),
 
@@ -747,6 +755,7 @@ function createElmoTransport(effects) {
         motionPollCmds: [],
         motionPollCursor: 0,
         motionPollParts: [],
+        kp2: null,
       };
     },
     initial: 'offline',
@@ -771,7 +780,7 @@ function createElmoTransport(effects) {
         after: { CONNECT_TIMEOUT: { target: 'offline' } },
         on: {
           'UI.CMD': { actions: 'enqueueCmd' },
-          'ELMO.RESP': { target: '#transport.connected', actions: ['resetMiss', 'enqueueInitialFullStatePoll'] },
+          'ELMO.RESP': { target: '#transport.connected', actions: ['resetMiss', 'enqueueInitialFullStatePoll', 'enqueueInitialParamsPoll'] },
           'ELMO.TIMEOUT': 'offline',
         },
       },
