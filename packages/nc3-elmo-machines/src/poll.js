@@ -12,6 +12,8 @@ const FAST_SEEK_POLL_FIELDS = ['VX', 'PX'];
 const FAST_DATA_POLL_FIELDS = ['TM', 'PX'];
 const STATE_POLL_FIELDS = ['MO', 'SO', 'SR'];
 const FULL_STATE_POLL_FIELDS = ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]'];
+// One-shot poll on initial connect to read drive parameters not needed at run-time.
+const INIT_PARAMS_POLL_FIELDS = ['KP[2]'];
 const FIELD_KEYS = {
   TM: 'tm',
   PX: 'px',
@@ -23,6 +25,7 @@ const FIELD_KEYS = {
   AF: 'af',
   'OL[1]': 'ol1',
   'OL[2]': 'ol2',
+  'KP[2]': 'kp2',
 };
 
 // State poll: small live health fields, emitted ~once per second (§4.4.4).
@@ -52,6 +55,7 @@ function buildPollFields(role, options) {
   else if (role === 'state') fields = STATE_POLL_FIELDS.slice();
   else if (role === 'fast_seek') fields = FAST_SEEK_POLL_FIELDS.slice();
   else if (role === 'fast_data') fields = FAST_DATA_POLL_FIELDS.slice();
+  else if (role === 'init_params') fields = INIT_PARAMS_POLL_FIELDS.slice();
   else fields = DATA_POLL_FIELDS.slice();
   if (role === 'full_state' && opts.analogParam) fields.push(String(opts.analogParam));
   return fields;
@@ -64,7 +68,7 @@ function requiredKeysFor(fields) {
 function pollTopicFor(role) {
   if (role === 'fast_seek') return 'poll_fast';
   if (role === 'data' || role === 'fast_data') return 'poll_data';
-  return 'poll_state';
+  return 'poll_state';  // full_state, state, init_params all use poll_state
 }
 
 // UDP + ATOMIC commands. Stand finding: ELMO answers a batched line (`TM;PX;VX;`) poorly —
@@ -198,6 +202,7 @@ module.exports = {
   FAST_DATA_POLL_FIELDS,
   STATE_POLL_FIELDS,
   FULL_STATE_POLL_FIELDS,
+  INIT_PARAMS_POLL_FIELDS,
   buildStatePoll,
   buildFullStatePoll,
   buildExtendedPoll,

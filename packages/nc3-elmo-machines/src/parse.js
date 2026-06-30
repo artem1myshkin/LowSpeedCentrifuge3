@@ -31,6 +31,7 @@ function setScalar(out, param, value) {
       out.resolution = v === 1 ? 'low' : 'high';
       return true;
     case 'OL[2]': out.ol2 = v; return true;
+    case 'KP[2]': out.kp2 = v; return true;
     default:
       return false;
   }

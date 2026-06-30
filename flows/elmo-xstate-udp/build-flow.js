@@ -79,10 +79,13 @@ const actor = nc3.startElmoTransport({
 }, { resolution: ckpt.resolution || 'high', pollConfig: initialPollConfig });
 
 let lastRes = ckpt.resolution || null;
+let lastKp2 = null;
 actor.subscribe(function (snap) {
     context.set('transport_state', snap.value);
     const r = snap.context.resolution;
     if (r && r !== lastRes) { context.set('elmo_checkpoint', { resolution: r }); lastRes = r; }
+    const kp2 = snap.context.kp2;
+    if (kp2 !== null && kp2 !== undefined && kp2 !== lastKp2) { global.set('drive_kp2', kp2); lastKp2 = kp2; }
 });
 
 context.set('elmoActor', actor);
