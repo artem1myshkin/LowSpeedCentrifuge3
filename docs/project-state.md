@@ -1,5 +1,14 @@
 # Состояние проекта LowSpeedCentrifuge3
 
+## Актуализация 2026-07-01: исправлен обрыв команд/данных вкладки Мониторинг
+
+Найден и исправлен баг: `RC gate monitoring` (`rc-prod-gate-monitoring`, subflow `CommandGate`, flow-tab `new ui flow`) пропускал разрешённые команды только в `RC emergency out` → `Remote Emergency Stop`, а эта функция отбрасывает всё, кроме `topic === 'emergency_stop'`. В отличие от гейтов остальных вкладок (`RC gate speed`, `RC gate scenario`, `RC gate bun`, `RC gate protocols`, `RC gate settings`), у гейта Мониторинга не было проводов к реальным обработчикам. Из-за этого с вкладки `Мониторинг`:
+
+- `reread` не долетал до `GlobalStateReader`, поэтому `scenario_state`, `scenario_files` и `bun_angle` (а с ними и индикатор БЕП, который на этой вкладке — производная от `bun_angle`) никогда не попадали в UI: скорость/позиция/SR отображались нормально (идут отдельным путём от `poll_data`), а угол наклона, сценарий и статус БЕП — нет;
+- кнопки сценария (`scenario_start/pause/resume/stop`), наклона (`bun_cmd_setpoint`/`tilt_mode`/`tilt_brake`), протокола/записи (`open_protocol/close_protocol/start_recording/stop_recording`) и переключатель «Запись исходных данных» (`settings_aply`) тоже не выполнялись.
+
+Исправление — добавлен `link out` `RC monitoring commands out` (`mon-link-commands-out`) на выход ALLOWED гейта Мониторинга, рассылающий команды на существующие точки входа других вкладок: `GlobalStateReader` (новый `link in` `mon-link-globalstate-in` на flow-tab `ELMO XState (UDP)`), `ScenarioManager`/`DriveInitState` (через существующий `link in` `xState events -> scenario`), `ScenarioFileService` (через существующий `link in 18`), `ProtocolManager` (через существующий `link in 12`), `cmd/angle?` switch БУН-логики (новый `link in` `mon-link-tilt-in` на `BUN flow`) и `CMD?` switch настроек (новый `link in` `mon-link-settings-in` на `SETTINGS flow`). Приёмники сами фильтруют по `msg.topic`, поэтому широковещательная рассылка безопасна — тот же паттерн уже используется гейтом `RC gate speed` через `link out 13`.
+
 ## Актуализация 2026-06-11: документация, память проекта и чистка репозитория
 
 В корне проекта добавлена папка `project-memory/` — постоянная память проекта для быстрых последующих доработок. Она фиксирует текущие runtime-пути, архитектурные инварианты, правила правки Node-RED function/ui-template nodes, особенности ELMO/БУН/БЕП, remote-control, сценариев и операторского UI. Это короткий справочник; полной истиной остается `flows.json` и текущий код.

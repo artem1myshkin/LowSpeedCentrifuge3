@@ -1117,10 +1117,29 @@
         "y": 400,
         "wires": [
             [
-                "rc-link-emergency-out-newui"
+                "rc-link-emergency-out-newui",
+                "mon-link-commands-out"
             ],
             []
         ]
+    },
+    {
+        "id": "mon-link-commands-out",
+        "type": "link out",
+        "z": "5bbcbebf6ff74a86",
+        "name": "RC monitoring commands out",
+        "mode": "link",
+        "links": [
+            "mon-link-globalstate-in",
+            "8c1aef464673504e",
+            "b3f2936750789587",
+            "mon-link-tilt-in",
+            "2c89895f1113b5b7",
+            "mon-link-settings-in"
+        ],
+        "x": 1075,
+        "y": 420,
+        "wires": []
     },
     {
         "id": "rc-link-remote-service-out-newui",
@@ -1783,6 +1802,22 @@
         "wires": []
     },
     {
+        "id": "mon-link-globalstate-in",
+        "type": "link in",
+        "z": "ac37a9949da4d9d6",
+        "name": "Monitoring cmds -> GlobalStateReader",
+        "links": [
+            "mon-link-commands-out"
+        ],
+        "x": 285,
+        "y": 420,
+        "wires": [
+            [
+                "facb56f63b2cc38b"
+            ]
+        ]
+    },
+    {
         "id": "facb56f63b2cc38b",
         "type": "function",
         "z": "ac37a9949da4d9d6",
@@ -2184,7 +2219,8 @@
             "2bf42c6651257b16",
             "d0b617334d6037e0",
             "1bc96bb097e11a4e",
-            "b39383a24dfd4b31"
+            "b39383a24dfd4b31",
+            "mon-link-commands-out"
         ],
         "x": 535,
         "y": 280,
@@ -2526,7 +2562,8 @@
         "g": "8773eb3a2439d3f3",
         "name": "link in 18",
         "links": [
-            "0ffb85d5d0202e83"
+            "0ffb85d5d0202e83",
+            "mon-link-commands-out"
         ],
         "x": 865,
         "y": 640,
@@ -2845,6 +2882,22 @@
         "x": 1800,
         "y": 360,
         "wires": []
+    },
+    {
+        "id": "mon-link-settings-in",
+        "type": "link in",
+        "z": "3e07d83af7348f65",
+        "name": "Monitoring cmds -> CMD?",
+        "links": [
+            "mon-link-commands-out"
+        ],
+        "x": 1000,
+        "y": 500,
+        "wires": [
+            [
+                "1416a3b0588839cc"
+            ]
+        ]
     },
     {
         "id": "1416a3b0588839cc",
@@ -3820,6 +3873,22 @@
                 "80caa0a0efef5882"
             ],
             []
+        ]
+    },
+    {
+        "id": "mon-link-tilt-in",
+        "type": "link in",
+        "z": "2026f42ea6602b3d",
+        "name": "Monitoring cmds -> cmd/angle?",
+        "links": [
+            "mon-link-commands-out"
+        ],
+        "x": 1000,
+        "y": 620,
+        "wires": [
+            [
+                "481ce8eefd66dde7"
+            ]
         ]
     },
     {
@@ -5166,7 +5235,8 @@
             "rc-link-journal-event-out",
             "fa58629c2d2fbe0a",
             "095d797e8c582ff9",
-            "e7e79359eef913db"
+            "e7e79359eef913db",
+            "mon-link-commands-out"
         ],
         "x": 1045,
         "y": 340,
