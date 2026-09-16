@@ -17,7 +17,20 @@ const DEFAULT_SCENARIO_OPTIONS = {
   speedStableTimeMs: 1000,
   speedReachTimeoutMs: 10000,
   protocolPollMaxHz: 30,
+  // 'ms': readiness from the drive's MS flag after the computed ramp (Appendix B item B1.3);
+  // 'software': legacy tolerance/stable-time criterion on measured speed (fallback, and the
+  // only option for JP because MS does not work for JP - Recommendations table 5.2).
+  speedReadyCriterion: 'ms',
+  rotationCommandMode: 'JV',
 };
+
+function readyCriterion(value) {
+  return String(value || '').toLowerCase() === 'software' ? 'software' : 'ms';
+}
+
+function rotationMode(value) {
+  return String(value || '').toUpperCase() === 'JP' ? 'JP' : 'JV';
+}
 
 function finite(value, fallback) {
   const n = Number(value);
@@ -116,7 +129,17 @@ function scenarioOptions(settings, override) {
     speedStableTimeMs: Math.max(0, finite(o.speedStableTimeMs, finite(advanced.speedStableTimeMs, DEFAULT_SCENARIO_OPTIONS.speedStableTimeMs))),
     speedReachTimeoutMs: Math.max(1, finite(o.speedReachTimeoutMs, finite(advanced.speedReachTimeoutMs, DEFAULT_SCENARIO_OPTIONS.speedReachTimeoutMs))),
     protocolPollMaxHz: clamp(finite(o.protocolPollMaxHz, finite(advanced.rawDataPollHz, DEFAULT_SCENARIO_OPTIONS.protocolPollMaxHz)), 1, 30),
+    speedReadyCriterion: readyCriterion(o.speedReadyCriterion || advanced.speedReadyCriterion || DEFAULT_SCENARIO_OPTIONS.speedReadyCriterion),
+    rotationCommandMode: rotationMode(o.rotationCommandMode || advanced.rotationCommandMode || DEFAULT_SCENARIO_OPTIONS.rotationCommandMode),
   };
+}
+
+// Effective readiness criterion for a rotation command: MS is meaningless for JP, so JP always
+// falls back to the software criterion regardless of the configured preference.
+function effectiveReadyCriterion(options, commandMode) {
+  const opts = options && options.speedReadyCriterion ? options : scenarioOptions(null, options);
+  if (rotationMode(commandMode || opts.rotationCommandMode) === 'JP') return 'software';
+  return opts.speedReadyCriterion;
 }
 
 // Ramp budget for reaching targetDegSec from currentDegSec: AC limits speeding up, DC limits
@@ -138,6 +161,53 @@ function computeSpeedReachTimeoutMs(targetDegSec, accelerationDegSec2, reserveMs
       + (acceleration > 0 ? Math.abs(target) / acceleration : 0);
   }
   return Math.max(1, Math.ceil(rampSec * 1000 + reserve));
+}
+
+// Pure ramp time (no reserve) for the MS criterion phase 1.
+function computeRampMs(targetDegSec, accelerationDegSec2, currentDegSec, decelerationDegSec2) {
+  const target = finite(targetDegSec, 0);
+  const current = finite(currentDegSec, 0);
+  const acceleration = Math.abs(finite(accelerationDegSec2, 0));
+  const deceleration = Math.abs(finite(decelerationDegSec2, 0)) || acceleration;
+  let rampSec = 0;
+  if (target === 0 || current === 0 || (target > 0) === (current > 0)) {
+    const delta = Math.abs(target) - Math.abs(current);
+    if (delta > 0) rampSec = acceleration > 0 ? delta / acceleration : 0;
+    else rampSec = deceleration > 0 ? -delta / deceleration : 0;
+  } else {
+    rampSec = (deceleration > 0 ? Math.abs(current) / deceleration : 0)
+      + (acceleration > 0 ? Math.abs(target) / acceleration : 0);
+  }
+  return Math.max(0, Math.ceil(rampSec * 1000));
+}
+
+// MS-based readiness (Appendix B item B1.3). Phase 'ramp': the profiler is still accelerating
+// (elapsed < rampMs), MS is ignored. Phase 'ms_wait': ready as soon as the drive reports MS=0
+// (actual speed inside TR[3] for TR[4] ms); MS still != 0 msTimeoutMs after the ramp -> timedOut.
+function evaluateMsReady(state, ms, nowMs, options) {
+  const o = options || {};
+  const prev = state || {};
+  const now = finite(nowMs, Date.now());
+  const startedAt = prev.startedAt || now;
+  const rampMs = Math.max(0, finite(prev.rampMs, finite(o.rampMs, 0)));
+  const timeoutMs = Math.max(1, finite(o.msTimeoutMs, DEFAULT_SCENARIO_OPTIONS.speedReachTimeoutMs));
+  const rampEndsAt = startedAt + rampMs;
+  const deadlineAt = rampEndsAt + timeoutMs;
+  const msValue = Number(ms);
+  const msKnown = ms !== null && ms !== undefined && Number.isFinite(msValue);
+  const inRamp = now < rampEndsAt;
+  const ready = !inRamp && msKnown && msValue === 0;
+  const timedOut = !ready && now >= deadlineAt;
+  return {
+    startedAt,
+    rampMs,
+    rampEndsAt,
+    deadlineAt,
+    phase: inRamp ? 'ramp' : 'ms_wait',
+    ms: msKnown ? msValue : null,
+    ready,
+    timedOut,
+  };
 }
 
 function speedAllowedInRange(speedDegSec, resolution, options) {
@@ -289,6 +359,9 @@ module.exports = {
   speedAllowedInRange,
   selectResolutionForSpeed,
   computeSpeedReachTimeoutMs,
+  computeRampMs,
+  evaluateMsReady,
+  effectiveReadyCriterion,
   normalizeScenarioFileName,
   listScenarioFiles,
   parseScenarioText,

@@ -1,5 +1,9 @@
 # XState-машина транспорта ELMO — статус
 
+> **2026-09-16 (блок Б1):** периодический state-poll теперь `MO;SO;SR;MS`, full-state — дополнительно `VH[2]`, motion-poll ожидания движения — `MS;TM;PX;VX;SR`. Добавлены `motionMaxMisses` (допуск потерянных датаграмм в ожиданиях SO/motion, по умолчанию 6), вложенное состояние `waitingForSoReady.{polling,pause}`, `meta.minMotionMs`; в `scenario.js` — `evaluateMsReady`/`computeRampMs`/`effectiveReadyCriterion` (критерий готовности по MS, JV/JP). Подробности — `docs/project-state.md`, запись 2026-09-16. Тесты: 75 зелёных.
+
+
+
 ## Актуализация 2026-06-11
 
 Добавлена корневая постоянная память проекта `project-memory/`. Для ELMO/XState быстрые инварианты теперь дублируются в `project-memory/technical-notes.md`, а этот документ остается подробной стоп-линией по транспортному слою.

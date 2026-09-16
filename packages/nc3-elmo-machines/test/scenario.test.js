@@ -150,3 +150,43 @@ test('evaluateSpeedReady requires stable time and reports timeout', () => {
   });
   assert.equal(timeoutState.timedOut, true);
 });
+
+test('scenarioOptions exposes MS criterion and JV/JP mode with JV/ms defaults', () => {
+  const { scenarioOptions, effectiveReadyCriterion } = require('../src/scenario');
+  const def = scenarioOptions({});
+  assert.equal(def.speedReadyCriterion, 'ms');
+  assert.equal(def.rotationCommandMode, 'JV');
+  const sw = scenarioOptions({ advanced: { speedReadyCriterion: 'software', rotationCommandMode: 'jp' } });
+  assert.equal(sw.speedReadyCriterion, 'software');
+  assert.equal(sw.rotationCommandMode, 'JP');
+  // JP cannot use MS (Recommendations table 5.2) -> software fallback even when 'ms' is configured
+  assert.equal(effectiveReadyCriterion(scenarioOptions({ advanced: { rotationCommandMode: 'JP' } })), 'software');
+  assert.equal(effectiveReadyCriterion(def, 'JV'), 'ms');
+  assert.equal(effectiveReadyCriterion(def, 'JP'), 'software');
+});
+
+test('evaluateMsReady waits for the ramp, then MS=0, then times out', () => {
+  const { evaluateMsReady, computeRampMs } = require('../src/scenario');
+  assert.equal(computeRampMs(5, 0.5, 0, 0.5), 10000);
+  assert.equal(computeRampMs(-5, 0.5, 5, 0.5), 20000);
+  let st = evaluateMsReady(null, 2, 1000, { rampMs: 10000, msTimeoutMs: 10000 });
+  assert.equal(st.phase, 'ramp');
+  assert.equal(st.ready, false);
+  assert.equal(st.timedOut, false);
+  // MS=0 during the ramp is ignored (profiler still moving the target)
+  st = evaluateMsReady(st, 0, 5000, { msTimeoutMs: 10000 });
+  assert.equal(st.phase, 'ramp');
+  assert.equal(st.ready, false);
+  st = evaluateMsReady(st, 2, 12000, { msTimeoutMs: 10000 });
+  assert.equal(st.phase, 'ms_wait');
+  assert.equal(st.ready, false);
+  st = evaluateMsReady(st, 0, 13000, { msTimeoutMs: 10000 });
+  assert.equal(st.ready, true);
+  assert.equal(st.timedOut, false);
+  const late = evaluateMsReady(st, 1, 21000, { msTimeoutMs: 10000 });
+  assert.equal(late.ready, false);
+  assert.equal(late.timedOut, true);
+  const unknown = evaluateMsReady(st, null, 13000, { msTimeoutMs: 10000 });
+  assert.equal(unknown.ready, false);
+  assert.equal(unknown.ms, null);
+});

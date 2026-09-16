@@ -6,7 +6,9 @@ const { buildPollEnvelope, shouldExtend, computePollDelayMs } = require('./poll'
 const { parseElmoScalars } = require('./parse');
 const { clamp, splitElmoCommands } = require('./util');
 
-const MOTION_STATUS_POLL_CMDS = ['MS', 'TM', 'PX', 'VX'];
+// SR is included so the homing run can watch bit 7 (HM[1] active -> 0 when the index mark
+// is captured) without a separate poll (Recommendations section 6).
+const MOTION_STATUS_POLL_CMDS = ['MS', 'TM', 'PX', 'VX', 'SR'];
 
 // ElmoTransport — single serialized owner of the ELMO UDP link (plan §4, reworked for UDP).
 //
@@ -32,7 +34,11 @@ const MOTION_STATUS_POLL_CMDS = ['MS', 'TM', 'PX', 'VX'];
 //   connectTimeoutMs        -> probe watchdog while connecting (default 2000)
 //   reconnectMs             -> delay before re-probing after going offline (default 1000)
 //   maxMisses               -> consecutive reply timeouts before the link is offline (default 3)
+//   motionMaxMisses         -> same, but while waiting for SO=1 / motion done (default 6): a
+//                              lost datagram during a long wait re-polls instead of tripping
+//                              the ST;MO=0 safety stop on a healthy drive (B1.8)
 //   soReadyTimeoutMs        -> max wait after MO=1 until SO becomes 1 (default 30000)
+//   envelope meta.minMotionMs -> earliest time after BG at which MS=0/1 counts as motion done
 //   statePeriodMs           -> minimal state-poll cadence (default 1000)
 //   probeCmd                -> liveness probe sent on connect (default single TM read)
 //   initialFullState        -> enqueue full-state poll after connect/recover (default true)
@@ -53,6 +59,7 @@ function createElmoTransport(effects) {
   const connectTimeoutMs = e.connectTimeoutMs == null ? 2000 : e.connectTimeoutMs;
   const reconnectMs = e.reconnectMs == null ? 1000 : e.reconnectMs;
   const maxMisses = e.maxMisses == null ? 3 : e.maxMisses;
+  const motionMaxMisses = e.motionMaxMisses == null ? Math.max(maxMisses, 6) : e.motionMaxMisses;
   const soReadyTimeoutMs = e.soReadyTimeoutMs == null ? 30000 : e.soReadyTimeoutMs;
   const statePeriodMs = e.statePeriodMs == null ? 1000 : e.statePeriodMs;
   const motionPollDelayMs = e.motionPollDelayMs == null ? 500 : e.motionPollDelayMs;
@@ -192,8 +199,8 @@ function createElmoTransport(effects) {
     const role = pollRoleOf(env);
     const parsed = parseElmoScalars(raw);
     const required = env.required || (role === 'full_state'
-      ? ['ms', 'mo', 'so', 'sr', 'af', 'ol1', 'ol2']
-      : (role === 'state' ? ['mo', 'so', 'sr'] : ['tm', 'px', 'vx']));
+      ? ['ms', 'mo', 'so', 'sr', 'af', 'ol1', 'ol2', 'vh2']
+      : (role === 'state' ? ['mo', 'so', 'sr', 'ms'] : ['tm', 'px', 'vx']));
     const missing = missingFields(parsed, required);
     return { ok: missing.length === 0, role, missing };
   }
@@ -237,7 +244,11 @@ function createElmoTransport(effects) {
 
   function isOperatorAbortEnvelope(env) {
     const topic = topicOfEnvelope(env);
-    return topic === 'drive_stop' || topic === 'motor_off' || envelopeRequests(env, /\bST\b|\bMO\s*=\s*0\b/);
+    if (topic === 'drive_stop' || topic === 'motor_off') return true;
+    // motor_on starts with ST only to clear a stale motion command before MO=1 (B1.7);
+    // it is a normal command, not an operator abort, so it must not preempt in-flight work.
+    if (topic === 'motor_on') return false;
+    return envelopeRequests(env, /\bST\b|\bMO\s*=\s*0\b/);
   }
 
   function isMoOnCommand(cmd) {
@@ -296,10 +307,15 @@ function createElmoTransport(effects) {
     return Number.isFinite(n) && n > 0 ? n : motionDoneTimeoutMs;
   }
 
-  function motionDoneFromRaw(raw, env) {
+  // meta.minMotionMs: ignore "done" verdicts this soon after BG — right after the start the
+  // drive may still report MS=0 of the previous (completed) command (homing revolution, B2.2).
+  function motionDoneFromRaw(raw, env, context) {
     const f = parseElmoScalars(raw);
     const ms = f.ms;
     const meta = (env && env.meta) || {};
+    const minMotionMs = Math.max(0, finiteNumber(meta.minMotionMs, 0));
+    const startedAt = Number(context && context.motionWaitStartedAt) || 0;
+    if (minMotionMs > 0 && startedAt > 0 && now() - startedAt < minMotionMs) return false;
     const target = Number(meta.targetPosition);
     if (Number.isFinite(target) && f.px !== undefined) {
       const tolerance = Math.max(0, finiteNumber(meta.positionToleranceTicks, 0));
@@ -359,6 +375,7 @@ function createElmoTransport(effects) {
       hasWork: ({ context }) => context.queue.length > 0,
       // Evaluated before the timeout actions run, so it predicts the post-bump miss count.
       tooManyMisses: ({ context }) => (Number(context.missCount) || 0) + 1 >= maxMisses,
+      tooManyMotionMisses: ({ context }) => (Number(context.missCount) || 0) + 1 >= motionMaxMisses,
       // True while the in-flight request still has more atomic commands to send. Poll parts
       // must validate before advancing; command batches only require another part.
       hasNextPollPart: ({ context, event }) => {
@@ -372,7 +389,7 @@ function createElmoTransport(effects) {
       soReady: ({ event }) => soReadyFromRaw(event.raw),
       needsMotionDoneWait: ({ context }) => needsMotionDoneWait(context.inFlight),
       hasNextMotionPollPart: ({ context }) => motionPollCursorOf(context) < motionPollCmdsOf(context).length - 1,
-      motionDoneAfterMotionPoll: ({ context, event }) => motionDoneFromRaw(motionPollRawFor(context, event.raw), context.inFlight),
+      motionDoneAfterMotionPoll: ({ context, event }) => motionDoneFromRaw(motionPollRawFor(context, event.raw), context.inFlight, context),
       operatorAbortCommand: ({ context, event }) => canOperatorAbort(context.inFlight) && isOperatorAbortEnvelope(event.envelope),
       motionWaitTimedOut: ({ context }) => {
         const startedAt = Number(context.motionWaitStartedAt) || 0;
@@ -438,6 +455,7 @@ function createElmoTransport(effects) {
         if (f.sr !== undefined) patch.sr = f.sr;
         if (f.af !== undefined) patch.af = f.af;
         if (f.kp2 !== undefined) patch.kp2 = f.kp2;
+        if (f.vh2 !== undefined) patch.vh2 = f.vh2;
         if (isFastPollRole(pollRoleOf(context.inFlight)) && f.vx !== undefined) {
           Object.assign(patch, fastStabilityPatch(context, f.vx));
         }
@@ -489,6 +507,7 @@ function createElmoTransport(effects) {
       }),
 
       enqueueInitialParamsPoll: assign(({ context }) => {
+        if (!initialFullState) return {};
         if (hasPollRole(context.queue, 'init_params') || hasPollRoleInFlight(context, 'init_params')) return {};
         return {
           queue: priorityInsert(context.queue, buildPollEnvelope({ id: nextId(), role: 'init_params', options: pollOptions })),
@@ -614,6 +633,7 @@ function createElmoTransport(effects) {
         if (f.px !== undefined) patch.px = f.px;
         if (f.vx !== undefined) { patch.vx = f.vx; patch.omegaSource = 'measured'; }
         if (f.ms !== undefined) patch.ms = f.ms;
+        if (f.sr !== undefined) patch.sr = f.sr;
         return patch;
       }),
 
@@ -756,6 +776,7 @@ function createElmoTransport(effects) {
         motionPollCursor: 0,
         motionPollParts: [],
         kp2: null,
+        vh2: null,
       };
     },
     initial: 'offline',
@@ -835,8 +856,13 @@ function createElmoTransport(effects) {
               ],
             },
           },
+          // SO-ready wait after MO=1. Nested so a lost SO reply datagram is re-polled after
+          // TIMEOUT (instead of silently waiting for the 30 s SO_READY_TIMEOUT and then
+          // tripping the safety stop on a healthy drive), and so consecutive SO=0 replies are
+          // paced by MOTION_POLL_DELAY instead of hammering the drive in a tight loop (B1.8).
           waitingForSoReady: {
-            entry: ['statusWaitingSo', 'sendSoPoll'],
+            entry: 'statusWaitingSo',
+            initial: 'polling',
             after: {
               SO_READY_TIMEOUT: {
                 target: 'idle',
@@ -848,12 +874,31 @@ function createElmoTransport(effects) {
                 { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearSoWait', 'enqueueCmd'] },
                 { actions: 'enqueueCmd' },
               ],
-              'ELMO.RESP': [
-                { guard: 'soReadyAndHasPendingCommandPart', target: 'sendingNextPart', actions: ['resetMiss', 'collectSoReadyPart', 'clearSoWait'] },
-                { guard: 'soReady', target: 'dispatch', actions: ['resetMiss', 'forwardAndAck', 'enqueueConfirmPoll', 'clearSoWait'] },
-                { actions: ['resetMiss', 'sendSoPoll'] },
-              ],
-              'ELMO.TIMEOUT': { actions: ['sendSoPoll'] },
+            },
+            states: {
+              polling: {
+                entry: 'sendSoPoll',
+                after: {
+                  TIMEOUT: [
+                    { guard: 'tooManyMotionMisses', target: '#transport.offline', actions: ['failSoWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearSoWait'] },
+                    { target: 'polling', reenter: true, actions: ['bumpMiss'] },
+                  ],
+                },
+                on: {
+                  'ELMO.RESP': [
+                    { guard: 'soReadyAndHasPendingCommandPart', target: '#transport.connected.sendingNextPart', actions: ['resetMiss', 'collectSoReadyPart', 'clearSoWait'] },
+                    { guard: 'soReady', target: '#transport.connected.dispatch', actions: ['resetMiss', 'forwardAndAck', 'enqueueConfirmPoll', 'clearSoWait'] },
+                    { target: 'pause', actions: ['resetMiss'] },
+                  ],
+                  'ELMO.TIMEOUT': [
+                    { guard: 'tooManyMotionMisses', target: '#transport.offline', actions: ['failSoWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearSoWait'] },
+                    { target: 'polling', reenter: true, actions: ['bumpMiss'] },
+                  ],
+                },
+              },
+              pause: {
+                after: { MOTION_POLL_DELAY: 'polling' },
+              },
             },
           },
           waitingForMotionDone: {
@@ -869,7 +914,7 @@ function createElmoTransport(effects) {
                 { target: 'motionPollPause', actions: ['resetMiss', 'ingestMotionPoll', 'forwardMotionPollData', 'clearMotionPoll'] },
               ],
               'ELMO.TIMEOUT': [
-                { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failMotionWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll'] },
+                { guard: 'tooManyMotionMisses', target: '#transport.offline', actions: ['failMotionWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll'] },
                 { target: 'motionPollPause', actions: ['bumpMiss', 'clearMotionPoll'] },
               ],
             },
@@ -890,7 +935,7 @@ function createElmoTransport(effects) {
                 { target: 'motionPollPause', actions: ['resetMiss', 'ingestMotionPoll', 'forwardMotionPollData', 'clearMotionPoll'] },
               ],
               'ELMO.TIMEOUT': [
-                { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failMotionWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll'] },
+                { guard: 'tooManyMotionMisses', target: '#transport.offline', actions: ['failMotionWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll'] },
                 { target: 'motionPollPause', actions: ['bumpMiss', 'clearMotionPoll'] },
               ],
             },

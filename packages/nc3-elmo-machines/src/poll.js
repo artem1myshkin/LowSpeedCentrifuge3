@@ -10,8 +10,12 @@ const LEAN_POLL = DATA_POLL;
 const DATA_POLL_FIELDS = ['TM', 'PX', 'VX'];
 const FAST_SEEK_POLL_FIELDS = ['VX', 'PX'];
 const FAST_DATA_POLL_FIELDS = ['TM', 'PX'];
-const STATE_POLL_FIELDS = ['MO', 'SO', 'SR'];
-const FULL_STATE_POLL_FIELDS = ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]'];
+// MS is part of the periodic state poll so the UI/scenario see the live motion status
+// (Appendix B item B1.1: previously MS was read once on connect and stuck at 3).
+const STATE_POLL_FIELDS = ['MO', 'SO', 'SR', 'MS'];
+// VH[2] (drive max speed of the active head pair) is read with every full-state poll so the
+// speed input limit tracks the real drive value (Appendix B item B1.6).
+const FULL_STATE_POLL_FIELDS = ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]', 'VH[2]'];
 // One-shot poll on initial connect to read drive parameters not needed at run-time.
 const INIT_PARAMS_POLL_FIELDS = ['KP[2]'];
 const FIELD_KEYS = {
@@ -26,6 +30,7 @@ const FIELD_KEYS = {
   'OL[1]': 'ol1',
   'OL[2]': 'ol2',
   'KP[2]': 'kp2',
+  'VH[2]': 'vh2',
 };
 
 // State poll: small live health fields, emitted ~once per second (§4.4.4).

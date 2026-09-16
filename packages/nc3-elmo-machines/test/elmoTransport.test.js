@@ -73,6 +73,7 @@ function feedStatePoll(h, opts = {}) {
   h.actor.send({ type: 'ELMO.RESP', raw: opts.mo || 'MO;0;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.so || 'SO;0;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.sr || 'SR;100663616;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.ms || 'MS;3;' });
 }
 
 function feedFullStatePoll(h, opts = {}) {
@@ -83,6 +84,7 @@ function feedFullStatePoll(h, opts = {}) {
   h.actor.send({ type: 'ELMO.RESP', raw: opts.af || 'AF;0;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.ol1 || 'OL[1];1;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.ol2 || 'OL[2];1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.vh2 || 'VH[2];6553600;' });
 }
 
 function feedMotionStatusPoll(h, opts = {}) {
@@ -90,6 +92,7 @@ function feedMotionStatusPoll(h, opts = {}) {
   h.actor.send({ type: 'ELMO.RESP', raw: opts.tm || 'TM;100;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.px || 'PX;10;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.vx || 'VX;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.sr || 'SR;0;' });
 }
 
 // Drive to connected.awaiting with one command in flight.
@@ -157,8 +160,8 @@ test('command batches are sent atomically and reassembled before forwarding', ()
   assert.equal(acked(h.calls)[0].raw, 'AC;1;DC;2;JV;3;;');
 });
 
-test('command batch waits for SO=1 after MO=1 before continuing', () => {
-  const h = makeHarness();
+test('command batch waits for SO=1 after MO=1 before continuing', async () => {
+  const h = makeHarness({ motionPollDelayMs: 5 });
   h.actor.send({
     type: 'UI.CMD',
     envelope: { id: 'init', kind: 'cmd', cmd: 'MO=1;PR=1;BG', meta: { topic: 'driveInit' } },
@@ -167,11 +170,13 @@ test('command batch waits for SO=1 after MO=1 before continuing', () => {
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MO=1');
 
   h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
-  assert.deepEqual(h.value(), { connected: 'waitingForSoReady' });
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'polling' } });
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'SO');
 
   h.actor.send({ type: 'ELMO.RESP', raw: 'SO;0;' });
-  assert.deepEqual(h.value(), { connected: 'waitingForSoReady' });
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'pause' } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'polling' } });
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'SO');
 
   h.actor.send({ type: 'ELMO.RESP', raw: 'SO;1;' });
@@ -213,7 +218,7 @@ test('waitForMotionDone command completes only after MS reports motion done', as
   feedMotionStatusPoll(h, { ms: 'MS;2;', tm: 'TM;100;', px: 'PX;10;', vx: 'VX;5;' });
   assert.deepEqual(h.value(), { connected: 'motionPollPause' });
   assert.equal(h.calls.forwardResp.at(-1).topic, 'poll_data');
-  assert.equal(h.calls.forwardResp.at(-1).raw, 'MS;2;TM;100;PX;10;VX;5;');
+  assert.equal(h.calls.forwardResp.at(-1).raw, 'MS;2;TM;100;PX;10;VX;5;SR;0;');
   assert.equal(h.ctx().ms, 2);
   assert.equal(h.ctx().tm, 100);
   assert.equal(h.ctx().px, 10);
@@ -227,9 +232,9 @@ test('waitForMotionDone command completes only after MS reports motion done', as
 
   assert.equal(completed(h.calls).at(-1).id, 'init');
   assert.equal(completed(h.calls).at(-1).topic, 'driveInit');
-  assert.equal(completed(h.calls).at(-1).raw, 'MS;0;TM;200;PX;20;VX;0;');
+  assert.equal(completed(h.calls).at(-1).raw, 'MS;0;TM;200;PX;20;VX;0;SR;0;');
   assert.equal(h.calls.forwardResp[0].topic, 'poll_data');
-  assert.equal(h.calls.forwardResp[0].raw, 'MS;0;TM;200;PX;20;VX;0;');
+  assert.equal(h.calls.forwardResp[0].raw, 'MS;0;TM;200;PX;20;VX;0;SR;0;');
   assert.equal(h.ctx().inFlight.pollRole, 'state');
 });
 
@@ -322,7 +327,7 @@ test('driveInit batch forwards echoes before waits and resolves PA from the fres
   // ResponseParser switches the resolution context before the init revolution, not after it.
   h.calls.forwardResp.length = 0;
   h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
-  assert.deepEqual(h.value(), { connected: 'waitingForSoReady' });
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'polling' } });
   assert.equal(h.calls.forwardResp.length, 1);
   assert.equal(h.calls.forwardResp[0].topic, 'driveInit');
   assert.match(h.calls.forwardResp[0].raw, /OL\[1\];1;/);
@@ -380,7 +385,7 @@ test('single MO=1 command waits for SO=1 before ack', () => {
   });
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
   h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
-  assert.deepEqual(h.value(), { connected: 'waitingForSoReady' });
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'polling' } });
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'SO');
 
   h.actor.send({ type: 'ELMO.RESP', raw: 'SO;1;' });
@@ -399,7 +404,7 @@ test('SO wait timeout fails command and sends emergency stop', async () => {
   });
   h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
   h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
-  assert.deepEqual(h.value(), { connected: 'waitingForSoReady' });
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'polling' } });
 
   await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -528,7 +533,7 @@ test('POLL.TICK enqueues an extended poll past statePeriod and records lastExten
   assert.equal(h.ctx().inFlight.pollRole, 'data');
   assert.equal(h.ctx().queue.length, 1);
   assert.equal(h.ctx().queue[0].pollRole, 'state');
-  assert.deepEqual(h.ctx().queue[0].cmds, ['MO', 'SO', 'SR']);
+  assert.deepEqual(h.ctx().queue[0].cmds, ['MO', 'SO', 'SR', 'MS']);
   assert.equal(h.ctx().lastExtendedAt, 2000);
 
   feedDataPoll(h);
@@ -596,6 +601,12 @@ test('full-state low range response activates low velocity poll path', () => {
 
   assert.equal(h.ctx().resolution, 'low');
   assert.equal(h.ctx().lowVelocityPollActive, true);
+  assert.equal(h.ctx().vh2, 6553600);
+
+  // The one-shot init_params poll (KP[2]) queued on connect goes out right after full-state.
+  assert.equal(h.ctx().inFlight.pollRole, 'init_params');
+  h.actor.send({ type: 'ELMO.RESP', raw: 'KP[2];0.00001;' });
+  assert.equal(h.ctx().kp2, 0.00001);
 
   h.actor.send({ type: 'POLL.TICK' });
   assert.equal(h.ctx().inFlight.pollRole, 'fast_data');
@@ -708,8 +719,9 @@ test('forwards valid state poll frames on poll_state topic', () => {
   feedStatePoll(h);
   assert.equal(h.calls.forwardResp.length, 1);
   assert.equal(h.calls.forwardResp[0].topic, 'poll_state');
-  assert.equal(h.calls.forwardResp[0].raw, 'MO;0;SO;0;SR;100663616;');
+  assert.equal(h.calls.forwardResp[0].raw, 'MO;0;SO;0;SR;100663616;MS;3;');
   assert.equal(badPoll(h.calls).length, 0);
+  assert.equal(h.ctx().ms, 3);
   assert.equal(h.ctx().mo, 0);
   assert.equal(h.ctx().so, 0);
   assert.equal(h.ctx().sr, 100663616);
@@ -750,19 +762,19 @@ test('MO command ack enqueues a minimal MO/SO/SR confirmation poll', () => {
   h.actor.send({ type: 'ELMO.RESP', raw: ';' });
   h.actor.send({ type: 'UI.CMD', envelope: { id: 'mo', kind: 'cmd', cmd: 'MO=1', meta: { topic: 'motor_on' } } });
   h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
-  assert.deepEqual(h.value(), { connected: 'waitingForSoReady' });
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'polling' } });
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'SO');
 
   h.actor.send({ type: 'ELMO.RESP', raw: 'SO;1;' });
 
   assert.equal(h.ctx().inFlight.pollRole, 'state');
-  assert.deepEqual(h.ctx().inFlight.cmds, ['MO', 'SO', 'SR']);
+  assert.deepEqual(h.ctx().inFlight.cmds, ['MO', 'SO', 'SR', 'MS']);
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MO');
 
   h.calls.forwardResp.length = 0;
   feedStatePoll(h, { mo: 'MO;1;', so: 'SO;1;' });
   assert.equal(h.calls.forwardResp[0].topic, 'poll_state');
-  assert.equal(h.calls.forwardResp[0].raw, 'MO;1;SO;1;SR;100663616;');
+  assert.equal(h.calls.forwardResp[0].raw, 'MO;1;SO;1;SR;100663616;MS;3;');
 });
 
 test('OL command ack enqueues full-state confirmation poll', () => {
@@ -772,7 +784,7 @@ test('OL command ack enqueues full-state confirmation poll', () => {
   h.actor.send({ type: 'ELMO.RESP', raw: 'OL[2];0;' });
 
   assert.equal(h.ctx().inFlight.pollRole, 'full_state');
-  assert.deepEqual(h.ctx().inFlight.cmds, ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']);
+  assert.deepEqual(h.ctx().inFlight.cmds, ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]', 'VH[2]']);
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS');
 });
 
@@ -788,7 +800,7 @@ test('OL command with prior MO=0 still enqueues full-state confirmation poll', (
   h.actor.send({ type: 'ELMO.RESP', raw: 'CA[18];6553600;' });
 
   assert.equal(h.ctx().inFlight.pollRole, 'full_state');
-  assert.deepEqual(h.ctx().inFlight.cmds, ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]']);
+  assert.deepEqual(h.ctx().inFlight.cmds, ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]', 'VH[2]']);
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MS');
 });
 
@@ -815,4 +827,97 @@ test('operator stop aborts an in-flight poll immediately', () => {
 test('LEAN_POLL constant lists the data fields', () => {
   // Vestigial display constant; the transport sends data poll as atomic TM, PX, VX commands.
   assert.equal(LEAN_POLL, 'TM;PX;VX;');
+});
+
+test('SO wait re-polls SO after a lost reply datagram instead of waiting for the SO timeout', () => {
+  const h = makeHarness({ motionPollDelayMs: 5 });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'mo', kind: 'cmd', cmd: 'MO=1', meta: { topic: 'motor_on' } } });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MO;1;' });
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'polling' } });
+  const sent = h.calls.sendCmd.length;
+
+  h.actor.send({ type: 'ELMO.TIMEOUT' });
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'polling' } });
+  assert.equal(h.calls.sendCmd.length, sent + 1);
+  assert.equal(h.calls.sendCmd.at(-1), 'SO');
+  assert.equal(h.ctx().missCount, 1);
+  assert.equal(failed(h.calls).length, 0);
+
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SO;1;' });
+  assert.equal(h.ctx().missCount, 0);
+  assert.equal(acked(h.calls).at(-1).id, 'mo');
+});
+
+test('motion wait tolerates lost datagrams up to motionMaxMisses before the safety stop', async () => {
+  const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 100000, maxMisses: 3 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: { id: 'init', kind: 'cmd', cmd: 'PR=1;BG', meta: { topic: 'driveInit', waitForMotionDone: true } },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PR;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+
+  for (let i = 1; i <= 5; i++) {
+    h.actor.send({ type: 'ELMO.TIMEOUT' });
+    assert.deepEqual(h.value(), { connected: 'motionPollPause' }, 'miss #' + i + ' must only pause');
+    assert.equal(h.ctx().missCount, i);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+  }
+  assert.equal(failed(h.calls).length, 0);
+  assert.ok(!h.calls.sendCmd.includes('ST'));
+
+  h.actor.send({ type: 'ELMO.TIMEOUT' });
+  assert.equal(h.value(), 'offline');
+  assert.equal(failed(h.calls).at(-1).reason, 'motion_timeout');
+  assert.deepEqual(h.calls.sendCmd.slice(-2), ['ST', 'MO=0']);
+});
+
+test('motion poll frame carries SR for homing bit-7 tracking', () => {
+  const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 100000 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: { id: 'init', kind: 'cmd', cmd: 'PR=1;BG', meta: { topic: 'driveInit', waitForMotionDone: true } },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PR;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+  assert.equal(h.ctx().motionPollCmds.at(-1), 'SR');
+  feedMotionStatusPoll(h, { ms: 'MS;2;', sr: 'SR;128;' });
+  assert.equal(h.ctx().sr, 128);
+  assert.equal(h.calls.forwardResp.at(-1).raw, 'MS;2;TM;100;PX;10;VX;1;SR;128;');
+});
+
+test('waitForMotionDone ignores MS=0 before meta.minMotionMs has elapsed', async () => {
+  const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 100000, startNow: 10000 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: { id: 'init', kind: 'cmd', cmd: 'PR=1;BG', meta: { topic: 'driveInit', waitForMotionDone: true, minMotionMs: 3000 } },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PR;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+
+  h.setClock(10500);
+  feedMotionStatusPoll(h, { ms: 'MS;0;' });
+  assert.equal(completed(h.calls).length, 0, 'stale MS=0 right after BG must not complete');
+  assert.deepEqual(h.value(), { connected: 'motionPollPause' });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+
+  h.setClock(14000);
+  feedMotionStatusPoll(h, { ms: 'MS;0;' });
+  assert.equal(completed(h.calls).at(-1).id, 'init');
+});
+
+test('motor_on with a leading ST does not preempt an in-flight command', () => {
+  const h = connectedWithCmd();
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'mo', kind: 'cmd', cmd: 'ST;MO=1;MO;SO;SR', meta: { topic: 'motor_on' } } });
+  assert.equal(h.ctx().inFlight.id, 'cmdA');
+  assert.equal(failed(h.calls).length, 0);
+  assert.equal(h.ctx().queue[0].id, 'mo');
+  assert.equal(h.ctx().queue[0].priority, 3);
 });
