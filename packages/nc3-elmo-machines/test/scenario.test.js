@@ -180,8 +180,10 @@ test('evaluateMsReady waits for the ramp, then MS=0, then times out', () => {
   st = evaluateMsReady(st, 2, 12000, { msTimeoutMs: 10000 });
   assert.equal(st.phase, 'ms_wait');
   assert.equal(st.ready, false);
+  // no VX available -> MS=0 after the ramp is the only signal
   st = evaluateMsReady(st, 0, 13000, { msTimeoutMs: 10000 });
   assert.equal(st.ready, true);
+  assert.equal(st.readyBy, 'ms');
   assert.equal(st.timedOut, false);
   const late = evaluateMsReady(st, 1, 21000, { msTimeoutMs: 10000 });
   assert.equal(late.ready, false);
@@ -208,7 +210,13 @@ test('evaluateMsReady: MS=2 at steady JV is ready once VX stays in the TR[3] win
   out = evaluateMsReady(out, 2, 1200, Object.assign({ measuredDegSec: 1.2 }, win));
   assert.equal(out.ready, false);
   assert.equal(out.inWindowSince, null);
-  // MS=0 still wins immediately
-  const byMs = evaluateMsReady(null, 0, 1000, Object.assign({ rampMs: 0, measuredDegSec: 1.0 }, win));
-  assert.equal(byMs.readyBy, 'ms');
+  // MS=0 with VX known but outside the window (drive stopped by ST, JV still stored) is NOT ready
+  const stopped = evaluateMsReady(null, 0, 1000, Object.assign({ rampMs: 0, measuredDegSec: 0.0 }, win));
+  assert.equal(stopped.ready, false);
+  // an over-estimated ramp (stale current speed) does not delay window readiness
+  let early = evaluateMsReady(null, 2, 1000, Object.assign({ rampMs: 60000, measuredDegSec: 2.01 }, win));
+  early = evaluateMsReady(early, 2, 1200, Object.assign({ measuredDegSec: 2.01 }, win));
+  assert.equal(early.phase, 'ramp');
+  assert.equal(early.ready, true);
+  assert.equal(early.readyBy, 'window');
 });

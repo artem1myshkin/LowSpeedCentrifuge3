@@ -207,11 +207,15 @@ function evaluateMsReady(state, ms, nowMs, options) {
   const windowMs = Math.max(0, finite(o.windowMs, 0));
   const windowKnown = Number.isFinite(measured) && Number.isFinite(target) && windowDegSec > 0;
   const inWindow = windowKnown && Math.abs(measured - target) <= windowDegSec;
-  const inWindowSince = !inRamp && inWindow ? (prev.inWindowSince || now) : null;
+  const inWindowSince = inWindow ? (prev.inWindowSince || now) : null;
   const inWindowMs = inWindowSince ? now - inWindowSince : 0;
 
-  const readyByMs = !inRamp && msKnown && msValue === 0;
-  const readyByWindow = !inRamp && inWindow && inWindowMs >= windowMs;
+  // Window readiness is not gated by the ramp: the actual speed cannot sit inside the window of
+  // the target before the ramp really ends, so an over-estimated ramp (stale "current speed")
+  // must not delay it. MS=0 counts only when no VX is available: after ST the drive reports
+  // MS=0 with the JV setpoint still stored, which is NOT "at speed".
+  const readyByMs = !inRamp && !windowKnown && msKnown && msValue === 0;
+  const readyByWindow = inWindow && inWindowMs >= windowMs;
   const ready = readyByMs || readyByWindow;
   const timedOut = !ready && now >= deadlineAt;
   return {

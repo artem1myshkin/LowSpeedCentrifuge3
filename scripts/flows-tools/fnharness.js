@@ -242,7 +242,9 @@ check('ScenarioManager: full homing before first step, JV command, MS criterion 
   r = runNode('ScenarioManager', { topic: 'poll_state', payload: { ms: 2, velocity_deg_per_sec: 4.9, resolution: 'high' } }, ctx);
   st = ctx.global.get('scenario_state');
   assert.equal(st.ready, false); assert.equal(st.ready_phase, 'ms_wait');
-  r = runNode('ScenarioManager', { topic: 'poll_state', payload: { ms: 0, velocity_deg_per_sec: 5, resolution: 'high' } }, ctx);
+  // in the TR[3] window: ready after the TR[4] dwell even though MS stays 2 (continuous JV)
+  st.ready_eval.inWindowSince -= 200; ctx.global.set('scenario_state', st);
+  r = runNode('ScenarioManager', { topic: 'poll_state', payload: { ms: 2, velocity_deg_per_sec: 5, resolution: 'high' } }, ctx);
   st = ctx.global.get('scenario_state');
   assert.equal(st.status, 'holding'); assert.equal(st.ready, true);
   assert.ok(r.out[1].some(m => m.topic === 'start_recording'));
@@ -383,4 +385,21 @@ check('BUN AutoTilt: manual mode and missing msg.mode fall back to the stored mo
   runNode('BUN AutoTilt', { topic: 'tilt_mode', payload: 'Автоматический' }, ctx);
   r = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 1800 }, ctx, { runTimers: true });
   assert.equal(ctx.flow.get('bun_auto_state').status, 'moving', 'stored auto mode used when msg.mode is absent');
+});
+
+check('ScenarioManager: ramp after homing/pause is computed from zero speed, not the previous step', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [], scenario_files: ['t.scn'], drive_state: { mo: true, so: true }, drive_init_state: { status: 'done', initialized: true, resolution: 'high', null_mark: 'found' } });
+  ctx.flow.set('motion_params', { sp: 728178, ac: 364088, dc: 364088 }); // 0.5 deg/s^2
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 't.scn' } }, ctx);
+  runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n5 10\n' }, ctx);
+  // stale "current speed" 25 deg/s measured long ago must not shorten the ramp
+  let st = ctx.global.get('scenario_state');
+  st.current_speed_deg_per_sec = 25; st.current_speed_updated_at = Date.now() - 20000; ctx.global.set('scenario_state', st);
+  runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: 'set_jv' } }, ctx);
+  st = ctx.global.get('scenario_state');
+  assert.equal(st.speed_reach_from_deg_per_sec, 0);
+  assert.ok(st.speed_reach_ramp_ms >= 10000, 'ramp from zero: ' + st.speed_reach_ramp_ms);
+  // pause resets the current speed (ST stops the axis)
+  runNode('ScenarioManager', { topic: 'scenario_pause', payload: {} }, ctx);
+  assert.equal(ctx.global.get('scenario_state').current_speed_deg_per_sec, 0);
 });
