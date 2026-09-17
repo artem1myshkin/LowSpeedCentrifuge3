@@ -357,3 +357,30 @@ check('ScenarioManager: MS=2 at steady JV -> ready by TR[3]/TR[4] window after t
   assert.equal(st.status, 'holding');
   assert.ok(r.out[1].some(m => m.topic === 'journal_event' && /окну TR\[3\]/.test(m.payload.message)), JSON.stringify(r.out[1].map(m => m.payload && m.payload.message)));
 });
+
+// ---------------- BUN AutoTilt: mode recognition from both tabs ----------------
+check('BUN AutoTilt: "Авто" from Monitoring runs the automatic sequence (brake release, GO, brake engage)', () => {
+  for (const mode of ['Авто', 'Автоматический', 'Automatic', 'Auto']) {
+    const ctx = makeCtx({ settings, bun: {} });
+    const r = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 3600, mode }, ctx, { runTimers: true });
+    assert.equal(r.out, null);
+    assert.equal(ctx.flow.get('bun_auto_state').status, 'moving', mode);
+    const brakeRelease = r.sent.find(m => m[2] && m[2].topic === 'tilt_brake');
+    assert.ok(brakeRelease && brakeRelease[2].payload === 0, 'brake released first for mode ' + mode);
+    assert.ok(r.sent.some(m => m[1] && m[1].topic === 'bun_cmd' && m[1].payload === 'go'), 'GO sent for ' + mode);
+    // target reached 3 samples in a row -> brake engaged, then release of drivers
+    for (let i = 0; i < 3; i++) runNode('BUN AutoTilt', { topic: 'bun_angle', payload: 3600 }, ctx);
+    assert.equal(ctx.flow.get('bun_auto_state').status, 'complete', mode);
+  }
+});
+
+check('BUN AutoTilt: manual mode and missing msg.mode fall back to the stored mode', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  runNode('BUN AutoTilt', { topic: 'tilt_mode', payload: 'Ручной' }, ctx);
+  let r = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 1800 }, ctx, { runTimers: true });
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'manual_go');
+  assert.ok(!r.sent.some(m => m[2] && m[2].topic === 'tilt_brake'), 'manual: no automatic brake');
+  runNode('BUN AutoTilt', { topic: 'tilt_mode', payload: 'Автоматический' }, ctx);
+  r = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 1800 }, ctx, { runTimers: true });
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'moving', 'stored auto mode used when msg.mode is absent');
+});
