@@ -289,3 +289,71 @@ check('SettingsNormalize: defaults, TR[2]=0 rejected, switch boundary clamped, T
 
 console.log(failures ? ('\n' + failures + ' FAILED') : '\nall harness checks passed');
 process.exit(failures ? 1 : 0);
+
+// ---------------- homing stop on index capture (Recommendations 6, step 6) ----------------
+check('DriveInitState: index capture emits homing_stop; the resulting abort completes the search', () => {
+  const ctx = makeCtx({ settings, current_range: 'high', logs: [] });
+  const meta = { topic: 'driveInit', resolution: 'high', waitForMotionDone: true, revolutionTicks: 262144000, homingSpeedDegSec: 5 };
+  runNode('DriveInitState', { topic: 'CMD.STARTED', payload: { topic: 'driveInit', meta } }, ctx);
+  runNode('DriveInitState', { topic: 'driveInit', payload: { sr: 128, sr_status: { homing_active: true, amplifier_code: 0 }, position: 0, resolution: 'high' } }, ctx);
+  let r = runNode('DriveInitState', { topic: 'poll_data', payload: { sr: 0, sr_status: { homing_active: false, amplifier_code: 0 }, position: 3640889, ms: 2, resolution: 'high' } }, ctx);
+  assert.ok(r.out[2] && r.out[2].topic === 'homing_stop', 'homing_stop must be emitted on output 3: ' + JSON.stringify(r.out[2]));
+  assert.equal(ctx.global.get('drive_init_state').stop_requested, true);
+  // a second poll must not emit the stop again
+  r = runNode('DriveInitState', { topic: 'poll_data', payload: { sr: 0, position: 3640889 * 2, ms: 2, resolution: 'high' } }, ctx);
+  assert.ok(!r || !r.out || !r.out[2], 'no duplicate homing_stop');
+  // transport aborts the revolution because of our ST -> success, not an error
+  r = runNode('DriveInitState', { topic: 'CMD.FAILED', payload: { topic: 'driveInit', reason: 'operator_aborted', meta } }, ctx);
+  assert.equal(r.out[0].payload.status, 'done');
+  assert.equal(r.out[0].payload.null_mark, 'found');
+  assert.ok(/completed/.test(r.out[1].payload.message));
+  // ST;HM[7];PX echo -> HM[7] offset journaled
+  r = runNode('DriveInitState', { topic: 'CMD.ACKED', payload: { topic: 'homing_stop', raw: 'ST;;HM[7];123456;PX;789;MS;0;' } }, ctx);
+  assert.equal(r.out[0].payload.hm7_offset, 123456);
+  assert.ok(/HM\[7\]=123456, PX=789/.test(r.out[1].payload.message), r.out[1].payload.message);
+});
+
+check('DriveInitState: operator STOP without index capture is still a failure', () => {
+  const ctx = makeCtx({ settings, current_range: 'high', logs: [] });
+  const meta = { topic: 'driveInit', resolution: 'high', waitForMotionDone: true };
+  runNode('DriveInitState', { topic: 'CMD.STARTED', payload: { topic: 'driveInit', meta } }, ctx);
+  const r = runNode('DriveInitState', { topic: 'CMD.FAILED', payload: { topic: 'driveInit', reason: 'operator_aborted', meta } }, ctx);
+  assert.equal(r.out[0].payload.status, 'failed');
+});
+
+check('CommandHandler homing_stop -> ST;HM[7];PX;MS', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high' });
+  const r = runNode('CommandHandler', { topic: 'homing_stop', payload: {} }, ctx);
+  assert.equal(r.out.payload, 'ST;HM[7];PX;MS\r');
+});
+
+check('ScenarioManager: homing aborted by homing_stop (index found) continues to the step', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [], scenario_files: ['t.scn'], drive_state: { mo: false, so: false } });
+  ctx.flow.set('motion_params', { sp: 728178, ac: 364088, dc: 364088 });
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 't.scn' } }, ctx);
+  runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n2 10\n' }, ctx);
+  assert.equal(ctx.global.get('scenario_state').status, 'drive_init_pending');
+  ctx.global.set('drive_init_state', { status: 'done', initialized: true, resolution: 'high', null_mark: 'found', stop_requested: true });
+  ctx.global.set('drive_state', { mo: true, so: true });
+  const r = runNode('ScenarioManager', { topic: 'CMD.FAILED', payload: { topic: 'driveInit', reason: 'operator_aborted', meta: { topic: 'driveInit' } } }, ctx);
+  assert.equal(r.out[0][0].topic, 'set_jv', JSON.stringify(r.out[0]));
+  assert.equal(ctx.global.get('scenario_state').status, 'commanding');
+});
+
+check('ScenarioManager: MS=2 at steady JV -> ready by TR[3]/TR[4] window after the ramp', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [], drive_state: { mo: true, so: true }, drive_init_state: { status: 'done', initialized: true, resolution: 'high' } });
+  ctx.flow.set('motion_params', { sp: 728178, ac: 364088, dc: 364088 });
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'high_resolution.scn' } }, ctx);
+  runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n2 10\n' }, ctx);
+  runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: 'set_jv' } }, ctx);
+  let st = ctx.global.get('scenario_state');
+  st.ready_eval.startedAt -= 5000; ctx.global.set('scenario_state', st);
+  runNode('ScenarioManager', { topic: 'poll_state', payload: { ms: 2, velocity_deg_per_sec: 2.0047, resolution: 'high' } }, ctx);
+  st = ctx.global.get('scenario_state');
+  assert.equal(st.ready, false, 'dwell TR[4]=100 ms not elapsed yet');
+  st.ready_eval.inWindowSince -= 200; ctx.global.set('scenario_state', st);
+  const r = runNode('ScenarioManager', { topic: 'poll_state', payload: { ms: 2, velocity_deg_per_sec: 2.0047, resolution: 'high' } }, ctx);
+  st = ctx.global.get('scenario_state');
+  assert.equal(st.status, 'holding');
+  assert.ok(r.out[1].some(m => m.topic === 'journal_event' && /окну TR\[3\]/.test(m.payload.message)), JSON.stringify(r.out[1].map(m => m.payload && m.payload.message)));
+});

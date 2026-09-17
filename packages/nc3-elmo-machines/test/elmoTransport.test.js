@@ -542,7 +542,7 @@ test('POLL.TICK enqueues an extended poll past statePeriod and records lastExten
   assert.equal(cmd, 'MO');
 });
 
-test('fast raw polling uses TM/PX data poll and suppresses periodic state poll', () => {
+test('fast raw polling uses TM/PX data poll and keeps the periodic state poll', () => {
   const h = makeHarness({
     startNow: 2000,
     pollConfig: {
@@ -560,7 +560,8 @@ test('fast raw polling uses TM/PX data poll and suppresses periodic state poll',
   assert.deepEqual(h.ctx().inFlight.cmds, ['TM', 'PX']);
   assert.equal(h.ctx().inFlight.priority, 2.5);
   assert.equal(h.ctx().lastFastPollStartedAt, 2000);
-  assert.equal(h.ctx().queue.length, 0); // no MO/SO/SR while fast raw poll is healthy
+  assert.equal(h.ctx().queue.length, 1); // MO/SO/SR/MS still refreshed at statePeriod during raw recording
+  assert.equal(h.ctx().queue[0].pollRole, 'state');
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'TM');
 
   h.calls.forwardResp.length = 0;

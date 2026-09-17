@@ -190,3 +190,25 @@ test('evaluateMsReady waits for the ramp, then MS=0, then times out', () => {
   assert.equal(unknown.ready, false);
   assert.equal(unknown.ms, null);
 });
+
+test('evaluateMsReady: MS=2 at steady JV is ready once VX stays in the TR[3] window for TR[4] ms', () => {
+  const { evaluateMsReady } = require('../src/scenario');
+  const win = { msTimeoutMs: 10000, targetDegSec: 2, windowDegSec: 0.5, windowMs: 100 };
+  let st = evaluateMsReady(null, 2, 1000, Object.assign({ rampMs: 2100, measuredDegSec: 0.3 }, win));
+  assert.equal(st.phase, 'ramp');
+  st = evaluateMsReady(st, 2, 3200, Object.assign({ measuredDegSec: 2.0047 }, win));
+  assert.equal(st.phase, 'ms_wait');
+  assert.equal(st.inWindow, true);
+  assert.equal(st.ready, false, 'dwell not yet elapsed');
+  st = evaluateMsReady(st, 2, 3350, Object.assign({ measuredDegSec: 2.0047 }, win));
+  assert.equal(st.ready, true);
+  assert.equal(st.readyBy, 'window');
+  // leaving the window resets the dwell
+  let out = evaluateMsReady(null, 2, 1000, Object.assign({ rampMs: 0, measuredDegSec: 1.2 }, win));
+  out = evaluateMsReady(out, 2, 1200, Object.assign({ measuredDegSec: 1.2 }, win));
+  assert.equal(out.ready, false);
+  assert.equal(out.inWindowSince, null);
+  // MS=0 still wins immediately
+  const byMs = evaluateMsReady(null, 0, 1000, Object.assign({ rampMs: 0, measuredDegSec: 1.0 }, win));
+  assert.equal(byMs.readyBy, 'ms');
+});

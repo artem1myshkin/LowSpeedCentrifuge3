@@ -476,9 +476,12 @@ function createElmoTransport(effects) {
         } else if (!hasPollRole(queue, 'data') && !hasPollRoleInFlight(context, 'data')) {
           queue = priorityInsert(queue, buildPollEnvelope({ id: nextId(), role: 'data', options: pollOptions }));
         }
+        // The state poll stays alive during fast raw polling too (4 atomic reads per second,
+        // negligible against 30 Hz TM/PX). Stand finding 2026-09-17: with it suppressed, MS
+        // froze at the value captured right after BG and the scenario's MS criterion timed out
+        // while the speed was already inside the window.
         if (
-          !context.fastRawActive
-          && shouldExtend(context.lastExtendedAt, t, statePeriodMs)
+          shouldExtend(context.lastExtendedAt, t, statePeriodMs)
           && !hasPollRole(queue, 'state')
           && !hasPollRoleInFlight(context, 'state')
         ) {

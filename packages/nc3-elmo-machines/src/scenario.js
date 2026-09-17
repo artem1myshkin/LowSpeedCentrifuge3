@@ -182,8 +182,12 @@ function computeRampMs(targetDegSec, accelerationDegSec2, currentDegSec, deceler
 }
 
 // MS-based readiness (Appendix B item B1.3). Phase 'ramp': the profiler is still accelerating
-// (elapsed < rampMs), MS is ignored. Phase 'ms_wait': ready as soon as the drive reports MS=0
-// (actual speed inside TR[3] for TR[4] ms); MS still != 0 msTimeoutMs after the ramp -> timedOut.
+// (elapsed < rampMs), MS is ignored. Phase 'ms_wait': ready as soon as the drive reports MS=0,
+// OR when the measured speed stays inside the TR[3] window for TR[4] ms (stand finding
+// 2026-09-17: for continuous JV the Platinum keeps MS=2 even at steady speed - table 5.2 gives
+// MS=0 only when the target velocity command is zero - so the same window/dwell the drive
+// would apply is evaluated here on VX). Neither by msTimeoutMs after the ramp -> timedOut.
+//   options.measuredDegSec / targetDegSec / windowDegSec (TR[3]) / windowMs (TR[4])
 function evaluateMsReady(state, ms, nowMs, options) {
   const o = options || {};
   const prev = state || {};
@@ -196,7 +200,19 @@ function evaluateMsReady(state, ms, nowMs, options) {
   const msValue = Number(ms);
   const msKnown = ms !== null && ms !== undefined && Number.isFinite(msValue);
   const inRamp = now < rampEndsAt;
-  const ready = !inRamp && msKnown && msValue === 0;
+
+  const measured = Number(o.measuredDegSec);
+  const target = Number(o.targetDegSec);
+  const windowDegSec = Math.abs(finite(o.windowDegSec, 0));
+  const windowMs = Math.max(0, finite(o.windowMs, 0));
+  const windowKnown = Number.isFinite(measured) && Number.isFinite(target) && windowDegSec > 0;
+  const inWindow = windowKnown && Math.abs(measured - target) <= windowDegSec;
+  const inWindowSince = !inRamp && inWindow ? (prev.inWindowSince || now) : null;
+  const inWindowMs = inWindowSince ? now - inWindowSince : 0;
+
+  const readyByMs = !inRamp && msKnown && msValue === 0;
+  const readyByWindow = !inRamp && inWindow && inWindowMs >= windowMs;
+  const ready = readyByMs || readyByWindow;
   const timedOut = !ready && now >= deadlineAt;
   return {
     startedAt,
@@ -205,6 +221,11 @@ function evaluateMsReady(state, ms, nowMs, options) {
     deadlineAt,
     phase: inRamp ? 'ramp' : 'ms_wait',
     ms: msKnown ? msValue : null,
+    inWindow,
+    inWindowSince,
+    inWindowMs,
+    errorDegSec: windowKnown ? Math.abs(measured - target) : null,
+    readyBy: readyByMs ? 'ms' : (readyByWindow ? 'window' : null),
     ready,
     timedOut,
   };
