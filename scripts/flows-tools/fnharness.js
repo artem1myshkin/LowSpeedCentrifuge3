@@ -403,3 +403,31 @@ check('ScenarioManager: ramp after homing/pause is computed from zero speed, not
   runNode('ScenarioManager', { topic: 'scenario_pause', payload: {} }, ctx);
   assert.equal(ctx.global.get('scenario_state').current_speed_deg_per_sec, 0);
 });
+
+// ---------------- journal refresh must not clobber a running null-mark search ----------------
+check('EventLogService: event_log_refresh keeps the DriveInitState-owned state (progress bar regression)', () => {
+  const ctx = makeCtx({ settings, current_range: 'high', logs: [], drive_init_state: { status: 'initializing', in_progress: true, null_mark: 'searching', homing_armed: true, progress_pct: 37, travel_ticks: 5, last_position: 123, stop_requested: false, resolution: 'high', started_at: Date.now() } });
+  const lines = [JSON.stringify({ time: '10:00:00', type: 'info', message: 'Drive Init: completed (high)', source: 'drive_init' })].join('\n') + '\n';
+  const r = runNode('EventLogService', { topic: 'event_log_refresh', journalAction: 'event_log_result', payload: lines }, ctx);
+  const st = ctx.global.get('drive_init_state');
+  assert.equal(st.in_progress, true);
+  assert.equal(st.progress_pct, 37);
+  assert.equal(st.homing_armed, true);
+  const emitted = (r.out[0] || []).find(m => m && m.topic === 'drive_init_state');
+  assert.ok(emitted && emitted.payload.in_progress === true, 'UI gets the live state, not a journal-derived one');
+  // after a restart (no state in global) the journal still restores the last known status
+  const ctx2 = makeCtx({ settings, current_range: 'high', logs: [] });
+  runNode('EventLogService', { topic: 'event_log_refresh', journalAction: 'event_log_result', payload: lines }, ctx2);
+  assert.equal(ctx2.global.get('drive_init_state').status, 'done');
+});
+
+check('DriveInitState: progress keeps accumulating between polls when the visible state is unchanged', () => {
+  const ctx = makeCtx({ settings, current_range: 'high', logs: [] });
+  const meta = { topic: 'driveInit', resolution: 'high', waitForMotionDone: true, revolutionTicks: 262144000, homingSpeedDegSec: 5 };
+  runNode('DriveInitState', { topic: 'CMD.STARTED', payload: { topic: 'driveInit', meta } }, ctx);
+  // 0.5 deg per poll: pct stays 0 for the first samples, but travel/last_position must persist
+  for (let k = 1; k <= 8; k++) runNode('DriveInitState', { topic: 'poll_data', payload: { sr: 128, position: Math.round(k * 0.5 * 728177.78), ms: 2, resolution: 'high' } }, ctx);
+  const st = ctx.global.get('drive_init_state');
+  assert.ok(Math.abs(st.travel_ticks / 728177.78 - 3.5) < 0.01, 'travel 3.5 deg, got ' + st.travel_ticks / 728177.78);
+  assert.equal(st.progress_pct, 1);
+});
