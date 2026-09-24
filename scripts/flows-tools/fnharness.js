@@ -27,7 +27,12 @@ function runNode(name, msg, ctx, opts) {
   const fakeTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
   const fn = new Function('msg', 'node', 'global', 'flow', 'context', 'setTimeout', 'clearTimeout', 'RED', 'env', n.func);
   const out = fn(msg, node, ctx.global, ctx.flow, ctx.context, fakeTimeout, () => {}, {}, { get: () => undefined });
-  if (opts && opts.runTimers) timers.sort((a, b) => a.ms - b.ms).forEach(t => t.fn());
+  // runTimers fires the SHORT timers only (sequencing delays), never long watchdogs such as
+  // the 60 s tilt timeout — otherwise every automatic sequence would look like a timeout.
+  if (opts && opts.runTimers) {
+    const maxMs = opts.maxTimerMs == null ? 2000 : opts.maxTimerMs;
+    timers.filter(t => t.ms <= maxMs).sort((a, b) => a.ms - b.ms).forEach(t => t.fn());
+  }
   return { out, sent, logs, timers };
 }
 
@@ -71,7 +76,7 @@ check('CommandHandler manual driveInit: HM reset + one revolution, MS completion
 
 check('CommandHandler full driveInit: stage 3 writes TR from settings and PX=0; stage 5 has HM reset', () => {
   const ctx = makeCtx({ settings, nc3, current_range: 'high' });
-  const r = runNode('CommandHandler', { topic: 'driveInit', payload: { resolution: 'low', mode: 'full' } }, ctx, { runTimers: true });
+  const r = runNode('CommandHandler', { topic: 'driveInit', payload: { resolution: 'low', mode: 'full' } }, ctx, { runTimers: true, maxTimerMs: Infinity });
   assert.equal(r.out, null);
   assert.equal(r.sent.length, 5);
   const stage3 = r.sent[2][0].payload;
@@ -181,7 +186,7 @@ check('DriveInitState: homing lifecycle with SR bit 7, angle progress and comple
   const st = ctx.global.get('drive_init_state');
   assert.equal(st.null_mark, 'found');
   assert.equal(st.progress_pct, 25, 'jump must not count as travel');
-  assert.ok(r.out[1] && /метка найдена/.test(r.out[1].payload.message), JSON.stringify(r.out[1]));
+  assert.ok([].concat(r.out[1] || []).some(m => m && /метка найдена/.test(m.payload.message)), JSON.stringify(r.out[1]));
   for (let k = 1; k <= 60; k++) runNode('DriveInitState', { topic: 'poll_data', payload: { sr: 0, position: 500 + k * 3640889, ms: 2, resolution: 'high' } }, ctx);
   assert.equal(ctx.global.get('drive_init_state').progress_pct, 99);
   r = runNode('DriveInitState', { topic: 'CMD.COMPLETED', payload: { type: 'CMD.COMPLETED', topic: 'driveInit', meta, raw: 'MS;0;TM;1;PX;2;VX;0;SR;0;' } }, ctx);
@@ -289,8 +294,6 @@ check('SettingsNormalize: defaults, TR[2]=0 rejected, switch boundary clamped, T
   assert.equal(r.out[1], null, 'no TR change -> no apply');
 });
 
-console.log(failures ? ('\n' + failures + ' FAILED') : '\nall harness checks passed');
-process.exit(failures ? 1 : 0);
 
 // ---------------- homing stop on index capture (Recommendations 6, step 6) ----------------
 check('DriveInitState: index capture emits homing_stop; the resulting abort completes the search', () => {
@@ -431,3 +434,109 @@ check('DriveInitState: progress keeps accumulating between polls when the visibl
   assert.ok(Math.abs(st.travel_ticks / 728177.78 - 3.5) < 0.01, 'travel 3.5 deg, got ' + st.travel_ticks / 728177.78);
   assert.equal(st.progress_pct, 1);
 });
+
+// ---------------- iteration 2: safety, data file, pressure, journal depth ----------------
+check('CommandGate: stop commands pass in every remote-mode combination', () => {
+  const remote = { remoteEnabled: true, ownerSocketId: 'sock-remote', ownerIp: '10.0.0.5' };
+  for (const topic of ['emergency_stop', 'drive_stop', 'motor_off', 'scenario_emergency_stop', 'scenario_stop']) {
+    const ctx = makeCtx({ remoteSession: remote });
+    const local = runNode('CommandGate', { topic, payload: {}, _client: { socketIp: '127.0.0.1', socketId: 'loc' } }, ctx);
+    assert.ok(local.out[0], 'local ' + topic + ' must pass while the remote owns control');
+    const ctx2 = makeCtx({ remoteSession: remote });
+    const other = runNode('CommandGate', { topic, payload: {}, _client: { socketIp: '10.0.0.9', socketId: 'other' } }, ctx2);
+    assert.ok(other.out[0], 'non-owner ' + topic + ' must pass (stopping is fail-safe)');
+  }
+  // a control command from the local client is still blocked while the remote owns control
+  const ctx3 = makeCtx({ remoteSession: remote });
+  const blocked = runNode('CommandGate', { topic: 'set_jv', payload: {}, _client: { socketIp: '127.0.0.1', socketId: 'loc' } }, ctx3);
+  assert.equal(blocked.out[0], null);
+  assert.ok(blocked.out[1]);
+});
+
+check('angle_buffer: TM overflow (~71.6 min) is compensated', () => {
+  const ctx = makeCtx({ is_recording: true, current_range: 'high', recording_duration_sec: 100000 });
+  const feed = (tm, px) => runNode('angle_buffer', { topic: 'poll_data', payload: { position: px, tm_us: tm, resolution: 'high' } }, ctx);
+  feed(4294900000, 1000);
+  feed(4294960000, 2000);
+  feed(30000, 3000); // wrapped
+  feed(90000, 4000);
+  const buf = ctx.global.get('angle_buffer');
+  assert.equal(buf.length, 4);
+  const t = buf.map(p => p.t);
+  for (let i = 1; i < t.length; i++) assert.ok(t[i] > t[i - 1], 'time must increase across the wrap: ' + JSON.stringify(t));
+  assert.ok(Math.abs((t[3] - t[0]) - 0.157296) < 0.001, 'span 0.157296 s, got ' + (t[3] - t[0]));
+});
+
+check('ProtocolManager data file: degrees column, normalized time, encoding fields', () => {
+  const s2 = JSON.parse(JSON.stringify(settings)); s2.general.recordingSaveRawData = true;
+  const ctx = makeCtx({ current_range: 'high', recording_duration_sec: 60, velocity_setpoint_ticks: 728178, protocol_open: true, protocol_filename: 'C:\\NC3\\protocols\\protocol_x.txt', is_recording: true, is_recording_raw: true, recording_save_raw_data: true, settings: s2 });
+  const base = 4000.0;
+  const buf = [];
+  for (let i = 0; i < 20; i++) buf.push({ t: base + i * 0.1, tm_us: (base + i * 0.1) * 1e6, ticks: Math.round(i * 0.1 * 728177.78), angle: i * 0.1, resolution: 'high' });
+  ctx.global.set('angle_buffer', buf);
+  const r = runNode('ProtocolManager', { topic: 'close_protocol', payload: {} }, ctx);
+  const msgs = [].concat(r.out[0] || [], r.out[1] || [], r.out[2] || []).filter(Boolean);
+  const dataMsg = msgs.find(m => m && typeof m.filename === 'string' && m.filename.indexOf('\\data\\') >= 0);
+  assert.ok(dataMsg, 'data file written: ' + JSON.stringify(msgs.map(m => m && m.filename)));
+  const text = String(dataMsg.payload);
+  assert.ok(text.includes('Время  Угол  Метки # секунда  градус  тики'), 'header: ' + text.split('\n').find(l => l.startsWith('Время')));
+  assert.ok(text.includes('Кодировка          UTF-8'));
+  assert.ok(text.includes('Десятичный_разделитель .'));
+  const rows = text.split('\n').filter(l => /^\d/.test(l));
+  assert.equal(rows[0].split(/\s+/)[0], '0.0000', 'time normalized from zero: ' + rows[0]);
+  const parts = rows[1].split(/\s+/);
+  assert.ok(Math.abs(Number(parts[1]) - 0.1) < 1e-4, 'angle in degrees: ' + rows[1]);
+  assert.ok(Number(parts[2]) > 1000, 'ticks kept as the third column: ' + rows[1]);
+});
+
+check('ResponseParser: AN[1] -> pressure by settings, STO flag from SR code 7', () => {
+  const s2 = JSON.parse(JSON.stringify(settings));
+  s2.advanced.pressure = { enabled: true, scalePerVolt: 2, offset: 0.5, unit: 'атм', warnBelow: 4 };
+  const ctx = makeCtx({ settings: s2 });
+  let p = runNode('ResponseParser', { topic: 'poll_state', payload: 'AN[1];3.0;' }, ctx).out.payload;
+  assert.equal(p.pressure_volts, 3);
+  assert.equal(p.pressure_value, 6.5);
+  assert.equal(p.pressure_low, false);
+  assert.equal(ctx.global.get('pressure_state').value, 6.5);
+  p = runNode('ResponseParser', { topic: 'poll_state', payload: 'AN[1];1.0;' }, ctx).out.payload;
+  assert.equal(p.pressure_value, 2.5);
+  assert.equal(p.pressure_low, true, 'below the warning threshold');
+  const sr = runNode('ResponseParser', { topic: 'poll_state', payload: 'SR;7;' }, ctx).out.payload;
+  assert.equal(sr.sr_status.sto_active, true);
+  assert.equal(sr.sr_status.amplifier_code, 7);
+});
+
+check('DriveInitState journals pressure/STO transitions once per change', () => {
+  const ctx = makeCtx({ settings, current_range: 'high', logs: [] });
+  const poll = (d) => runNode('DriveInitState', { topic: 'poll_state', payload: Object.assign({ resolution: 'high' }, d) }, ctx);
+  let r = poll({ pressure_value: 6, pressure_unit: 'атм', pressure_low: false, sr_status: { amplifier_code: 0, sto_active: false } });
+  r = poll({ pressure_value: 2, pressure_unit: 'атм', pressure_low: true, sr_status: { amplifier_code: 0, sto_active: false } });
+  const lowMsgs = [].concat(r.out[1] || []).filter(Boolean);
+  assert.ok(lowMsgs.some(m => /Низкое давление/.test(m.payload.message)), JSON.stringify(lowMsgs));
+  r = poll({ pressure_value: 2, pressure_unit: 'атм', pressure_low: true, sr_status: { amplifier_code: 0, sto_active: false } });
+  assert.ok(!r || !r.out || !r.out[1] || [].concat(r.out[1]).filter(Boolean).length === 0, 'no repeat while the state is unchanged');
+  r = poll({ pressure_value: 2, pressure_unit: 'атм', pressure_low: true, sr_status: { amplifier_code: 7, sto_active: true } });
+  const stoMsgs = [].concat(r.out[1] || []).filter(Boolean);
+  assert.ok(stoMsgs.some(m => /STO/.test(m.payload.message)), JSON.stringify(stoMsgs));
+});
+
+check('EventLogService: journal depth filters what reaches the file, not the UI', () => {
+  const logs = [
+    { time: '10:00:00', type: 'info', message: 'i1', source: 's' },
+    { time: '10:00:01', type: 'warning', message: 'w1', source: 's' },
+    { time: '10:00:02', type: 'error', message: 'e1', source: 's' },
+  ];
+  const lvl = (level) => {
+    const s2 = JSON.parse(JSON.stringify(settings)); s2.advanced.journalLevel = level;
+    const ctx = makeCtx({ settings: s2, logs: [] });
+    const r = runNode('EventLogService', { topic: 'logs_update', payload: { logs } }, ctx);
+    const appended = r.out[1] ? String(r.out[1].payload).trim().split('\n') : [];
+    return { ui: r.out[0].payload.logs.length, file: appended.length };
+  };
+  assert.deepEqual(lvl('all'), { ui: 3, file: 3 });
+  assert.deepEqual(lvl('warnings'), { ui: 3, file: 2 });
+  assert.deepEqual(lvl('errors'), { ui: 3, file: 1 });
+});
+
+console.log(failures ? ('\n' + failures + ' FAILED') : '\nall harness checks passed');
+process.exit(failures ? 1 : 0);

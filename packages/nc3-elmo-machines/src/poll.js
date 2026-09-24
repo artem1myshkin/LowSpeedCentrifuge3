@@ -31,6 +31,7 @@ const FIELD_KEYS = {
   'OL[2]': 'ol2',
   'KP[2]': 'kp2',
   'VH[2]': 'vh2',
+  'AN[1]': 'an1',
 };
 
 // State poll: small live health fields, emitted ~once per second (§4.4.4).
@@ -62,7 +63,9 @@ function buildPollFields(role, options) {
   else if (role === 'fast_data') fields = FAST_DATA_POLL_FIELDS.slice();
   else if (role === 'init_params') fields = INIT_PARAMS_POLL_FIELDS.slice();
   else fields = DATA_POLL_FIELDS.slice();
-  if (role === 'full_state' && opts.analogParam) fields.push(String(opts.analogParam));
+  // Аналоговый вход датчика давления (Appendix B item B4.1) читается вместе с health-полями
+  // в периодическом state-poll (~1 Hz), а не только в редком full-state.
+  if ((role === 'full_state' || role === 'state') && opts.analogParam) fields.push(String(opts.analogParam));
   return fields;
 }
 

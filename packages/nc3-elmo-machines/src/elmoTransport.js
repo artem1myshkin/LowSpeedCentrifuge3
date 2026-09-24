@@ -456,6 +456,7 @@ function createElmoTransport(effects) {
         if (f.af !== undefined) patch.af = f.af;
         if (f.kp2 !== undefined) patch.kp2 = f.kp2;
         if (f.vh2 !== undefined) patch.vh2 = f.vh2;
+        if (f.an1 !== undefined) patch.an1 = f.an1;
         if (isFastPollRole(pollRoleOf(context.inFlight)) && f.vx !== undefined) {
           Object.assign(patch, fastStabilityPatch(context, f.vx));
         }
@@ -780,6 +781,7 @@ function createElmoTransport(effects) {
         motionPollParts: [],
         kp2: null,
         vh2: null,
+        an1: null,
       };
     },
     initial: 'offline',

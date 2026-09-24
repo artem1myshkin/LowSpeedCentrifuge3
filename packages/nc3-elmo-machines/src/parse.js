@@ -33,6 +33,7 @@ function setScalar(out, param, value) {
     case 'OL[2]': out.ol2 = v; return true;
     case 'KP[2]': out.kp2 = v; return true;
     case 'VH[2]': out.vh2 = v; return true;
+    case 'AN[1]': out.an1 = v; return true;
     default:
       return false;
   }

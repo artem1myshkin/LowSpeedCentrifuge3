@@ -76,6 +76,16 @@ function feedStatePoll(h, opts = {}) {
   h.actor.send({ type: 'ELMO.RESP', raw: opts.ms || 'MS;3;' });
 }
 
+test('analogParam adds the pressure input to the periodic state poll', () => {
+  const { buildPollEnvelope, buildStatePoll } = require('../src/poll');
+  const env = buildPollEnvelope({ id: 'p', role: 'state', options: { analogParam: 'AN[1]' } });
+  assert.deepEqual(env.cmds, ['MO', 'SO', 'SR', 'MS', 'AN[1]']);
+  assert.deepEqual(env.required, ['mo', 'so', 'sr', 'ms', 'an1']);
+  assert.equal(buildStatePoll({ analogParam: 'AN[1]' }), 'MO;SO;SR;MS;AN[1];');
+  // without the option the poll is unchanged
+  assert.deepEqual(buildPollEnvelope({ id: 'p', role: 'state' }).cmds, ['MO', 'SO', 'SR', 'MS']);
+});
+
 function feedFullStatePoll(h, opts = {}) {
   h.actor.send({ type: 'ELMO.RESP', raw: opts.ms || 'MS;3;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.mo || 'MO;0;' });
