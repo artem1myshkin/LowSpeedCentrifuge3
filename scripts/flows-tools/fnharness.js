@@ -45,7 +45,7 @@ const settings = {
     speedReadyCriterion: 'ms', rotationCommandMode: 'JV', speedReachTimeoutMs: 10000, speedStableTimeMs: 1000,
     homingSpeedDegSec: 5, homingAccelDegSec2: 1, homingSrBit: 7, speedRangeToleranceDegSec: 5,
     trWindows: { high: { positionWindowDeg: 0.02, positionTimeMs: 120, speedWindowDegSec: 0.5, speedTimeMs: 100 }, low: { positionWindowDeg: 0.01, positionTimeMs: 100, speedWindowDegSec: 0.5, speedTimeMs: 100 } },
-    rotationSpeedRanges: { high: { min: { decimalDeg: 0.000277778 }, max: { decimalDeg: 20 } }, low: { min: { decimalDeg: 10 }, max: { decimalDeg: 360 } } },
+    encoderSwitchHysteresisDegSec: 5,
   },
 };
 
@@ -114,16 +114,27 @@ check('CommandHandler high TR windows from settings (0.02° -> 14564 ticks, 120 
   assert.equal(r.out.payload, 'TR[1]=14564;TR[2]=120;TR[3]=364089;TR[4]=100;TR[1];TR[2];TR[3];TR[4]\r');
 });
 
-check('CommandHandler speed limit uses drive VH[2] when known for this pair', () => {
-  const ctx = makeCtx({ settings, nc3, current_range: 'high' });
-  ctx.flow.set('poll_buffer', { vh2: 7281778, vh2_resolution: 'high' }); // 10 deg/s from the drive
+check('CommandHandler: the only speed limit is |v| <= VH[2] of the pair', () => {
+  // VH[2] read back from the drive for the high pair: 7281778 ticks/s = 10 deg/s
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', drive_vh2_ticks: { high: 7281778 } });
   const r = runNode('CommandHandler', { topic: 'set_jv', payload: { ticks: 8000000 } }, ctx); // 11 deg/s
   assert.equal(r.out, null, 'above VH[2] must be rejected');
-  assert.ok(r.logs.some(l => /outside allowed range/.test(String(l[1]))));
+  assert.ok(r.logs.some(l => /exceeds VH\[2\]/.test(String(l[1]))), JSON.stringify(r.logs));
   assert.equal(ctx.global.get('drive_limits').speed_max_ticks, 7281778);
-  assert.equal(ctx.global.get('drive_limits').drive_vh2_ticks, 7281778);
+  assert.equal(ctx.global.get('drive_limits').speed_min_ticks, 0, 'no lower limit any more');
   const ok = runNode('CommandHandler', { topic: 'set_jv', payload: { ticks: 7000000 } }, ctx);
   assert.ok(ok.out && ok.out.payload.startsWith('AC='), 'below VH[2] accepted');
+  // reverse rotation is compared by magnitude
+  assert.equal(runNode('CommandHandler', { topic: 'set_jv', payload: { ticks: -8000000 } }, ctx).out, null);
+  const back = runNode('CommandHandler', { topic: 'set_jv', payload: { ticks: -7000000 } }, ctx);
+  assert.ok(back.out && back.out.payload.indexOf('JV=-7000000') >= 0, back.out && back.out.payload);
+  // a tiny speed that the old custom range would have rejected is now valid
+  const slow = runNode('CommandHandler', { topic: 'set_jv', payload: { ticks: 20 } }, ctx);
+  assert.ok(slow.out && slow.out.payload.indexOf('JV=20') >= 0);
+  // without a drive value the nominal VH[2] of the pair is used
+  const ctx2 = makeCtx({ settings, nc3, current_range: 'high' });
+  runNode('CommandHandler', { topic: 'reread', payload: null }, ctx2);
+  assert.equal(ctx2.global.get('drive_limits').speed_max_ticks, 34952533);
 });
 
 // ---------------- ResponseParser ----------------
@@ -150,14 +161,21 @@ check('ResponseParser: MS null until read, SR bit 7 -> homing_active, TR[2]/TR[4
   assert.equal(p2.sr_status.homing_active, false);
 });
 
-check('ResponseParser: VH[2] from the drive caps drive_limits for the same pair only', () => {
+check('ResponseParser: VH[2] is remembered per head pair and drives the limits', () => {
   const ctx = makeCtx({ settings });
   const p = parse(ctx, 'OL[1];0;VH[2];7281778;').payload;
   assert.equal(p.drive_limits.speed_max_ticks, 7281778);
-  assert.equal(p.drive_limits.drive_vh2_ticks, 7281778);
-  const q = parse(ctx, 'OL[1];1;').payload; // switched to low: stale high VH[2] must not cap
-  assert.equal(q.drive_limits.drive_vh2_ticks, null);
+  assert.equal(p.drive_limits.speed_min_ticks, 0);
+  assert.equal(ctx.global.get('drive_vh2_ticks').high, 7281778);
+  // switched to the low pair: its own VH[2] is not known yet -> nominal, never the high value
+  const q = parse(ctx, 'OL[1];1;').payload;
   assert.equal(q.drive_limits.speed_max_ticks, 6553600);
+  const r = parse(ctx, 'VH[2];3276800;').payload; // low pair reports its own limit
+  assert.equal(r.drive_limits.speed_max_ticks, 3276800);
+  assert.equal(ctx.global.get('drive_vh2_ticks').low, 3276800);
+  // back to the high pair: the value read earlier is reused
+  const t = parse(ctx, 'OL[1];0;').payload;
+  assert.equal(t.drive_limits.speed_max_ticks, 7281778);
 });
 
 // ---------------- Tilt ----------------
@@ -281,17 +299,43 @@ check('ScenarioManager: JP mode falls back to the software criterion', () => {
 });
 
 // ---------------- SettingsNormalize ----------------
-check('SettingsNormalize: defaults, TR[2]=0 rejected, switch boundary clamped, TR apply only on change', () => {
-  const ctx = makeCtx({});
-  let r = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: { trWindows: { high: { positionTimeMs: 0 } }, encoderSwitchSpeed: { decimalDeg: 30 } } } }, ctx);
+check('SettingsNormalize: defaults, TR[2]=0 rejected, legacy range keys dropped, TR apply only on change', () => {
+  const ctx = makeCtx({ drive_vh2_ticks: { high: 7281778 } });
+  let r = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: {
+    trWindows: { high: { positionTimeMs: 0 } },
+    encoderSwitchSpeed: { decimalDeg: 30 },
+    rotationSpeedRanges: { high: { min: { decimalDeg: 1 }, max: { decimalDeg: 20 } } },
+    speedRangeToleranceDegSec: 5,
+    encoderSwitchHysteresisDegSec: 7,
+  } } }, ctx);
   const s = r.out[0].payload;
   assert.equal(s.advanced.speedReadyCriterion, 'ms');
   assert.equal(s.advanced.rotationCommandMode, 'JV');
   assert.equal(s.advanced.trWindows.high.positionTimeMs, 100);
-  assert.equal(s.advanced.encoderSwitchSpeed.decimalDeg, 20, 'clamped to high max');
+  // custom ranges and the hand-entered boundary are gone; limits come from VH[2]
+  assert.equal(s.advanced.rotationSpeedRanges, undefined);
+  assert.equal(s.advanced.encoderSwitchSpeed, undefined);
+  assert.equal(s.advanced.speedRangeToleranceDegSec, undefined);
+  assert.equal(s.advanced.encoderSwitchHysteresisDegSec, 7, 'hysteresis stays configurable');
+  assert.deepEqual(s.advanced.driveVh2Ticks, { high: 7281778 });
   assert.equal(r.out[1].topic, 'apply_tr_windows');
   r = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { general: { recordingSaveRawData: true } } }, ctx);
   assert.equal(r.out[1], null, 'no TR change -> no apply');
+});
+
+check('Scenario range switching follows VH[2] of the high pair', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [], drive_state: { mo: true, so: true }, drive_init_state: { status: 'done', initialized: true, resolution: 'high' } });
+  // 30 deg/s fits the high pair (VH[2] ~48), so the scenario must not switch pairs
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'high_resolution.scn' } }, ctx);
+  let r = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n30 10\n' }, ctx);
+  assert.equal(r.out[0][0].topic, 'set_jv', JSON.stringify(r.out[0]));
+  assert.equal(ctx.global.get('scenario_state').steps[0].resolution, 'high');
+  // above the high-pair VH[2] the scenario asks for the low pair
+  const ctx2 = makeCtx({ settings, nc3, current_range: 'high', logs: [], drive_state: { mo: true, so: true }, drive_init_state: { status: 'done', initialized: true, resolution: 'high' } });
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'high_resolution.scn' } }, ctx2);
+  r = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n120 10\n' }, ctx2);
+  assert.equal(ctx2.global.get('scenario_state').steps[0].resolution, 'low');
+  assert.equal(ctx2.global.get('scenario_state').status, 'range_switch_pending');
 });
 
 
@@ -536,6 +580,31 @@ check('EventLogService: journal depth filters what reaches the file, not the UI'
   assert.deepEqual(lvl('all'), { ui: 3, file: 3 });
   assert.deepEqual(lvl('warnings'), { ui: 3, file: 2 });
   assert.deepEqual(lvl('errors'), { ui: 3, file: 1 });
+});
+
+check('ScenarioManager uses the live drive VH[2] and publishes the step speed limit', () => {
+  // low pair VH[2] read from the drive: 3276800 ticks/s = 180 deg/s
+  const base = { settings, nc3, current_range: 'high', logs: [], drive_vh2_ticks: { low: 3276800 },
+    drive_state: { mo: true, so: true }, drive_init_state: { status: 'done', initialized: true, resolution: 'high' } };
+  const ctx = makeCtx(base);
+  let r = runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'a.scn' } }, ctx);
+  r = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n200 10\n' }, ctx);
+  assert.equal(ctx.global.get('scenario_state').status, 'error', '200 deg/s is above the drive VH[2] of the low pair');
+  const ui = [].concat(r.out[2] || []).find(m => m && m.topic === 'scenario_state');
+  assert.ok(ui && Math.abs(ui.payload.speed_limit_deg_per_sec - 180) < 1e-6, JSON.stringify(ui && ui.payload.speed_limit_deg_per_sec));
+  const ctx2 = makeCtx(base);
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'a.scn' } }, ctx2);
+  runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n-170 10\n' }, ctx2);
+  assert.notEqual(ctx2.global.get('scenario_state').status, 'error', 'reverse speed within VH[2] is valid');
+});
+
+check('CommandHandler rejects PA/PR targets outside the int32 drive range', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high' });
+  const body = { sp_ticks: 100000, ac_ticks: 100000, dc_ticks: 100000 };
+  assert.equal(runNode('CommandHandler', { topic: 'set_absolute_position', payload: Object.assign({ ticks: 2147483648 }, body) }, ctx).out, null);
+  assert.equal(runNode('CommandHandler', { topic: 'set_relative_position', payload: Object.assign({ ticks: -2147483648 }, body) }, ctx).out, null);
+  const ok = runNode('CommandHandler', { topic: 'set_relative_position', payload: Object.assign({ ticks: -728178 }, body) }, ctx);
+  assert.ok(ok.out && ok.out.payload.indexOf('PR=-728178') >= 0, ok.out && ok.out.payload);
 });
 
 console.log(failures ? ('\n' + failures + ' FAILED') : '\nall harness checks passed');

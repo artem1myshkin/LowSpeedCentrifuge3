@@ -64,4 +64,24 @@ function degPerSecToTicks(degPerSec, resolution) {
   return Math.round(degPerSec * ticksPerDeg(resolution));
 }
 
-module.exports = { RES, resKey, ticksPerRev, ticksPerDeg, degPerSecToTicks };
+// Maximum speed of a head pair in deg/s: the drive's own VH[2] limit, which is the single
+// source of truth for every speed limit in the software (no custom per-pair ranges any more).
+// `driveVh2Ticks` is the value actually read back from the drive for that pair, when known.
+function vh2DegPerSec(resolution, driveVh2Ticks) {
+  const key = resKey(resolution);
+  const ticks = Number(driveVh2Ticks);
+  const value = Number.isFinite(ticks) && ticks > 0 ? ticks : RES[key].vh2;
+  return value / ticksPerDeg(key);
+}
+
+// Per-pair VH[2] map in deg/s, with live drive values applied on top of the nominal table.
+// `driveVh2TicksByRes` example: { high: 34952533, low: 6553600 }.
+function vh2MapDegPerSec(driveVh2TicksByRes) {
+  const src = driveVh2TicksByRes || {};
+  return {
+    high: vh2DegPerSec('high', src.high),
+    low: vh2DegPerSec('low', src.low),
+  };
+}
+
+module.exports = { RES, resKey, ticksPerRev, ticksPerDeg, degPerSecToTicks, vh2DegPerSec, vh2MapDegPerSec };

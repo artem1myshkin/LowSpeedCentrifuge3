@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const {
+  speedAllowedInRange,
   scenarioOptions,
   selectResolutionForSpeed,
   computeSpeedReachTimeoutMs,
@@ -17,39 +18,46 @@ const {
   evaluateSpeedReady,
 } = require('../src/scenario');
 
-test('scenarioOptions uses non-zero settings ranges and falls back from zero values', () => {
-  const settings = {
-    advanced: {
-      encoderSwitchSpeed: { decimalDeg: 0 },
-      rotationSpeedRanges: {
-        high: { min: { decimalDeg: 0 }, max: { decimalDeg: 48 } },
-        low: { min: { decimalDeg: 0 }, max: { decimalDeg: 400 } },
-      },
-    },
-    general: {
-      speedReadyTolerancePercent: 7,
-    },
-  };
-  const opts = scenarioOptions(settings);
-  assert.equal(opts.ranges.high.minDeg, 1 / 3600);
-  assert.equal(opts.ranges.high.maxDeg, 48);
-  assert.equal(opts.ranges.low.minDeg, 10);
-  assert.equal(opts.ranges.low.maxDeg, 360);
-  assert.equal(opts.switchBoundaryDegSec, 20);
+test('scenarioOptions takes speed limits from VH[2], not from custom ranges', () => {
+  const opts = scenarioOptions({ general: { speedReadyTolerancePercent: 7 } });
+  // nominal VH[2] of the head pairs: 34952533 ticks (~48 deg/s) and 6553600 ticks (360 deg/s)
+  assert.ok(Math.abs(opts.vh2DegSec.high - 48) < 0.01, 'high ' + opts.vh2DegSec.high);
+  assert.equal(opts.vh2DegSec.low, 360);
+  assert.equal(opts.switchBoundaryDegSec, opts.vh2DegSec.high, 'boundary is the high-pair VH[2]');
+  assert.equal(opts.switchHysteresisDegSec, 5);
   assert.equal(opts.speedReadyTolerancePercent, 7);
+  assert.equal(opts.ranges, undefined, 'custom ranges are gone');
+  // VH[2] actually read from the drive wins over the nominal table
+  const live = scenarioOptions({ advanced: { driveVh2Ticks: { high: 7281778 } } });
+  assert.ok(Math.abs(live.vh2DegSec.high - 10) < 0.001, 'high ' + live.vh2DegSec.high);
+  assert.ok(Math.abs(live.switchBoundaryDegSec - 10) < 0.001);
 });
 
-test('selectResolutionForSpeed keeps current range inside 20 deg/s +/-5 hysteresis', () => {
-  assert.equal(selectResolutionForSpeed(22, 'high').resolution, 'high');
-  assert.equal(selectResolutionForSpeed(22, 'low').resolution, 'low');
-  assert.equal(selectResolutionForSpeed(26, 'high').resolution, 'low');
-  assert.equal(selectResolutionForSpeed(14, 'low').resolution, 'high');
+test('selectResolutionForSpeed switches at the high-pair VH[2] with hysteresis, by absolute speed', () => {
+  // VH[2] high ~48 deg/s, hysteresis 5 deg/s: high pair up to 48, back from low below 43.
+  assert.equal(selectResolutionForSpeed(30, 'high').resolution, 'high');
+  assert.equal(selectResolutionForSpeed(-30, 'high').resolution, 'high', 'sign is direction only');
+  assert.equal(selectResolutionForSpeed(60, 'high').resolution, 'low');
+  assert.equal(selectResolutionForSpeed(-60, 'high').resolution, 'low');
+  assert.equal(selectResolutionForSpeed(45, 'low').resolution, 'low', 'inside the hysteresis band stays low');
+  assert.equal(selectResolutionForSpeed(40, 'low').resolution, 'high');
+  assert.equal(selectResolutionForSpeed(-40, 'low').resolution, 'high');
+  // a drive VH[2] read back for the high pair moves the boundary with it
+  const override = { driveVh2Ticks: { high: 7281778 } }; // 10 deg/s
+  assert.equal(selectResolutionForSpeed(12, 'high', null, override).resolution, 'low');
+  assert.equal(selectResolutionForSpeed(8, 'high', null, override).resolution, 'high');
 });
 
-test('selectResolutionForSpeed rejects low-range absolute max above 360 deg/s', () => {
+test('selectResolutionForSpeed rejects speeds above the low-pair VH[2]', () => {
   const selected = selectResolutionForSpeed(361, 'low');
   assert.equal(selected.ok, false);
-  assert.equal(selected.reason, 'above_low_absolute_max');
+  assert.equal(selected.reason, 'above_vh2');
+  assert.equal(selected.maxDeg, 360);
+  assert.equal(selectResolutionForSpeed(-361, 'low').ok, false);
+  // there is no lower limit any more: any small speed is valid on the high pair
+  assert.equal(selectResolutionForSpeed(0.0001, 'high').resolution, 'high');
+  assert.equal(speedAllowedInRange(0.0001, 'high').ok, true);
+  assert.equal(speedAllowedInRange(-48.5, 'high').ok, false, 'above the high-pair VH[2]');
 });
 
 test('computeSpeedReachTimeoutMs uses target speed, acceleration and reserve', () => {
@@ -112,10 +120,22 @@ Name switch_test
 
   assert.equal(normalized.steps[0].resolution, 'high');
   assert.equal(normalized.steps[0].range_switch_required, false);
+  // 30 deg/s still fits the high pair (VH[2] ~48), so no switch happens any more
+  assert.equal(normalized.steps[1].resolution, 'high');
+  assert.equal(normalized.steps[1].range_switch_required, false);
+  assert.equal(normalized.steps[2].resolution, 'high');
+  assert.equal(normalized.steps[2].range_switch_required, false);
+});
+
+test('normalizeScenario switches pairs above the high-pair VH[2]', () => {
+  const normalized = normalizeScenario('-----\n5 30\n120 60\n30 45\n', 'high');
+  assert.equal(normalized.steps[0].resolution, 'high');
   assert.equal(normalized.steps[1].resolution, 'low');
   assert.equal(normalized.steps[1].range_switch_required, true);
-  assert.equal(normalized.steps[2].resolution, 'low');
-  assert.equal(normalized.steps[2].range_switch_required, false);
+  // 30 deg/s is below the hysteresis band bottom (48-5=43) -> back to the high pair
+  assert.equal(normalized.steps[2].resolution, 'high');
+  assert.equal(normalized.steps[2].range_switch_required, true);
+  assert.throws(() => normalizeScenario('-----\n400 10\n', 'high'), /outside/);
 });
 
 test('evaluateSpeedReady requires stable time and reports timeout', () => {

@@ -2,17 +2,15 @@
 
 const fs = require('fs');
 const path = require('path');
-const { degPerSecToTicks } = require('./res');
+const { degPerSecToTicks, vh2MapDegPerSec } = require('./res');
 
-const DEFAULT_SPEED_RANGES = {
-  high: { minDeg: 1 / 3600, maxDeg: 20 },
-  low: { minDeg: 10, maxDeg: 360 },
-};
-
+// Speed limits come from the drive alone (VH[2] of each head pair). The software no longer
+// carries custom per-pair ranges or a hand-entered switch boundary: the high pair is used while
+// |speed| fits its VH[2], above that the low pair is required. Only the hysteresis around that
+// boundary stays configurable. Speed may be negative (reverse rotation) — everything compares
+// absolute values.
 const DEFAULT_SCENARIO_OPTIONS = {
-  switchBoundaryDegSec: 20,
   switchHysteresisDegSec: 5,
-  speedRangeToleranceDegSec: 5,
   speedReadyTolerancePercent: 5,
   speedStableTimeMs: 1000,
   speedReachTimeoutMs: 10000,
@@ -91,40 +89,22 @@ function angleDeg(value, fallback) {
   return sign * (Math.abs(deg) + min / 60 + sec / 3600);
 }
 
-function configuredRange(settings, key) {
-  const defaults = DEFAULT_SPEED_RANGES[key];
-  const range = settings && settings.advanced && settings.advanced.rotationSpeedRanges
-    && settings.advanced.rotationSpeedRanges[key];
-  let minDeg = Math.abs(angleDeg(range && range.min, defaults.minDeg));
-  let maxDeg = Math.abs(angleDeg(range && range.max, defaults.maxDeg));
-  if (!(minDeg > 0)) minDeg = defaults.minDeg;
-  if (!(maxDeg > 0)) maxDeg = defaults.maxDeg;
-  if (key === 'low') maxDeg = Math.min(maxDeg, 360);
-  if (maxDeg < minDeg) {
-    minDeg = defaults.minDeg;
-    maxDeg = defaults.maxDeg;
-  }
-  return { minDeg, maxDeg };
-}
-
 function scenarioOptions(settings, override) {
   const advanced = (settings && settings.advanced) || {};
   const general = (settings && settings.general) || {};
   const o = override || {};
-  const switchBoundary = finite(o.switchBoundaryDegSec, finite(advanced.encoderSwitchSpeedDegSec, angleDeg(advanced.encoderSwitchSpeed, DEFAULT_SCENARIO_OPTIONS.switchBoundaryDegSec)));
+  // VH[2] по парам головок: номинал из таблицы RES, поверх — значения, прочитанные из привода.
+  const vh2 = vh2MapDegPerSec(o.driveVh2Ticks || advanced.driveVh2Ticks);
   const tolerancePercent = clamp(
     finite(o.speedReadyTolerancePercent, finite(general.speedReadyTolerancePercent, DEFAULT_SCENARIO_OPTIONS.speedReadyTolerancePercent)),
     0,
     100
   );
   return {
-    ranges: {
-      high: configuredRange(settings, 'high'),
-      low: configuredRange(settings, 'low'),
-    },
-    switchBoundaryDegSec: switchBoundary > 0 ? switchBoundary : DEFAULT_SCENARIO_OPTIONS.switchBoundaryDegSec,
-    switchHysteresisDegSec: finite(o.switchHysteresisDegSec, finite(advanced.encoderSwitchHysteresisDegSec, DEFAULT_SCENARIO_OPTIONS.switchHysteresisDegSec)),
-    speedRangeToleranceDegSec: finite(o.speedRangeToleranceDegSec, finite(advanced.speedRangeToleranceDegSec, DEFAULT_SCENARIO_OPTIONS.speedRangeToleranceDegSec)),
+    // maxDeg каждой пары = её VH[2]; минимума нет (0 — остановка), знак задаёт направление.
+    vh2DegSec: vh2,
+    switchBoundaryDegSec: vh2.high,
+    switchHysteresisDegSec: Math.max(0, finite(o.switchHysteresisDegSec, finite(advanced.encoderSwitchHysteresisDegSec, DEFAULT_SCENARIO_OPTIONS.switchHysteresisDegSec))),
     speedReadyTolerancePercent: tolerancePercent,
     speedStableTimeMs: Math.max(0, finite(o.speedStableTimeMs, finite(advanced.speedStableTimeMs, DEFAULT_SCENARIO_OPTIONS.speedStableTimeMs))),
     speedReachTimeoutMs: Math.max(1, finite(o.speedReachTimeoutMs, finite(advanced.speedReachTimeoutMs, DEFAULT_SCENARIO_OPTIONS.speedReachTimeoutMs))),
@@ -235,28 +215,26 @@ function evaluateMsReady(state, ms, nowMs, options) {
   };
 }
 
+// |speed| must not exceed VH[2] of the pair: the drive would silently cap it anyway
+// (Remarks 11.09.2026 item 6). There is no lower limit — 0 is a stop, the sign is direction.
 function speedAllowedInRange(speedDegSec, resolution, options) {
-  const opts = options && options.ranges ? options : scenarioOptions(null, options);
+  const opts = options && options.vh2DegSec ? options : scenarioOptions(null, options);
   const absSpeed = Math.abs(finite(speedDegSec, 0));
-  const range = opts.ranges[resolution] || opts.ranges.high;
+  const maxDeg = opts.vh2DegSec[resolution === 'low' ? 'low' : 'high'];
   if (absSpeed === 0) return { ok: true };
-  if (resolution === 'low' && absSpeed > 360) {
-    return { ok: false, reason: 'above_low_absolute_max' };
-  }
-  const tol = Math.max(0, finite(opts.speedRangeToleranceDegSec, DEFAULT_SCENARIO_OPTIONS.speedRangeToleranceDegSec));
-  const min = Math.max(0, range.minDeg - tol);
-  const max = resolution === 'low' && range.maxDeg >= 360 ? 360 : range.maxDeg + tol;
-  if (absSpeed < min) return { ok: false, reason: 'below_min', minDeg: range.minDeg, toleranceDegSec: tol };
-  if (absSpeed > max) return { ok: false, reason: 'above_max', maxDeg: range.maxDeg, toleranceDegSec: tol };
+  if (absSpeed > maxDeg) return { ok: false, reason: 'above_vh2', maxDeg: maxDeg };
   return { ok: true };
 }
 
+// Пара головок выбирается по VH[2] высокой пары: пока |скорость| укладывается в него — высокое
+// разрешение, выше — низкое. Гистерезис не даёт «дребезжать» на самой границе: с высокой пары
+// уходим строго выше VH[2], обратно возвращаемся, опустившись на гистерезис ниже.
 function selectResolutionForSpeed(speedDegSec, currentResolution, settings, override) {
   const opts = scenarioOptions(settings, override);
   const absSpeed = Math.abs(finite(speedDegSec, 0));
   const current = currentResolution === 'low' ? 'low' : (currentResolution === 'high' ? 'high' : null);
-  if (absSpeed > 360) {
-    return { ok: false, resolution: null, reason: 'above_low_absolute_max', absSpeedDegSec: absSpeed };
+  if (absSpeed > opts.vh2DegSec.low) {
+    return { ok: false, resolution: null, reason: 'above_vh2', maxDeg: opts.vh2DegSec.low, absSpeedDegSec: absSpeed, options: opts };
   }
   if (absSpeed === 0) {
     return { ok: true, resolution: current || 'high', changed: false, absSpeedDegSec: absSpeed, options: opts };
@@ -265,8 +243,8 @@ function selectResolutionForSpeed(speedDegSec, currentResolution, settings, over
   const boundary = opts.switchBoundaryDegSec;
   const hyst = opts.switchHysteresisDegSec;
   let selected;
-  if (current === 'high') selected = absSpeed <= boundary + hyst ? 'high' : 'low';
-  else if (current === 'low') selected = absSpeed >= boundary - hyst ? 'low' : 'high';
+  if (current === 'high') selected = absSpeed <= boundary ? 'high' : 'low';
+  else if (current === 'low') selected = absSpeed <= Math.max(0, boundary - hyst) ? 'high' : 'low';
   else selected = absSpeed <= boundary ? 'high' : 'low';
 
   let allowed = speedAllowedInRange(absSpeed, selected, opts);
@@ -378,7 +356,6 @@ function evaluateSpeedReady(state, measuredDegSec, targetDegSec, nowMs, settings
 }
 
 module.exports = {
-  DEFAULT_SPEED_RANGES,
   DEFAULT_SCENARIO_OPTIONS,
   scenarioOptions,
   speedAllowedInRange,
