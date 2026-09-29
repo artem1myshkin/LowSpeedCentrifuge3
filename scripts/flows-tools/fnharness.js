@@ -647,6 +647,26 @@ check('Saved VH[2] survives a restart: SettingsNormalize merges settings.json va
   assert.equal(s.advanced.speedStableTimeMs, undefined, 'stable-time setting removed');
 });
 
+check('Operator-entered VH[2]: active pair written to the drive at once, inactive pair saved for the switch', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', drive_vh2_ticks: { high: 34952530, low: 6553600 } });
+  // active (high) pair: 30 deg/s = 21845333 counts/s
+  let r = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: { driveVh2Override: { high: 21845333 } } } }, ctx);
+  let s = r.out[0].payload;
+  assert.deepEqual(s.advanced.driveVh2Ticks, { high: 21845333, low: 6553600 }, 'entered value wins over the read one');
+  assert.equal(s.advanced.driveVh2Override, undefined, 'override is not stored');
+  const apply = [].concat(r.out[1] || []).find(m => m.topic === 'apply_vh2');
+  assert.ok(apply, 'active pair -> apply_vh2');
+  const out = runNode('CommandHandler', apply, makeCtx({ settings, nc3, current_range: 'high', drive_vh2_ticks: ctx.global.get('drive_vh2_ticks') })).out;
+  assert.equal(out && out.payload.trim(), 'VH[2]=21845333;VH[2]');
+  // the speed limit follows at once
+  assert.equal(ctx.global.get('drive_vh2_ticks').high, 21845333);
+  // inactive (low) pair: saved only, no drive command; above nominal is capped
+  r = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: { driveVh2Override: { low: 9999999 } } } }, ctx);
+  s = r.out[0].payload;
+  assert.equal(s.advanced.driveVh2Ticks.low, 6553600, 'capped at the nominal 360 deg/s');
+  assert.ok(![].concat(r.out[1] || []).some(m => m && m.topic === 'apply_vh2'));
+});
+
 check('JP scenario step: readiness by the TR[3]/TR[4] window on VX (no tolerance setting)', () => {
   const st0 = JSON.parse(JSON.stringify(settings));
   st0.advanced.rotationCommandMode = 'JP';
