@@ -12,7 +12,10 @@ const FAST_SEEK_POLL_FIELDS = ['VX', 'PX'];
 const FAST_DATA_POLL_FIELDS = ['TM', 'PX'];
 // MS is part of the periodic state poll so the UI/scenario see the live motion status
 // (Appendix B item B1.1: previously MS was read once on connect and stuck at 3).
-const STATE_POLL_FIELDS = ['MO', 'SO', 'SR', 'MS'];
+// OL[1] + VH[2] in the same atomic reply: VH[2] of the ACTIVE head pair is tracked live
+// (a change made in the drive shows up within one state period) and OL[1] tells which pair it
+// belongs to - no cross-attribution around a pair switch.
+const STATE_POLL_FIELDS = ['MO', 'SO', 'SR', 'MS', 'OL[1]', 'VH[2]'];
 // VH[2] (drive max speed of the active head pair) is read with every full-state poll so the
 // speed input limit tracks the real drive value (Appendix B item B1.6).
 const FULL_STATE_POLL_FIELDS = ['MS', 'MO', 'SO', 'SR', 'AF', 'OL[1]', 'OL[2]', 'VH[2]'];

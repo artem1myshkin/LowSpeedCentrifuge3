@@ -607,34 +607,65 @@ check('CommandHandler rejects PA/PR targets outside the int32 drive range', () =
   assert.ok(ok.out && ok.out.payload.indexOf('PR=-728178') >= 0, ok.out && ok.out.payload);
 });
 
-check('Scenario TR[3] is a percentage of the step setpoint; manual JV writes the absolute TR[3]', () => {
-  const st = JSON.parse(JSON.stringify(settings));
-  st.advanced.scenarioSpeedWindowPercent = 2;
-  const ctx = makeCtx({ settings: st, nc3, current_range: 'high', logs: [], drive_state: { mo: true, so: true }, drive_init_state: { status: 'done', initialized: true, resolution: 'high' } });
+check('Scenario and manual JV use the absolute TR[3] of the pair from the settings', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [], drive_state: { mo: true, so: true }, drive_init_state: { status: 'done', initialized: true, resolution: 'high' } });
   runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'a.scn' } }, ctx);
-  const r = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n30 10\n' }, ctx);
+  const r = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n0.5 10\n' }, ctx);
   const cmd = r.out[0][0];
   assert.equal(cmd.topic, 'set_jv');
-  // 2 % of 30 deg/s = 0.6 deg/s = 0.6 * 728177.78 counts/s
-  assert.equal(cmd.payload.tr3_ticks, Math.round(0.6 * 262144000 / 360));
-  const sc = ctx.global.get('scenario_state');
-  assert.ok(Math.abs(sc.speed_window_deg_per_sec - 0.6) < 1e-6 && sc.speed_window_percent === 2, JSON.stringify(sc.speed_window_deg_per_sec));
-  // CommandHandler puts it in front of the JV command
-  const ch = makeCtx({ settings: st, nc3, current_range: 'high' });
-  const tr3 = cmd.payload.tr3_ticks;
-  const out = runNode('CommandHandler', cmd, ch).out;
-  assert.ok(out && out.payload.indexOf('TR[3]=' + tr3 + ';') === 0, out && out.payload);
-  // manual JV (no tr3_ticks) restores the absolute TR[3] from the settings (0.5 deg/s -> 364089)
-  const man = runNode('CommandHandler', { topic: 'set_jv', payload: { ticks: 7000000 } }, ch).out;
-  assert.ok(man && man.payload.indexOf('TR[3]=364089') === 0, man && man.payload);
+  assert.equal(cmd.payload.tr3_ticks, undefined, 'no per-step window any more');
+  // high pair, TR[3] 0.5 deg/s from the fixture -> 364089 counts/s, also for a 0.5 deg/s step
+  const out = runNode('CommandHandler', cmd, makeCtx({ settings, nc3, current_range: 'high' })).out;
+  assert.ok(out && out.payload.indexOf('TR[3]=364089;') === 0, out && out.payload);
+  const s2 = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: { scenarioSpeedWindowPercent: 3 } } }, makeCtx({})).out[0].payload;
+  assert.equal(s2.advanced.scenarioSpeedWindowPercent, undefined, 'percent setting removed');
 });
 
-check('SettingsNormalize clamps the scenario speed-window percent', () => {
-  let s = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: { scenarioSpeedWindowPercent: 500 } } }, makeCtx({})).out[0].payload;
-  assert.equal(s.advanced.scenarioSpeedWindowPercent, 50);
-  s = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: {} } }, makeCtx({})).out[0].payload;
-  assert.equal(s.advanced.scenarioSpeedWindowPercent, 1);
+check('ResponseParser remembers VH[2] of the active pair and persists only on change', () => {
+  const ctx = makeCtx({ settings });
+  let r = runNode('ResponseParser', { topic: 'poll_state', payload: 'MO;1;SO;1;SR;0;MS;2;OL[1];1;VH[2];3276800;' }, ctx);
+  assert.deepEqual(ctx.global.get('drive_vh2_ticks'), { low: 3276800 }, 'attributed to the pair from OL[1] of the same frame');
+  const persist = r.sent.filter(m => Array.isArray(m) && m[1] && m[1].topic === 'vh2_persist');
+  assert.equal(persist.length, 1);
+  assert.deepEqual(persist[0][1].payload.advanced.driveVh2Ticks, { low: 3276800 });
+  r = runNode('ResponseParser', { topic: 'poll_state', payload: 'MO;1;SO;1;SR;0;MS;2;OL[1];1;VH[2];3276800;' }, ctx);
+  assert.equal(r.sent.filter(m => Array.isArray(m) && m[1]).length, 0, 'same value -> no file write');
+  // SettingsPersist writes the file but does not reload the settings form
+  const sp = runNode('SettingsPersist', persist[0][1], makeCtx({}));
+  assert.ok(sp.out[0] && sp.out[0].filename);
+  assert.equal(sp.out[1], null);
 });
+
+check('Saved VH[2] survives a restart: SettingsNormalize merges settings.json values with live reads', () => {
+  const saved = JSON.parse(JSON.stringify(settings));
+  saved.advanced.driveVh2Ticks = { high: 30000000, low: 3276800 };
+  const ctx = makeCtx({ settings: saved, drive_vh2_ticks: { high: 31000000 } });
+  const s = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { general: {} } }, ctx).out[0].payload;
+  assert.deepEqual(s.advanced.driveVh2Ticks, { high: 31000000, low: 3276800 }, 'live value wins, saved one fills the gap');
+  assert.deepEqual(ctx.global.get('drive_vh2_ticks'), { high: 31000000, low: 3276800 });
+  assert.equal(s.general.speedReadyTolerancePercent, undefined, 'tolerance setting removed');
+  assert.equal(s.advanced.speedStableTimeMs, undefined, 'stable-time setting removed');
+});
+
+check('JP scenario step: readiness by the TR[3]/TR[4] window on VX (no tolerance setting)', () => {
+  const st0 = JSON.parse(JSON.stringify(settings));
+  st0.advanced.rotationCommandMode = 'JP';
+  const ctx = makeCtx({ settings: st0, nc3, current_range: 'high', logs: [], drive_state: { mo: true, so: true }, drive_init_state: { status: 'done', initialized: true, resolution: 'high' } });
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'a.scn' } }, ctx);
+  let r = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n10 10\n' }, ctx);
+  assert.equal(r.out[0][0].topic, 'set_jp');
+  runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: 'set_jp', meta: { topic: 'set_jp' } } }, ctx);
+  let st = ctx.global.get('scenario_state');
+  assert.equal(st.ready_criterion, 'software');
+  // 9.3 deg/s: outside TR[3] = 0.5 deg/s -> not ready even with MS=0 (MS is ignored for JP)
+  runNode('ScenarioManager', { topic: 'poll_data', payload: { ms: 0, velocity_deg_per_sec: 9.3, resolution: 'high' } }, ctx);
+  assert.equal(ctx.global.get('scenario_state').ready, false);
+  runNode('ScenarioManager', { topic: 'poll_data', payload: { velocity_deg_per_sec: 10.05, resolution: 'high' } }, ctx);
+  st = ctx.global.get('scenario_state'); st.ready_eval.inWindowSince -= 200; ctx.global.set('scenario_state', st);
+  runNode('ScenarioManager', { topic: 'poll_data', payload: { velocity_deg_per_sec: 10.02, resolution: 'high' } }, ctx);
+  assert.equal(ctx.global.get('scenario_state').status, 'holding');
+});
+
 
 console.log(failures ? ('\n' + failures + ' FAILED') : '\nall harness checks passed');
 process.exit(failures ? 1 : 0);

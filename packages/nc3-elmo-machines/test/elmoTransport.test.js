@@ -74,16 +74,18 @@ function feedStatePoll(h, opts = {}) {
   h.actor.send({ type: 'ELMO.RESP', raw: opts.so || 'SO;0;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.sr || 'SR;100663616;' });
   h.actor.send({ type: 'ELMO.RESP', raw: opts.ms || 'MS;3;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.ol1 || 'OL[1];0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: opts.vh2 || 'VH[2];34952533;' });
 }
 
 test('analogParam adds the pressure input to the periodic state poll', () => {
   const { buildPollEnvelope, buildStatePoll } = require('../src/poll');
   const env = buildPollEnvelope({ id: 'p', role: 'state', options: { analogParam: 'AN[1]' } });
-  assert.deepEqual(env.cmds, ['MO', 'SO', 'SR', 'MS', 'AN[1]']);
-  assert.deepEqual(env.required, ['mo', 'so', 'sr', 'ms', 'an1']);
-  assert.equal(buildStatePoll({ analogParam: 'AN[1]' }), 'MO;SO;SR;MS;AN[1];');
+  assert.deepEqual(env.cmds, ['MO', 'SO', 'SR', 'MS', 'OL[1]', 'VH[2]', 'AN[1]']);
+  assert.deepEqual(env.required, ['mo', 'so', 'sr', 'ms', 'ol1', 'vh2', 'an1']);
+  assert.equal(buildStatePoll({ analogParam: 'AN[1]' }), 'MO;SO;SR;MS;OL[1];VH[2];AN[1];');
   // without the option the poll is unchanged
-  assert.deepEqual(buildPollEnvelope({ id: 'p', role: 'state' }).cmds, ['MO', 'SO', 'SR', 'MS']);
+  assert.deepEqual(buildPollEnvelope({ id: 'p', role: 'state' }).cmds, ['MO', 'SO', 'SR', 'MS', 'OL[1]', 'VH[2]']);
 });
 
 function feedFullStatePoll(h, opts = {}) {
@@ -543,7 +545,7 @@ test('POLL.TICK enqueues an extended poll past statePeriod and records lastExten
   assert.equal(h.ctx().inFlight.pollRole, 'data');
   assert.equal(h.ctx().queue.length, 1);
   assert.equal(h.ctx().queue[0].pollRole, 'state');
-  assert.deepEqual(h.ctx().queue[0].cmds, ['MO', 'SO', 'SR', 'MS']);
+  assert.deepEqual(h.ctx().queue[0].cmds, ['MO', 'SO', 'SR', 'MS', 'OL[1]', 'VH[2]']);
   assert.equal(h.ctx().lastExtendedAt, 2000);
 
   feedDataPoll(h);
@@ -730,7 +732,7 @@ test('forwards valid state poll frames on poll_state topic', () => {
   feedStatePoll(h);
   assert.equal(h.calls.forwardResp.length, 1);
   assert.equal(h.calls.forwardResp[0].topic, 'poll_state');
-  assert.equal(h.calls.forwardResp[0].raw, 'MO;0;SO;0;SR;100663616;MS;3;');
+  assert.equal(h.calls.forwardResp[0].raw, 'MO;0;SO;0;SR;100663616;MS;3;OL[1];0;VH[2];34952533;');
   assert.equal(badPoll(h.calls).length, 0);
   assert.equal(h.ctx().ms, 3);
   assert.equal(h.ctx().mo, 0);
@@ -779,13 +781,13 @@ test('MO command ack enqueues a minimal MO/SO/SR confirmation poll', () => {
   h.actor.send({ type: 'ELMO.RESP', raw: 'SO;1;' });
 
   assert.equal(h.ctx().inFlight.pollRole, 'state');
-  assert.deepEqual(h.ctx().inFlight.cmds, ['MO', 'SO', 'SR', 'MS']);
+  assert.deepEqual(h.ctx().inFlight.cmds, ['MO', 'SO', 'SR', 'MS', 'OL[1]', 'VH[2]']);
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'MO');
 
   h.calls.forwardResp.length = 0;
   feedStatePoll(h, { mo: 'MO;1;', so: 'SO;1;' });
   assert.equal(h.calls.forwardResp[0].topic, 'poll_state');
-  assert.equal(h.calls.forwardResp[0].raw, 'MO;1;SO;1;SR;100663616;MS;3;');
+  assert.equal(h.calls.forwardResp[0].raw, 'MO;1;SO;1;SR;100663616;MS;3;OL[1];0;VH[2];34952533;');
 });
 
 test('OL command ack enqueues full-state confirmation poll', () => {

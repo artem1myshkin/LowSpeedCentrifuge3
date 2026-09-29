@@ -73,8 +73,8 @@ test('poll payloads: atomic single-parameter commands (cmds[])', () => {
   assert.deepEqual(data.partRequired, [['tm'], ['px'], ['vx']]);
   const stateEnv = buildPollEnvelope({ id: 'p', role: 'state' });
   assert.equal(stateEnv.cmd, 'MO');
-  assert.deepEqual(stateEnv.cmds, ['MO', 'SO', 'SR', 'MS']);
-  assert.deepEqual(stateEnv.required, ['mo', 'so', 'sr', 'ms']);
+  assert.deepEqual(stateEnv.cmds, ['MO', 'SO', 'SR', 'MS', 'OL[1]', 'VH[2]']);
+  assert.deepEqual(stateEnv.required, ['mo', 'so', 'sr', 'ms', 'ol1', 'vh2']);
   const extEnv = buildPollEnvelope({ id: 'p', extended: true });
   const ext = buildExtendedPoll();
   assert.equal(extEnv.cmd, 'MS');
@@ -103,7 +103,7 @@ test('poll payloads: atomic single-parameter commands (cmds[])', () => {
 });
 
 test('buildExtendedPoll: analog pressure param is opt-in', () => {
-  assert.equal(buildStatePoll({}), 'MO;SO;SR;MS;');
+  assert.equal(buildStatePoll({}), 'MO;SO;SR;MS;OL[1];VH[2];');
   assert.equal(buildExtendedPoll, buildFullStatePoll);
   assert.ok(!buildExtendedPoll({}).includes('AN'));
   assert.ok(buildExtendedPoll({ analogParam: 'AN[1]' }).includes('AN[1];'));
