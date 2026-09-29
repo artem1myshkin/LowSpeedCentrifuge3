@@ -9,9 +9,12 @@ UDP (CAN-конвертер 192.168.1.20:20001) -> MQTT (localhost:1883).
     MQTT-соединение (publish.single, qos=2) с печатью в консоль — приёмный буфер сокета
     накапливался, в UI уходили устаревшие данные, а после снятия питания «хвост» буфера
     ещё ~20 с выдавался как живые данные;
-  * теперь за проход вычитываются ВСЕ накопившиеся датаграммы и публикуется только последняя,
-    через одно постоянное MQTT-соединение (client.publish, qos=0);
-  * частота публикации в chN/data ограничена PUBLISH_HZ (по умолчанию 2 Гц);
+  * теперь сокет неблокирующий: за проход (select до 50 мс) вычитываются ВСЕ накопившиеся
+    датаграммы, каждая разбирается, по каждому каналу остаётся самое свежее значение;
+    публикация — через одно постоянное MQTT-соединение (client.publish, qos=0);
+  * частота публикации в chN/data ограничена PUBLISH_HZ (по умолчанию 2 Гц); публикуются только
+    значения, пришедшие после прошлой публикации — старые значения не повторяются, поэтому
+    после снятия питания данные перестают идти сразу (≤ 1/PUBLISH_HZ);
   * при отсутствии пакетов дольше STALE_SEC публикуется bep/status {"stale": true} и нули
     в chN/data — UI показывает «нет данных» и сбрасывает значения;
   * bep/status публикуется раз в секунду: running/stale, счётчик пакетов, темп приёма.
@@ -19,7 +22,7 @@ UDP (CAN-конвертер 192.168.1.20:20001) -> MQTT (localhost:1883).
 Переменные окружения (необязательно): NC3_BEP_PUBLISH_HZ, NC3_BEP_STALE_SEC, NC3_BEP_LOG_SEC.
 Команды MQTT (cmd-topic / file-topic) — без изменений относительно исходного шлюза.
 """
-import socket, signal
+import socket, signal, select
 import time, sys, os, json
 import subprocess
 import paho.mqtt.client as mqtt
@@ -364,7 +367,10 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 kill_port_owner(UDP_PORT)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 sock.bind(("", UDP_PORT))
-sock.settimeout(0.05)  # короткий таймаут: цикл не блокируется, буфер вычитывается полностью
+# Неблокирующий сокет: ждём первую датаграмму через select (до 50 мс), затем вычитываем всё,
+# что накопилось, без ожидания. С таймаутом на каждом recvfrom при непрерывном потоке цикл
+# не выходил из вычитки до лимита пакетов, и публикация шла раз в несколько секунд.
+sock.setblocking(False)
 print("[SOCKET] UDP socket bound to port %d" % UDP_PORT)
 
 client = mqtt.Client()
@@ -388,11 +394,19 @@ pub_count = 0
 last_values = {}
 stale_reported = False
 zeroed = False
+fresh = {}  # каналы, пришедшие после последней публикации
 
 while True:
-    # 1. Вычитать ВСЕ накопившиеся датаграммы, оставить последнюю (устраняет накопление буфера).
+    # 1. Вычитать ВСЕ накопившиеся датаграммы (устраняет накопление буфера). Разбирается каждая:
+    #    конвертер может слать кадры разных плат отдельными датаграммами, поэтому по каждому
+    #    каналу берётся самое свежее значение, а не только содержимое последней датаграммы.
     latest = None
+    batch_values = {}
     drained = 0
+    try:
+        select.select([sock], [], [], 0.05)
+    except Exception:
+        time.sleep(0.05)
     while True:
         try:
             data, addr = sock.recvfrom(2048)
@@ -406,26 +420,29 @@ while True:
         latest = data
         drained += 1
         rx_count += 1
-        if drained >= 200:
+        if len(data) >= FRAME_LEN:
+            batch_values.update(parse_packet(data))
+        if drained >= 5000:
             break
 
     now = time.time()
-    if latest is not None and len(latest) >= FRAME_LEN:
-        values = parse_packet(latest)
-        if values:
-            last_values = values
-            last_rx = now
-            zeroed = False
-            if stale_reported:
-                print("[BEP] data resumed")
-                stale_reported = False
+    if batch_values:
+        last_values.update(batch_values)
+        fresh.update(batch_values)
+        last_rx = now
+        zeroed = False
+        if stale_reported:
+            print("[BEP] data resumed")
+            stale_reported = False
 
     stale = (last_rx == 0.0) or (now - last_rx > STALE_SEC)
 
-    # 2. Публикация последних значений не чаще PUBLISH_HZ.
-    if not stale and last_values and (now - last_pub) >= publish_period:
-        for ch, cap_val in last_values.items():
+    # 2. Публикация не чаще PUBLISH_HZ и только свежих значений: старое значение повторно не
+    #    публикуется, поэтому после пропадания потока (снятие питания) данные сразу перестают идти.
+    if fresh and (now - last_pub) >= publish_period:
+        for ch, cap_val in fresh.items():
             pub_msg(data_topic(ch), str(cap_val))
+        fresh = {}
         pub_count += 1
         last_pub = now
 
@@ -462,5 +479,4 @@ while True:
         vals = " ".join("ch%d=%d" % (ch + 1, v) for ch, v in sorted(last_values.items()))
         print("[BEP] %s rx=%d (%.1f pkt/s) pub=%d %s" % ("STALE" if stale else "ok", rx_count, rate, pub_count, vals))
 
-    if latest is None:
-        time.sleep(0.01)
+

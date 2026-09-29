@@ -123,7 +123,7 @@ check('CommandHandler: the only speed limit is |v| <= VH[2] of the pair', () => 
   assert.equal(ctx.global.get('drive_limits').speed_max_ticks, 7281778);
   assert.equal(ctx.global.get('drive_limits').speed_min_ticks, 0, 'no lower limit any more');
   const ok = runNode('CommandHandler', { topic: 'set_jv', payload: { ticks: 7000000 } }, ctx);
-  assert.ok(ok.out && ok.out.payload.startsWith('AC='), 'below VH[2] accepted');
+  assert.ok(ok.out && /^TR\[3\]=\d+;\s*AC=/.test(ok.out.payload), 'below VH[2] accepted: ' + (ok.out && ok.out.payload));
   // reverse rotation is compared by magnitude
   assert.equal(runNode('CommandHandler', { topic: 'set_jv', payload: { ticks: -8000000 } }, ctx).out, null);
   const back = runNode('CommandHandler', { topic: 'set_jv', payload: { ticks: -7000000 } }, ctx);
@@ -605,6 +605,35 @@ check('CommandHandler rejects PA/PR targets outside the int32 drive range', () =
   assert.equal(runNode('CommandHandler', { topic: 'set_relative_position', payload: Object.assign({ ticks: -2147483648 }, body) }, ctx).out, null);
   const ok = runNode('CommandHandler', { topic: 'set_relative_position', payload: Object.assign({ ticks: -728178 }, body) }, ctx);
   assert.ok(ok.out && ok.out.payload.indexOf('PR=-728178') >= 0, ok.out && ok.out.payload);
+});
+
+check('Scenario TR[3] is a percentage of the step setpoint; manual JV writes the absolute TR[3]', () => {
+  const st = JSON.parse(JSON.stringify(settings));
+  st.advanced.scenarioSpeedWindowPercent = 2;
+  const ctx = makeCtx({ settings: st, nc3, current_range: 'high', logs: [], drive_state: { mo: true, so: true }, drive_init_state: { status: 'done', initialized: true, resolution: 'high' } });
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'a.scn' } }, ctx);
+  const r = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n30 10\n' }, ctx);
+  const cmd = r.out[0][0];
+  assert.equal(cmd.topic, 'set_jv');
+  // 2 % of 30 deg/s = 0.6 deg/s = 0.6 * 728177.78 counts/s
+  assert.equal(cmd.payload.tr3_ticks, Math.round(0.6 * 262144000 / 360));
+  const sc = ctx.global.get('scenario_state');
+  assert.ok(Math.abs(sc.speed_window_deg_per_sec - 0.6) < 1e-6 && sc.speed_window_percent === 2, JSON.stringify(sc.speed_window_deg_per_sec));
+  // CommandHandler puts it in front of the JV command
+  const ch = makeCtx({ settings: st, nc3, current_range: 'high' });
+  const tr3 = cmd.payload.tr3_ticks;
+  const out = runNode('CommandHandler', cmd, ch).out;
+  assert.ok(out && out.payload.indexOf('TR[3]=' + tr3 + ';') === 0, out && out.payload);
+  // manual JV (no tr3_ticks) restores the absolute TR[3] from the settings (0.5 deg/s -> 364089)
+  const man = runNode('CommandHandler', { topic: 'set_jv', payload: { ticks: 7000000 } }, ch).out;
+  assert.ok(man && man.payload.indexOf('TR[3]=364089') === 0, man && man.payload);
+});
+
+check('SettingsNormalize clamps the scenario speed-window percent', () => {
+  let s = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: { scenarioSpeedWindowPercent: 500 } } }, makeCtx({})).out[0].payload;
+  assert.equal(s.advanced.scenarioSpeedWindowPercent, 50);
+  s = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: {} } }, makeCtx({})).out[0].payload;
+  assert.equal(s.advanced.scenarioSpeedWindowPercent, 1);
 });
 
 console.log(failures ? ('\n' + failures + ' FAILED') : '\nall harness checks passed');
