@@ -25,8 +25,12 @@ function runNode(name, msg, ctx, opts) {
   };
   const timers = [];
   const fakeTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
-  const fn = new Function('msg', 'node', 'global', 'flow', 'context', 'setTimeout', 'clearTimeout', 'RED', 'env', n.func);
-  const out = fn(msg, node, ctx.global, ctx.flow, ctx.context, fakeTimeout, () => {}, {}, { get: () => undefined });
+  // Intervals are never fired automatically: tests call ctx.intervals[i].fn() themselves.
+  ctx.intervals = ctx.intervals || [];
+  const fakeInterval = (fn, ms) => { ctx.intervals.push({ fn, ms, node, sent, active: true }); return ctx.intervals.length; };
+  const fakeClearInterval = (h) => { if (ctx.intervals[h - 1]) ctx.intervals[h - 1].active = false; };
+  const fn = new Function('msg', 'node', 'global', 'flow', 'context', 'setTimeout', 'clearTimeout', 'RED', 'env', 'setInterval', 'clearInterval', n.func);
+  const out = fn(msg, node, ctx.global, ctx.flow, ctx.context, fakeTimeout, () => {}, {}, { get: () => undefined }, fakeInterval, fakeClearInterval);
   // runTimers fires the SHORT timers only (sequencing delays), never long watchdogs such as
   // the 60 s tilt timeout — otherwise every automatic sequence would look like a timeout.
   if (opts && opts.runTimers) {
@@ -686,6 +690,140 @@ check('JP scenario step: readiness by the TR[3]/TR[4] window on VX (no tolerance
   assert.equal(ctx.global.get('scenario_state').status, 'holding');
 });
 
+// ---------------- BEP gap sensors ----------------
+const BEP_K = [0.167, 0.184, 0.186, 0.2, 0.017];
+function bepSettings(zeroCodes) {
+  return { advanced: { BEPcoeffs: BEP_K.slice(), bepBaseMm: 112,
+    bepZero: { codes: zeroCodes, samples: [0, 0, 0, 0, 0], calibratedAt: zeroCodes[0] === null ? null : '2026-10-15T10:00:00.000Z' } } };
+}
+
+check('BEP Gap: Δi = k(K(ц) − K), pair halves and Δφ in arcsec', () => {
+  const ctx = makeCtx({ settings: bepSettings([4000, 4000, 4000, 4000, 4100]) });
+  const raw = [3990, 4010, 4020, 3980, 4050];
+  let r;
+  raw.forEach((v, i) => { r = runNode('BEP Gap', { topic: 'Channel ' + (i + 1), payload: String(v) }, ctx); });
+  const p = r.out.payload;
+  assert.equal(r.out.topic, 'bep_gap');
+  const d = raw.map((v, i) => BEP_K[i] * ([4000, 4000, 4000, 4000, 4100][i] - v));
+  p.gapUm.forEach((g, i) => assert.ok(Math.abs(g - d[i]) < 1e-9, 'gap ' + i + ': ' + g));
+  const p12 = (d[0] - d[1]) / 2, p34 = (d[2] - d[3]) / 2;
+  assert.ok(Math.abs(p.pair12Um - p12) < 1e-9);
+  assert.ok(Math.abs(p.pair34Um - p34) < 1e-9);
+  // (1.67 − (−1.84))/2 = 1.755; (−3.72 − 4)/2 = −3.86; Δφ = 5.615 µm / 112000 µm · 206264.81 ≈ 10.34″
+  assert.ok(Math.abs(p.tiltCorrArcsec - (p12 - p34) / 112000 * 206264.81) < 1e-9);
+  assert.ok(Math.abs(p.tiltCorrArcsec - 10.341) < 0.001, 'Δφ=' + p.tiltCorrArcsec);
+  assert.deepEqual(ctx.global.get('bep_gap'), p);
+});
+
+check('BEP Gap: no zero calibration -> raw only; stale bep_status clears values', () => {
+  const ctx = makeCtx({ settings: bepSettings([null, null, null, null, null]) });
+  let r = runNode('BEP Gap', { topic: 'Channel 1', payload: '4000' }, ctx);
+  assert.equal(r.out.payload.raw[0], 4000);
+  assert.equal(r.out.payload.gapUm[0], null);
+  assert.equal(r.out.payload.tiltCorrArcsec, null);
+  r = runNode('BEP Gap', { topic: 'bep_status', payload: JSON.stringify({ running: true, stale: true }) }, ctx);
+  assert.equal(r.out.payload.raw[0], null);
+  r = runNode('BEP Gap', { topic: 'reread' }, ctx);
+  assert.equal(r.out.topic, 'bep_gap');
+});
+
+check('SettingsNormalize: BEP k defaults replace legacy zeros; K(ц) kept against a stale Settings form', () => {
+  const zero = { codes: [4001.5, 4002, 4003, 4004, 4100], samples: [290, 290, 290, 290, 290], calibratedAt: '2026-10-15T10:00:00.000Z' };
+  const ctx = makeCtx({ settings: { general: {}, advanced: { BEPcoeffs: [0, 0, 0, 0, 0], bepZero: zero } } });
+  const s = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: {
+    BEPcoeffs: [0, 0, 0, 0, 0], bepZero: { codes: [null, null, null, null, null] } } } }, ctx).out[0].payload;
+  assert.deepEqual(s.advanced.BEPcoeffs, BEP_K);
+  assert.equal(s.advanced.bepBaseMm, 112);
+  assert.deepEqual(s.advanced.bepZero, zero);
+  const s2 = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: { BEPcoeffs: [0.2, 0.2, 0.2, 0.2, 0.02], bepBaseMm: 110 } } }, ctx).out[0].payload;
+  assert.deepEqual(s2.advanced.BEPcoeffs, [0.2, 0.2, 0.2, 0.2, 0.02]);
+  assert.equal(s2.advanced.bepBaseMm, 110);
+});
+
+function withNow(t, fn) { const real = Date.now; Date.now = () => t; try { return fn(); } finally { Date.now = real; } }
+function bepCalCtx() {
+  return makeCtx({ settings: bepSettings([null, null, null, null, null]), current_range: 'high',
+    drive_limits: { ticks_per_deg: 262144000 / 360 }, drive_state: { mo: 1, so: 1, ms: 0 }, scenario_state: { status: 'idle' } });
+}
+function feedChannels(ctx, t, codes) {
+  withNow(t, () => codes.forEach((v, i) => runNode('BEP ZeroCalibration', { topic: 'Channel ' + (i + 1), payload: String(v) }, ctx)));
+}
+function tickCal(ctx, t) {
+  const iv = ctx.intervals.filter(x => x.active).pop();
+  if (!iv) return [];
+  const before = iv.sent.length;
+  withNow(t, () => iv.fn());
+  return iv.sent.slice(before);
+}
+
+check('BEP ZeroCalibration: preconditions — tilt confirmation, motor on, fresh data', () => {
+  const ctx = bepCalCtx();
+  let r = runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: {} }, ctx);
+  assert.equal(ctx.context.get('state').status, 'error');
+  feedChannels(ctx, 1000, [4000, 4000, 4000, 4000, 4100]);
+  ctx.global.set('drive_state', { mo: 0, so: 0, ms: 0 });
+  withNow(1500, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, ctx));
+  assert.ok(/MO=0/.test(ctx.context.get('state').message));
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 0 });
+  r = withNow(9000, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, ctx));
+  assert.ok(/нет данных/.test(ctx.context.get('state').message), 'stale BEP data must block the start');
+  assert.equal(r.out, null);
+});
+
+check('BEP ZeroCalibration: one turn at 2.5 °/s, 1 °/s², K(ц) = average, persisted', () => {
+  const ctx = bepCalCtx();
+  const t0 = 100000;
+  feedChannels(ctx, t0 - 100, [1, 1, 1, 1, 1]);
+  const r = withNow(t0, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, ctx));
+  assert.equal(r.out[0].payload.status, 'running');
+  assert.deepEqual(r.out[1], { topic: 'set_relative_position', payload: { ticks: 262144000, sp_ticks: 1820444, ac_ticks: 728178, dc_ticks: 728178 } });
+  assert.equal(r.out[3].topic, 'journal_event');
+  // samples before the drive reports motion are ignored
+  feedChannels(ctx, t0 + 200, [9999, 9999, 9999, 9999, 9999]);
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 2 });
+  tickCal(ctx, t0 + 1000);
+  for (let k = 0; k < 20; k++) feedChannels(ctx, t0 + 2000 + k * 500, [4000 + (k % 2), 4010, 4020, 4030, k < 5 ? 4100 : 4100]);
+  let out = tickCal(ctx, t0 + 60000);
+  assert.equal(out[0][0].payload.status, 'running');
+  assert.ok(out[0][0].payload.progressPct > 30 && out[0][0].payload.progressPct < 50);
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 0 });
+  out = tickCal(ctx, t0 + 147000);
+  const [ui, cmd, persist, jr] = out[0];
+  assert.equal(ui.payload.status, 'done');
+  assert.equal(cmd, null);
+  assert.deepEqual(ui.payload.codes, [4000.5, 4010, 4020, 4030, 4100]);
+  assert.equal(persist.topic, 'bep_zero_persist');
+  assert.deepEqual(persist.settings.advanced.bepZero.codes, [4000.5, 4010, 4020, 4030, 4100]);
+  assert.deepEqual(ctx.global.get('settings').advanced.bepZero.samples, [20, 20, 20, 20, 20]);
+  assert.equal(jr.topic, 'journal_event');
+  assert.equal(ctx.intervals.filter(x => x.active).length, 0, 'timer stopped');
+});
+
+check('BEP ZeroCalibration: abort stops the drive; early stop is an error; K(ц) untouched', () => {
+  const ctx = bepCalCtx();
+  feedChannels(ctx, 0, [1, 1, 1, 1, 1]);
+  withNow(10, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, ctx));
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 2 });
+  tickCal(ctx, 1000);
+  const ab = ctx.intervals[0].node;
+  const r = withNow(2000, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_abort', payload: true }, ctx));
+  assert.equal(r.out, null);
+  const last = r.sent[r.sent.length - 1];
+  assert.equal(last[0].payload.status, 'aborted');
+  assert.equal(last[1].topic, 'drive_stop');
+  assert.ok(ab);
+  // second run: the drive stops after 30 s (e.g. STOP from another tab)
+  feedChannels(ctx, 3000, [1, 1, 1, 1, 1]);
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 0 });
+  withNow(3010, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, ctx));
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 2 });
+  tickCal(ctx, 4000);
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 0 });
+  const out = tickCal(ctx, 33000);
+  assert.equal(out[0][0].payload.status, 'error');
+  assert.ok(/прервано/.test(out[0][0].payload.message));
+  assert.deepEqual(ctx.global.get('settings').advanced.bepZero.codes, [null, null, null, null, null]);
+});
 
 console.log(failures ? ('\n' + failures + ' FAILED') : '\nall harness checks passed');
 process.exit(failures ? 1 : 0);

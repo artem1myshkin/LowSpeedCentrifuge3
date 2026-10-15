@@ -96,6 +96,7 @@
 - Базовый шлюз использует `cmd-topic`, `file-topic`, `reply-topic`, `file-rep-topic`, `chN/data`.
 - Production flow дополнительно использует high-level `bep/control`, `bep/write-config`, `bep/status`.
 - Это расхождение нельзя игнорировать при доработке БЕП: нужен адаптер или согласование runtime-версии `nc3_bep.py`. Реальный `nc3_bep.py` НЕ публикует `bep/status` — поэтому статус скрипта в UI определяется по свежести `chN/data`, а не по `bep/status`.
+- Пересчёт код → мкм и наклон по БЕП: узлы `BEP Gap` и `BEP ZeroCalibration` (подробно — `docs/protocols-and-integrations.md`, раздел «Как Node-RED использует данные БЕП»). `K(i,ц)` живут в `settings.advanced.bepZero` и принадлежат процедуре калибровки — форма «Настройка» их не сохраняет. Поправка `Δφ` к углу наклона пока НЕ применяется (только отображается и лежит в `global.bep_gap`).
 
 ## Перезапуск python-скриптов из UI (2026-06-18)
 
