@@ -427,6 +427,24 @@ check('BUN AutoTilt: "Авто" from Monitoring runs the automatic sequence (bra
   }
 });
 
+check('BUN AutoTilt gets bun_angle in the real flow and engages the brake within 4″ of the target', () => {
+  // The MQTT bun_angle path (" BUN Calibration") must reach AutoTilt, otherwise arrival is never seen.
+  const cal = flows.find(n => n.id === '94eeeeb32753f795');
+  assert.ok(cal.wires[0].includes(byName['BUN AutoTilt'].id), 'BUN Calibration -> BUN AutoTilt wire');
+  const ctx = makeCtx({ settings, bun: {} });
+  runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 0, mode: 'Авто' }, ctx, { runTimers: true });
+  // 0°0′4″ at target 0 counts as reached (default tolerance 5″)
+  let last;
+  for (let i = 0; i < 3; i++) last = runNode('BUN AutoTilt', { topic: 'bun_angle', payload: i === 1 ? -4 : 4 }, ctx);
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'complete');
+  assert.ok(last.sent.some(m => m[2] && m[2].topic === 'tilt_brake' && m[2].payload === 1), 'brake engaged');
+  // 8″ off is not reached
+  const ctx2 = makeCtx({ settings, bun: {} });
+  runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 0, mode: 'Авто' }, ctx2, { runTimers: true });
+  for (let i = 0; i < 5; i++) runNode('BUN AutoTilt', { topic: 'bun_angle', payload: 8 }, ctx2);
+  assert.equal(ctx2.flow.get('bun_auto_state').status, 'moving');
+});
+
 check('BUN AutoTilt: manual mode and missing msg.mode fall back to the stored mode', () => {
   const ctx = makeCtx({ settings, bun: {} });
   runNode('BUN AutoTilt', { topic: 'tilt_mode', payload: 'Ручной' }, ctx);
