@@ -720,6 +720,7 @@ check('BEP Gap: no zero calibration -> raw only; stale bep_status clears values'
   let r = runNode('BEP Gap', { topic: 'Channel 1', payload: '4000' }, ctx);
   assert.equal(r.out.payload.raw[0], 4000);
   assert.equal(r.out.payload.gapUm[0], null);
+  assert.ok(Math.abs(r.out.payload.scaledUm[0] - 0.167 * 4000) < 1e-9, 'k·K in µm is shown before the zero calibration');
   assert.equal(r.out.payload.tiltCorrArcsec, null);
   r = runNode('BEP Gap', { topic: 'bep_status', payload: JSON.stringify({ running: true, stale: true }) }, ctx);
   assert.equal(r.out.payload.raw[0], null);
