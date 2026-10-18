@@ -844,5 +844,120 @@ check('BEP ZeroCalibration: abort stops the drive; early stop is an error; K(ц)
   assert.deepEqual(ctx.global.get('settings').advanced.bepZero.codes, [null, null, null, null, null]);
 });
 
+// ---------------- Appendix A: circlograms ----------------
+const REV = 262144000;
+function circCtx(extraAdvanced) {
+  const st = bepSettings([null, null, null, null, null]);
+  st.general = { angleCorrectionMode: 'circlogram' };
+  st.advanced.circlogram = { n: 4, turns: 1, speedDegSec: 5, accelDegSec2: 1 };
+  Object.assign(st.advanced, extraAdvanced || {});
+  return makeCtx({ settings: st, current_range: 'high', drive_limits: { ticks_per_deg: REV / 360 },
+    drive_state: { mo: 1, so: 1, ms: 0, position: 0 }, scenario_state: { status: 'idle' },
+    drive_init_state: { status: 'done', initialized: true }, bun_angle: 0 });
+}
+// One trial rotation: rowsByI[i] = codes EP1..EP5 seen at point i (one sample per channel per point).
+function runCirc(ctx, kind, rowsByI, t0) {
+  feedCircChannels(ctx, t0 - 100, rowsByI[0], 0);
+  const r = withNow(t0, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind, tiltConfirmed: true } }, ctx));
+  ctx.global.set('drive_state', Object.assign({}, ctx.global.get('drive_state'), { ms: 2 }));
+  tickCirc(ctx, t0 + 1000);
+  rowsByI.forEach((codes, i) => feedCircChannels(ctx, t0 + 2000 + i * 100, codes, (i * 90 + 45) / 360 * REV + 3 * REV));
+  ctx.global.set('drive_state', Object.assign({}, ctx.global.get('drive_state'), { ms: 0 }));
+  const out = tickCirc(ctx, t0 + 80000);
+  return { start: r, out: out[0] };
+}
+function feedCircChannels(ctx, t, codes, position) {
+  ctx.global.set('drive_state', Object.assign({}, ctx.global.get('drive_state'), { position }));
+  withNow(t, () => codes.forEach((v, j) => runNode('BEP Circlogram', { topic: 'Channel ' + (j + 1), payload: String(v) }, ctx)));
+}
+function tickCirc(ctx, t) {
+  const iv = ctx.intervals.filter(x => x.active).pop();
+  if (!iv) return [];
+  const before = iv.sent.length;
+  withNow(t, () => iv.fn());
+  return iv.sent.slice(before);
+}
+// Reference implementation of the Appendix A formulas (EP in µm via k).
+function appendixX(rows) {
+  const n = rows.length; let up = 0, low = 0;
+  rows.forEach((r, i) => {
+    const ep = r.map((v, j) => v * BEP_K[j]);
+    up += (ep[0] - ep[1]) / 2 * Math.cos(2 * Math.PI * i / n);
+    low += (ep[2] - ep[3]) / 2 * Math.cos(2 * Math.PI * i / n);
+  });
+  return { xUp: up / n, xLow: low / n };
+}
+
+check('BEP Circlogram: preconditions (initial first, homing done)', () => {
+  let ctx = circCtx();
+  feedCircChannels(ctx, 1000, [1, 1, 1, 1, 1], 0);
+  withNow(1500, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'current' } }, ctx));
+  assert.ok(/начальной/.test(ctx.context.get('state').message));
+  ctx = circCtx();
+  ctx.global.set('drive_init_state', {});
+  feedCircChannels(ctx, 1000, [1, 1, 1, 1, 1], 0);
+  withNow(1500, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, ctx));
+  assert.ok(/нулевой метки/.test(ctx.context.get('state').message));
+});
+
+check('BEP Circlogram: Appendix A — rows per point i, X by cos(360°·i/n), dφ = ((ΔXup) − (ΔXlow)) / L', () => {
+  const ctx = circCtx();
+  const initRows = [[1000, 1010, 2000, 2004, 4000], [1002, 1010, 2001, 2004, 4000], [1004, 1008, 2003, 2002, 4000], [1002, 1006, 2001, 2000, 4000]];
+  const r0 = runCirc(ctx, 'initial', initRows, 100000);
+  assert.deepEqual(r0.start.out[1].payload, { ticks: REV, sp_ticks: 3640889, ac_ticks: 728178, dc_ticks: 728178 });
+  const [ui0, , persist0, , file0] = r0.out;
+  assert.equal(ui0.payload.status, 'done');
+  const init = persist0.settings.advanced.circlogramInitial;
+  assert.deepEqual(init.rows, initRows);
+  const x0 = appendixX(initRows);
+  assert.ok(Math.abs(init.xUp - x0.xUp) < 1e-9 && Math.abs(init.xLow - x0.xLow) < 1e-9);
+  assert.ok(/^C:\\NC3\\circlograms\\circlogram_initial_\d{8}_\d{6}\.txt$/.test(file0.filename), file0.filename);
+  assert.ok(file0.payload.includes('i\tEP1\tEP2\tEP3\tEP4\tEP5\r\n0\t1000\t1010\t2000\t2004\t4000'));
+
+  ctx.global.set('bun_angle', 36000);
+  const curRows = [[1030, 1000, 2010, 2000, 4001], [1002, 1010, 2001, 2004, 4001], [990, 1020, 1995, 2010, 4001], [1002, 1006, 2001, 2000, 4001]];
+  const r1 = runCirc(ctx, 'current', curRows, 300000);
+  const cur = r1.out[2].settings.advanced.circlogramCurrent;
+  const x1 = appendixX(curRows);
+  const expected = ((x1.xUp - x0.xUp) - (x1.xLow - x0.xLow)) / 112000 * 206264.81;
+  assert.ok(Math.abs(cur.dphiArcsec - expected) < 1e-9, cur.dphiArcsec + ' vs ' + expected);
+  assert.equal(cur.tiltArcsec, 36000);
+  assert.equal(ctx.global.get('bep_motion_busy'), null);
+});
+
+check('BEP Circlogram: an empty point i is an error, not a guess', () => {
+  const ctx = circCtx();
+  feedCircChannels(ctx, 99900, [1, 1, 1, 1, 1], 0);
+  withNow(100000, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, ctx));
+  ctx.global.set('drive_state', Object.assign({}, ctx.global.get('drive_state'), { ms: 2 }));
+  tickCirc(ctx, 101000);
+  feedCircChannels(ctx, 102000, [1, 1, 1, 1, 1], 0.1 * REV);   // only point 0
+  ctx.global.set('drive_state', Object.assign({}, ctx.global.get('drive_state'), { ms: 0 }));
+  const out = tickCirc(ctx, 180000);
+  assert.equal(out[0][0].payload.status, 'error');
+  assert.ok(/i=1/.test(out[0][0].payload.message));
+});
+
+check('Tilt correction variants: displayed angle = БУН + dφ; AutoTilt keeps the raw angle', () => {
+  const ctx = circCtx({ circlogramInitial: { xUp: 0, xLow: 0 }, circlogramCurrent: { xUp: 1, xLow: 0, dphiArcsec: 12.5 } });
+  let r = runNode(' BUN Calibration'.trim(), { topic: 'bun_angle', payload: 3600 }, ctx);
+  assert.equal(r.out.payload, 3612.5);
+  assert.equal(r.out.raw_angle, 3600);
+  assert.equal(ctx.global.get('bun_angle'), 3600);
+  assert.equal(ctx.global.get('bun_angle_corrected'), 3612.5);
+  ctx.global.get('settings').general.angleCorrectionMode = 'bep';
+  ctx.global.set('bep_gap', { tiltCorrArcsec: -3.8, ts: Date.now() });
+  r = runNode('BUN Calibration', { topic: 'bun_angle', payload: 3600 }, ctx);
+  assert.ok(Math.abs(r.out.payload - 3596.2) < 1e-9);
+  ctx.global.get('settings').general.angleCorrectionMode = 'off';
+  r = runNode('BUN Calibration', { topic: 'bun_angle', payload: 3600 }, ctx);
+  assert.equal(r.out.payload, 3600);
+  // AutoTilt: target 3600, corrected angle 3612.5 but raw 3600 -> reached
+  ctx.global.get('settings').general.angleCorrectionMode = 'circlogram';
+  runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 3600, mode: 'Авто' }, ctx, { runTimers: true });
+  for (let i = 0; i < 3; i++) runNode('BUN AutoTilt', runNode('BUN Calibration', { topic: 'bun_angle', payload: 3600 }, ctx).out, ctx);
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'complete');
+});
+
 console.log(failures ? ('\n' + failures + ' FAILED') : '\nall harness checks passed');
 process.exit(failures ? 1 : 0);
