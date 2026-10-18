@@ -938,6 +938,39 @@ check('BEP Circlogram: an empty point i is an error, not a guess', () => {
   assert.ok(/i=1/.test(out[0][0].payload.message));
 });
 
+check('BEP trial rotation: drive rejection, VH[2] precheck, int32 target -> reverse direction', () => {
+  // ELMO answered "?" to the PR batch -> error with the drive answer, drive stopped
+  let ctx = circCtx();
+  feedCircChannels(ctx, 99900, [1, 1, 1, 1, 1], 0);
+  withNow(100000, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, ctx));
+  const rej = withNow(101000, () => runNode('BEP Circlogram', { topic: 'CMD.PART_REJECTED',
+    payload: { type: 'CMD.PART_REJECTED', cmd: 'BG', raw: 'BG?;', topic: 'set_relative_position' } }, ctx));
+  const last = rej.sent[rej.sent.length - 1];
+  assert.equal(last[0].payload.status, 'error');
+  assert.ok(/отклонил.*BG\?/.test(last[0].payload.message), last[0].payload.message);
+  assert.equal(last[1].topic, 'drive_stop');
+  assert.equal(ctx.global.get('bep_motion_busy'), null);
+  // speed above the live VH[2] -> refused before any command
+  ctx = circCtx();
+  ctx.global.set('drive_limits', { ticks_per_deg: REV / 360, speed_max_ticks: Math.round(4 * REV / 360), accel_max_ticks: 131072000 });
+  feedCircChannels(ctx, 99900, [1, 1, 1, 1, 1], 0);
+  let r = withNow(100000, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, ctx));
+  assert.ok(/VH\[2\]/.test(ctx.context.get('state').message));
+  assert.ok(!r.sent.some(m => m[1]), 'no drive command');
+  // PX close to +int32: 3 turns forward would overflow -> rotate backwards
+  ctx = circCtx();
+  feedCircChannels(ctx, 99900, [1, 1, 1, 1, 1], 2000000000);
+  r = withNow(100000, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, ctx));
+  assert.equal(r.out[1].payload.ticks, -REV);
+  // zero calibration shares the same checks
+  const z = bepCalCtx();
+  feedChannels(z, 99900, [1, 1, 1, 1, 1]);
+  withNow(100000, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, z));
+  const zr = withNow(101000, () => runNode('BEP ZeroCalibration', { topic: 'CMD.PART_REJECTED',
+    payload: { cmd: 'PR=262144000', raw: '?', topic: 'set_relative_position' } }, z));
+  assert.equal(zr.sent[zr.sent.length - 1][0].payload.status, 'error');
+});
+
 check('Tilt correction variants: displayed angle = БУН + dφ; AutoTilt keeps the raw angle', () => {
   const ctx = circCtx({ circlogramInitial: { xUp: 0, xLow: 0 }, circlogramCurrent: { xUp: 1, xLow: 0, dphiArcsec: 12.5 } });
   let r = runNode(' BUN Calibration'.trim(), { topic: 'bun_angle', payload: 3600 }, ctx);
