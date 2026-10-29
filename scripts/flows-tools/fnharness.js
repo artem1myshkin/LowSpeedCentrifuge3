@@ -196,7 +196,7 @@ check('DriveInitState: homing lifecycle with SR bit 7, angle progress and comple
   let r = runNode('DriveInitState', { topic: 'CMD.STARTED', payload: { type: 'CMD.STARTED', topic: 'driveInit', meta } }, ctx);
   assert.equal(r.out[0].payload.status, 'initializing');
   assert.equal(r.out[0].payload.null_mark, 'searching');
-  assert.ok(/started/.test(r.out[1].payload.message));
+  assert.ok(/запущен/.test(r.out[1].payload.message) && /started/.test(r.out[1].payload.message_en), JSON.stringify(r.out[1].payload));
   // batch echo forwarded before the wait: SR with bit 7 set -> armed
   r = runNode('DriveInitState', { topic: 'driveInit', payload: { sr: 128, sr_status: { homing_active: true, amplifier_code: 0 }, position: 0, resolution: 'high' } }, ctx);
   assert.equal(ctx.global.get('drive_init_state').homing_armed, true);
@@ -214,7 +214,7 @@ check('DriveInitState: homing lifecycle with SR bit 7, angle progress and comple
   r = runNode('DriveInitState', { topic: 'CMD.COMPLETED', payload: { type: 'CMD.COMPLETED', topic: 'driveInit', meta, raw: 'MS;0;TM;1;PX;2;VX;0;SR;0;' } }, ctx);
   const done = r.out[0].payload;
   assert.equal(done.status, 'done'); assert.equal(done.initialized, true); assert.equal(done.progress_pct, 100);
-  assert.ok(/completed \(high\)/.test(r.out[1].payload.message), r.out[1].payload.message);
+  assert.ok(/завершён \(high\)/.test(r.out[1].payload.message) && /completed \(high\)/.test(r.out[1].payload.message_en), r.out[1].payload.message);
   assert.equal(ctx.global.get('null_mark_state').status, 'found');
 });
 
@@ -359,7 +359,7 @@ check('DriveInitState: index capture emits homing_stop; the resulting abort comp
   r = runNode('DriveInitState', { topic: 'CMD.FAILED', payload: { topic: 'driveInit', reason: 'operator_aborted', meta } }, ctx);
   assert.equal(r.out[0].payload.status, 'done');
   assert.equal(r.out[0].payload.null_mark, 'found');
-  assert.ok(/completed/.test(r.out[1].payload.message));
+  assert.ok(/завершён/.test(r.out[1].payload.message) && /completed/.test(r.out[1].payload.message_en), JSON.stringify(r.out[1].payload));
   // ST;HM[7];PX echo -> HM[7] offset journaled
   r = runNode('DriveInitState', { topic: 'CMD.ACKED', payload: { topic: 'homing_stop', raw: 'ST;;HM[7];123456;PX;789;MS;0;' } }, ctx);
   assert.equal(r.out[0].payload.hm7_offset, 123456);
@@ -990,6 +990,261 @@ check('Tilt correction variants: displayed angle = БУН + dφ; AutoTilt keeps 
   runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 3600, mode: 'Авто' }, ctx, { runTimers: true });
   for (let i = 0; i < 3; i++) runNode('BUN AutoTilt', runNode('BUN Calibration', { topic: 'bun_angle', payload: 3600 }, ctx).out, ctx);
   assert.equal(ctx.flow.get('bun_auto_state').status, 'complete');
+});
+
+// ---------------- 2026-10-29: auto tilt journal/UI, brake at every end (D4) ----------------
+function autoTiltStart(ctx, target, startAngle) {
+  if (startAngle !== undefined) ctx.global.set('bun_angle', startAngle);
+  const r = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: target, mode: 'Автоматический' }, ctx);
+  const go = r.timers.find(t => t.ms === 300);
+  go.fn();
+  return r;
+}
+check('BUN AutoTilt: start and completion go to the journal (RU+EN) and to the UI; brake engaged', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  const r = autoTiltStart(ctx, 36000, 0);
+  const startSent = r.sent[0];
+  assert.equal(startSent[2].payload, 0, 'brake released first');
+  assert.equal(startSent[3].payload.type, 'info');
+  assert.ok(/тормоз отпущен/.test(startSent[3].payload.message) && /brake released/.test(startSent[3].payload.message_en));
+  assert.equal(startSent[4].topic, 'bun_auto_state');
+  let last;
+  for (let i = 0; i < 3; i++) last = runNode('BUN AutoTilt', { topic: 'bun_angle', payload: 36000 }, ctx, { runTimers: true });
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'complete');
+  const journal = last.sent.find(m => m[3]);
+  assert.ok(journal && /достигнут/.test(journal[3].payload.message) && /reached/.test(journal[3].payload.message_en), JSON.stringify(last.sent));
+  assert.equal(journal[4].payload.status, 'complete');
+  assert.ok(last.sent.some(m => m[2] && m[2].topic === 'tilt_brake' && m[2].payload === 1), 'brake engaged');
+  assert.ok(last.sent.some(m => m[1] && m[1].payload === 'release'), 'BUN drive off after the brake');
+});
+
+check('BUN AutoTilt: BUN stops off the tolerance after moving -> "settled", brake engaged, warning', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  autoTiltStart(ctx, 36000, 0);
+  const base = Date.now();
+  let last; const all = [];
+  // the BUN moves 0 -> 35970 and stays there (30″ off the setpoint, tolerance 5″)
+  const samples = [10000, 25000, 35970, 35971, 35970, 35969, 35970, 35970, 35971];
+  samples.forEach((a, i) => {
+    const st = ctx.flow.get('bun_auto_state');
+    st.window = (st.window || []).map(p => ({ t: p.t - 1000, a: p.a }));
+    ctx.flow.set('bun_auto_state', st);
+    last = runNode('BUN AutoTilt', { topic: 'bun_angle', payload: a }, ctx, { runTimers: true });
+    all.push(...last.sent);
+  });
+  const st = ctx.flow.get('bun_auto_state');
+  assert.equal(st.status, 'settled', JSON.stringify(st.window));
+  assert.ok(base > 0);
+  const journal = all.find(m => m[3]);
+  assert.equal(journal[3].payload.type, 'warning');
+  assert.ok(/остановился/.test(journal[3].payload.message));
+  assert.ok(all.some(m => m[2] && m[2].payload === 1), 'brake engaged');
+});
+
+check('BUN AutoTilt: no motion / no data -> stop BUN, then brake, error in journal and UI', () => {
+  for (const kind of ['no_motion', 'no_data']) {
+    const ctx = makeCtx({ settings, bun: {} });
+    const r = autoTiltStart(ctx, 36000, 0);
+    const st = ctx.flow.get('bun_auto_state');
+    if (kind === 'no_motion') { st.go_at -= 16000; st.last_sample_at = Date.now(); }
+    else { st.go_at -= 6000; st.last_sample_at -= 6000; }
+    ctx.flow.set('bun_auto_state', st);
+    const watch = r.timers.find(t => t.ms === 1000);
+    const before = r.sent.length;
+    watch.fn();
+    assert.equal(ctx.flow.get('bun_auto_state').status, kind);
+    const after = r.sent.slice(before);
+    assert.ok(after[0][1] && after[0][1].payload === 'stop', kind + ': BUN stop first');
+    const j = after.find(m => m[3]);
+    assert.equal(j[3].payload.type, 'error');
+    assert.ok(j[3].payload.message_en.length > 0);
+    // brake after brakeSettleMs, then release
+    r.timers.filter(t => t.ms === 300).slice(1).forEach(t => t.fn());
+    r.timers.filter(t => t.ms === 300).slice(2).forEach(t => t.fn());
+    assert.ok(r.sent.some(m => m[2] && m[2].topic === 'tilt_brake' && m[2].payload === 1), kind + ': brake engaged');
+  }
+});
+
+check('BUN AutoTilt: operator stop during the sequence engages the brake and journals it', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  autoTiltStart(ctx, 36000, 0);
+  const r = runNode('BUN AutoTilt', { topic: 'bun_cmd', payload: 'stop' }, ctx, { runTimers: true });
+  assert.equal(r.out[1].payload, 'stop');
+  assert.equal(r.out[3].payload.type, 'warning');
+  assert.equal(r.out[4].payload.status, 'cancelled');
+  assert.ok(r.sent.some(m => m[2] && m[2].topic === 'tilt_brake' && m[2].payload === 1), 'brake engaged after stop');
+  // jog command cancels the sequence but leaves the brake to the operator
+  const ctx2 = makeCtx({ settings, bun: {} });
+  autoTiltStart(ctx2, 36000, 0);
+  const r2 = runNode('BUN AutoTilt', { topic: 'bun_cmd', payload: 'slowup' }, ctx2, { runTimers: true });
+  assert.equal(r2.out[4].payload.status, 'cancelled');
+  assert.ok(!r2.sent.some(m => m[2] && m[2].topic === 'tilt_brake'), 'no brake on jog');
+});
+
+check('BUN AutoTilt has 5 outputs wired: journal -> ProtocolManager, state -> БУН and Мониторинг', () => {
+  const at = byName['BUN AutoTilt'];
+  assert.equal(at.outputs, 5);
+  const lo = flows.find(n => n.id === at.wires[3][0]);
+  assert.ok(lo.type === 'link out' && lo.links.includes('2c89895f1113b5b7'));
+  assert.ok(at.wires[4].includes('0c3c6139972245b3'));
+  const mon = flows.find(n => at.wires[4].includes(n.id) && n.type === 'link out');
+  assert.ok(mon && mon.links.includes('5818e895b4a23928'));
+});
+
+// ---------------- 2026-10-29: ELMO link journal and null-mark reset (D3, D9) ----------------
+function runInit(name, ctx, nc3Fake, nodeSent) {
+  const n = byName[name];
+  const timers = [];
+  const node = { send: (m) => nodeSent.push(m), log: () => {}, warn: () => {}, error: () => {}, status: () => {}, id: n.id };
+  const fn = new Function('node', 'global', 'flow', 'context', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', n.initialize);
+  ctx.global.set('nc3', nc3Fake);
+  fn(node, ctx.global, ctx.flow, ctx.context, (f, ms) => { timers.push({ fn: f, ms }); return timers.length; }, () => {}, () => 1, () => {});
+  return timers;
+}
+check('ElmoTransport On Start: ELMO.LINK on established, lost and restored link (not on every reconnect try)', () => {
+  const ctx = makeCtx({ settings });
+  const sent = [];
+  let sub = null;
+  const fakeActor = { subscribe: (cb) => { sub = cb; }, send: () => {}, stop: () => {} };
+  const timers = runInit('ElmoTransport', ctx, { startElmoTransport: () => fakeActor }, sent);
+  const snap = (value) => sub({ value, context: { resolution: 'high' } });
+  const links = () => sent.filter(m => m[2] && m[2].topic === 'ELMO.LINK').map(m => m[2].payload);
+  snap('connecting'); snap('offline');
+  assert.equal(links().length, 0, 'no event before the first connection');
+  snap({ connected: 'idle' }); snap({ connected: 'sending' });
+  assert.deepEqual(links().map(p => [p.online, p.restored]), [[true, false]]);
+  snap('offline'); snap('connecting'); snap('offline');
+  assert.deepEqual(links().map(p => [p.online, p.restored]), [[true, false], [false, false]]);
+  snap('connecting'); snap({ connected: 'idle' });
+  assert.deepEqual(links().map(p => [p.online, p.restored]), [[true, false], [false, false], [true, true]]);
+  // startup timer: no event because the link was up
+  timers.filter(t => t.ms === 10000).forEach(t => t.fn());
+  assert.equal(links().length, 3);
+  // no link at all within 10 s -> one "initial" offline event
+  const sent2 = [];
+  const t2 = runInit('ElmoTransport', makeCtx({ settings }), { startElmoTransport: () => ({ subscribe: () => {}, send: () => {}, stop: () => {} }) }, sent2);
+  t2.filter(t => t.ms === 10000).forEach(t => t.fn());
+  const l2 = sent2.filter(m => m[2] && m[2].topic === 'ELMO.LINK').map(m => m[2].payload);
+  assert.equal(l2.length, 1);
+  assert.equal(l2[0].initial, true);
+});
+
+check('DriveInitState: ELMO link loss journals and resets the null mark; scenario then homes again', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [{ message: 'Поиск нулевой метки: завершён (high): метка найдена', type: 'info' }],
+    drive_init_state: { status: 'done', initialized: true, resolution: 'high', null_mark: 'found' }, drive_state: { mo: true, so: true } });
+  let r = runNode('DriveInitState', { topic: 'ELMO.LINK', payload: { online: true, restored: false } }, ctx);
+  assert.ok(/установлена/.test(r.out[1].payload.message) && /established/.test(r.out[1].payload.message_en));
+  r = runNode('DriveInitState', { topic: 'ELMO.LINK', payload: { online: false } }, ctx);
+  assert.equal(r.out[0].payload.status, 'not_done');
+  assert.equal(r.out[0].payload.null_mark, 'unknown');
+  const msgs = r.out[1].map(m => m.payload.message);
+  assert.ok(/Связь с ELMO потеряна/.test(msgs[0]), msgs.join(' | '));
+  assert.ok(/требуется после потери связи с ELMO \(high\)/.test(msgs[1]), msgs.join(' | '));
+  // the journal now says "required": ScenarioManager must home even with the motor on
+  ctx.global.get('logs').push({ message: msgs[1], type: 'warning' });
+  ctx.global.set('scenario_files', ['t.scn']);
+  ctx.flow.set('motion_params', { sp: 728178, ac: 364088, dc: 364088 });
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 't.scn' } }, ctx);
+  runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n2 10\n' }, ctx);
+  assert.equal(ctx.global.get('scenario_state').status, 'drive_init_pending');
+  // restored link: journal only, the mark stays unknown
+  r = runNode('DriveInitState', { topic: 'ELMO.LINK', payload: { online: true, restored: true } }, ctx);
+  assert.ok(/восстановлена/.test(r.out[1].payload.message));
+  assert.equal(ctx.global.get('drive_init_state').null_mark, 'unknown');
+});
+
+check('Journal parsers accept new Russian status words and old English ones', () => {
+  for (const [text, status] of [
+    ['Поиск нулевой метки: завершён (high): метка найдена', 'done'],
+    ['Поиск нулевой метки: completed (high): метка найдена', 'done'],
+    ['Поиск нулевой метки: не выполнен (high): x', 'failed'],
+    ['Поиск нулевой метки: failed (high): x', 'failed'],
+    ['Поиск нулевой метки: требуется после смены пары головок (high)', 'required'],
+    ['Поиск нулевой метки: required after resolution switch (high)', 'required'],
+  ]) {
+    const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [{ message: text }], drive_state: { mo: true, so: true } });
+    const r = runNode('DriveInitState', { topic: 'reread', payload: { resolution: 'high' } }, ctx);
+    const st = ctx.global.get('drive_init_state') || { status: 'not_done' };
+    const expected = status === 'done' ? 'done' : (status === 'failed' ? 'failed' : 'not_done');
+    assert.equal(st.status, expected, text + ' -> ' + JSON.stringify(r && r.out && r.out[0]));
+  }
+});
+
+check('Journal entries keep the English text: ProtocolManager -> EventLogService', () => {
+  const ctx = makeCtx({ settings, logs: [] });
+  runNode('ProtocolManager', { topic: 'journal_event', payload: { source: 'tilt', message: 'Привет', message_en: 'Hello', type: 'info' } }, ctx);
+  const entry = ctx.global.get('logs').slice(-1)[0];
+  assert.equal(entry.message_en, 'Hello');
+  const r = runNode('EventLogService', { topic: 'logs_update', payload: { logs: ctx.global.get('logs') } }, ctx);
+  assert.ok(/"message_en":"Hello"/.test(r.out[1].payload), r.out[1].payload);
+});
+
+// ---------------- 2026-10-29: protocol closed by the server at the scenario end (D14) ----------------
+check('ScenarioManager: "close at the end of the scenario" is stored on the server and closes the protocol', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [], drive_state: { mo: true, so: true },
+    drive_init_state: { status: 'done', initialized: true, resolution: 'high' }, protocol_open: true, is_recording: true });
+  let r = runNode('ScenarioManager', { topic: 'scenario_auto_close', payload: true }, ctx);
+  assert.equal(r.out[2].payload.auto_close_protocol, true);
+  ctx.flow.set('motion_params', { sp: 728178, ac: 364088, dc: 364088 });
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'high_resolution.scn' } }, ctx);
+  runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n2 10\n' }, ctx);
+  const st = ctx.global.get('scenario_state');
+  st.status = 'holding'; st.hold_ends_at = Date.now() - 1; ctx.global.set('scenario_state', st);
+  r = runNode('ScenarioManager', { topic: 'poll_data', payload: { velocity_deg_per_sec: 2, resolution: 'high' } }, ctx);
+  const topics = r.out[1].map(m => m.topic);
+  assert.ok(topics.indexOf('record_measurement') >= 0 && topics.indexOf('close_protocol') > topics.indexOf('record_measurement'), topics.join(','));
+  // flag off -> the protocol stays open
+  runNode('ScenarioManager', { topic: 'scenario_auto_close', payload: false }, ctx);
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'high_resolution.scn' } }, ctx);
+  runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n2 10\n' }, ctx);
+  const st2 = ctx.global.get('scenario_state');
+  st2.status = 'holding'; st2.hold_ends_at = Date.now() - 1; ctx.global.set('scenario_state', st2);
+  r = runNode('ScenarioManager', { topic: 'poll_data', payload: { velocity_deg_per_sec: 2, resolution: 'high' } }, ctx);
+  assert.ok(!r.out[1].some(m => m.topic === 'close_protocol'));
+});
+
+// ---------------- 2026-10-29: English texts of operator messages (D7) ----------------
+const CYR = /[А-Яа-яЁё]/;
+check('Scenario errors and notices carry English text', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [], scenario_files: ['t.scn'] });
+  runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 't.scn' } }, ctx);
+  const r = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\nabc 10\n' }, ctx);
+  const st = ctx.global.get('scenario_state');
+  assert.equal(st.status, 'error');
+  assert.ok(st.last_error_en && !CYR.test(st.last_error_en), st.last_error_en);
+  assert.ok(st.notice_text_en && !CYR.test(st.notice_text_en), st.notice_text_en);
+  const j = r.out[1].find(m => m.topic === 'journal_event');
+  assert.ok(j.payload.message_en && !CYR.test(j.payload.message_en), j.payload.message_en);
+});
+
+check('BEP calibration/circlogram refusals have English text without Cyrillic', () => {
+  const z = bepCalCtx();
+  let r = runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: {} }, z);
+  let sent = [].concat(r.sent || [], r.out ? [r.out] : []);
+  let st = sent.map(m => m && m[0]).filter(Boolean).pop();
+  assert.ok(st.payload.message_en && !CYR.test(st.payload.message_en), st.payload.message_en);
+  let jr = sent.map(m => m && m[3]).filter(Boolean).pop();
+  assert.ok(jr.payload.message_en && !CYR.test(jr.payload.message_en), jr.payload.message_en);
+  const c = circCtx({});
+  r = runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'current' } }, c);
+  sent = [].concat(r.sent || [], r.out ? [r.out] : []);
+  st = sent.map(m => m && m[0]).filter(Boolean).pop();
+  assert.ok(st.payload.message_en && !CYR.test(st.payload.message_en), st.payload.message_en);
+});
+
+check('Nav i18n: UI-scoped template gets the init snapshot through the "to UI" link', () => {
+  const t = flows.find(n => n.id === 'nc3-nav-i18n');
+  assert.ok(t && t.type === 'ui-template' && t.templateScope === 'widget:ui');
+  const li = flows.find(n => n.id === 'nc3-nav-i18n-in');
+  assert.deepEqual(li.wires, [['nc3-nav-i18n']]);
+  assert.ok(flows.find(n => n.id === 'defeba9f1c3e6b14').links.includes('nc3-nav-i18n-in'));
+  const names = flows.filter(n => n.type === 'ui-page').map(p => p.name);
+  for (const name of names) assert.ok(t.format.includes("'" + name + "'"), 'page name in the map: ' + name);
+});
+
+check('D12: the unreachable legacy BEP chain and the empty "RC blocked debug out" are gone', () => {
+  for (const id of ['3bc1add39936eec4', 'f590eeadf44ae45d', '237e5e4647d42f14']) assert.ok(!flows.find(n => n.id === id), id);
+  for (const n of flows) for (const p of (n.wires || [])) for (const t of (p || [])) assert.ok(flows.find(x => x.id === t), 'dangling wire ' + n.id + ' -> ' + t);
 });
 
 console.log(failures ? ('\n' + failures + ' FAILED') : '\nall harness checks passed');
