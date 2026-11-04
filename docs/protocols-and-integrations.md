@@ -484,7 +484,7 @@ Runtime:
 - `K(i,ц)` — `settings.advanced.bepZero` (`codes`, `samples`, `calibratedAt`), снимаются узлом
   `BEP ZeroCalibration` по кнопке «Калибровка» на вкладке БЕП: оператор выставляет ось вертикально
   (вкладка БУН) и подтверждает, узел шлёт в `CommandHandler` `set_relative_position` на 360°
-  (SP 2,5 °/с, AC/DC 1 °/с²), усредняет коды за время движения (MS ≠ 0 … MS = 0), пишет результат в
+  (SP 2,5 °/с, AC/DC 1 °/с²), усредняет коды за время движения (MS = 2 или скорость VX выше 0,2 °/с; MS = 0/1 — профиль завершён), пишет результат в
   `settings.json` (`bep_zero_persist` → `SettingsPersist`) и в журнал. Форма «Настройка» `bepZero` не
   отправляет, а `SettingsNormalize` всегда берёт его из текущих настроек;
 - `scaledUm[i] = ki·Ki` — код в мкм без нуля (виден до калибровки);

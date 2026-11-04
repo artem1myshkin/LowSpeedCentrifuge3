@@ -1247,5 +1247,189 @@ check('D12: the unreachable legacy BEP chain and the empty "RC blocked debug out
   for (const n of flows) for (const p of (n.wires || [])) for (const t of (p || [])) assert.ok(flows.find(x => x.id === t), 'dangling wire ' + n.id + ' -> ' + t);
 });
 
+// ---------------- 2026-11-04: slow BUN, manual tilt journal, setpoint across tabs, BEP motion check ----------------
+function fireWatch(run, t) {
+  const watch = run.timers.filter(x => x.ms === 1000).pop();
+  withNow(t, () => watch.fn());
+}
+function brakeEngaged(sent) { return sent.some(m => m[2] && m[2].topic === 'tilt_brake' && m[2].payload === 1); }
+
+check('BUN AutoTilt: a slow BUN (0.6 °/s over 101°, stand journal) is not "no motion"; brake only at the end', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  const t0 = 1000000, start = Math.round(10.9767 * 3600), target = -90 * 3600;
+  const run = withNow(t0, () => autoTiltStart(ctx, target, start));
+  let last, t = 0;
+  while (ctx.flow.get('bun_auto_state').status === 'moving' && t < 400) {
+    t += 1;
+    const angle = Math.max(target, start - 2160 * t);
+    last = withNow(t0 + t * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: angle }, ctx));
+    if (ctx.flow.get('bun_auto_state').status === 'moving') {
+      assert.ok(!brakeEngaged(last.sent), 'brake during the motion at t=' + t);
+      fireWatch(run, t0 + t * 1000);
+    }
+  }
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'complete');
+  assert.ok(t > 160, 'the whole path was travelled, t=' + t);
+  assert.ok(!brakeEngaged(run.sent), 'no brake from the watchdog');
+  assert.ok(brakeEngaged(last.sent), 'brake engaged at the end');
+});
+
+check('BUN AutoTilt: BUN stops before half of the path -> "stalled" after 15 s: stop, brake, error', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  const t0 = 2000000, target = 360000;
+  const run = withNow(t0, () => autoTiltStart(ctx, target, 0));
+  let t = 0;
+  for (; t < 10; t++) {
+    withNow(t0 + t * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: 10000 * t }, ctx));
+    fireWatch(run, t0 + t * 1000);
+  }
+  const stoppedAt = 90000;
+  for (; t < 40 && ctx.flow.get('bun_auto_state').status === 'moving'; t++) {
+    withNow(t0 + t * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: stoppedAt }, ctx));
+    if (ctx.flow.get('bun_auto_state').status === 'moving') fireWatch(run, t0 + t * 1000);
+  }
+  const st = ctx.flow.get('bun_auto_state');
+  assert.equal(st.status, 'stalled');
+  assert.ok(t >= 22 && t <= 28, 'fault about 15 s after the last motion, t=' + t);
+  const j = run.sent.find(m => m[3] && m[3].payload.type === 'error');
+  assert.ok(j && /не двигается/.test(j[3].payload.message) && !CYR.test(j[3].payload.message_en));
+  assert.ok(run.sent.some(m => m[1] && m[1].payload === 'stop'), 'BUN stop first');
+});
+
+check('Manual tilt: setpoint and result go to the journal; no automatic brake or stop', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  ctx.global.set('bun_angle', 0);
+  const t0 = 3000000;
+  const r = withNow(t0, () => runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 7200, mode: 'Ручной' }, ctx, { runTimers: true }));
+  const j = r.sent.find(m => m[3]);
+  assert.equal(j[3].topic, 'journal_event');
+  assert.equal(j[3].payload.source, 'tilt');
+  assert.ok(/Ручной наклон: уставка 2\.0000°/.test(j[3].payload.message), j[3].payload.message);
+  assert.ok(/Manual tilt: setpoint 2\.0000°/.test(j[3].payload.message_en));
+  // an unknown angle is shown as unknown, not as 0°
+  const noAngle = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 7200, mode: 'Ручной' }, makeCtx({ settings, bun: {} }));
+  assert.ok(/текущий угол —°/.test(noAngle.sent.find(m => m[3])[3].payload.message));
+  assert.ok(r.sent.some(m => m[1] && m[1].payload === 'go'), 'GO after the setpoint');
+  assert.ok(!r.sent.some(m => m[2]), 'no brake command');
+  const all = [];
+  [1800, 3600, 5400, 7198, 7199, 7200, 7199, 7200, 7199, 7200, 7199, 7200].forEach((a, i) => {
+    const x = withNow(t0 + (i + 1) * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: a }, ctx));
+    if (x.out) all.push(x.out);
+    all.push(...x.sent);
+  });
+  const st = ctx.flow.get('bun_auto_state');
+  assert.equal(st.status, 'manual_done');
+  const done = all.filter(m => m[3]);
+  assert.equal(done.length, 1, 'one result entry');
+  assert.ok(/остановился на (1\.9997|2\.0000)°/.test(done[0][3].payload.message), done[0][3].payload.message);
+  assert.equal(done[0][3].payload.type, 'info');
+  assert.ok(!all.some(m => m[2] || (m[1] && m[1].payload === 'stop')), 'operator keeps the control');
+});
+
+check('Manual tilt: jog commands, brake and mode changes go to the journal; no motion is a warning', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  ctx.global.set('bun_angle', 3600);
+  const t0 = 4000000;
+  let r = withNow(t0, () => runNode('BUN AutoTilt', { topic: 'bun_cmd', payload: 'slowup' }, ctx));
+  assert.equal(r.out[1].payload, 'slowup');
+  assert.ok(/«Больше»/.test(r.out[3].payload.message) && /Slow Up/.test(r.out[3].payload.message_en));
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'manual_jog');
+  r = withNow(t0 + 16000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: 3600 }, ctx));
+  assert.equal(r.out[3].payload.type, 'warning');
+  assert.ok(/не начал движение/.test(r.out[3].payload.message) && /тормоз/.test(r.out[3].payload.message));
+  for (const cmd of ['stop', 'release', 'zero']) {
+    r = runNode('BUN AutoTilt', { topic: 'bun_cmd', payload: cmd }, ctx);
+    assert.equal(r.out[1].payload, cmd);
+    assert.ok(r.out[3] && !CYR.test(r.out[3].payload.message_en), cmd);
+  }
+  r = runNode('BUN AutoTilt', { topic: 'tilt_brake', payload: 0 }, ctx);
+  assert.deepEqual([r.out[0], r.out[1], r.out[2]], [null, null, null], 'the journal only: Tilt gets the command itself');
+  assert.ok(/отпущен оператором/.test(r.out[3].payload.message));
+  r = runNode('BUN AutoTilt', { topic: 'tilt_brake', payload: 1 }, ctx);
+  assert.ok(/зажат оператором/.test(r.out[3].payload.message));
+  r = runNode('BUN AutoTilt', { topic: 'tilt_mode', payload: 'Автоматический' }, ctx);
+  assert.ok(/автоматический/.test(r.out[3].payload.message) && /automatic/.test(r.out[3].payload.message_en));
+  assert.equal(runNode('BUN AutoTilt', { topic: 'tilt_mode', payload: 'Автоматический' }, ctx).out, null, 'same mode: no entry');
+  const sw = flows.find(n => n.id === '481ce8eefd66dde7');
+  const idx = v => sw.rules.findIndex(x => x.v === v);
+  assert.ok(sw.wires[idx('tilt_brake')].includes('4550c6a1aee78822') && sw.wires[idx('tilt_brake')].includes(byName['BUN AutoTilt'].id));
+  assert.deepEqual(sw.wires[idx('tilt_target')], [byName['BUN AutoTilt'].id]);
+  assert.equal(sw.outputs, sw.rules.length);
+});
+
+check('Tilt setpoint and mode survive a tab change: stored in Node-RED and sent with both init paths', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  runNode('BUN AutoTilt', { topic: 'tilt_target', payload: 1234.4 }, ctx);
+  assert.equal(ctx.global.get('bun_target_seconds'), 1234);
+  runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: -324000, mode: 'Автоматический' }, ctx);
+  assert.equal(ctx.global.get('bun_target_seconds'), -324000);
+  assert.equal(ctx.global.get('bun').mode, 'Автоматический');
+  const change = flows.find(n => n.id === '4edb9a18ba25ec61');
+  for (const key of ['bun_target_seconds', 'bun_auto_state', 'mode']) assert.ok(change.rules.some(x => x.p === key), key);
+  const gsr = byName.GlobalStateReader.func;
+  assert.ok(gsr.includes('bun_target_seconds:') && gsr.includes('bun_mode:'));
+  const page = flows.find(n => n.id === '0c3c6139972245b3').format;
+  assert.ok(page.includes('d.bun_target_seconds') && page.includes('Object.is(d, -0)'));
+  const mon = flows.find(n => n.id === 'cd1902e1e473a48c').format;
+  assert.ok(mon.includes('d.bun_target_seconds') && mon.includes("topic: 'tilt_target'"));
+});
+
+check('BEP: MS=1 at rest (high resolution) is not "axis rotating"; the rotation runs and completes', () => {
+  const z = bepCalCtx();
+  const t0 = 100000;
+  z.global.set('drive_state', { mo: 1, so: 1, ms: 1 });
+  feedChannels(z, t0 - 100, [1, 1, 1, 1, 1]);
+  const r = withNow(t0, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, z));
+  assert.equal(r.out[0].payload.status, 'running');
+  feedChannels(z, t0 + 200, [9999, 9999, 9999, 9999, 9999]);
+  tickCal(z, t0 + 500);
+  assert.equal(z.context.get('sawMotion'), false, 'MS=1 before the profile is not motion');
+  z.global.set('drive_state', { mo: 1, so: 1, ms: 2 });
+  tickCal(z, t0 + 1000);
+  for (let k = 0; k < 20; k++) feedChannels(z, t0 + 2000 + k * 500, [4000, 4010, 4020, 4030, 4100]);
+  z.global.set('drive_state', { mo: 1, so: 1, ms: 1 });
+  const out = tickCal(z, t0 + 147000);
+  assert.equal(out[0][0].payload.status, 'done', 'profile end with MS=1 completes the turn');
+  assert.deepEqual(out[0][0].payload.codes, [4000, 4010, 4020, 4030, 4100]);
+});
+
+check('BEP: real motion is refused with MS and speed; the VH[2] limit is reported first', () => {
+  for (const [state, re] of [[{ mo: 1, so: 1, ms: 2, velocity_deg_per_sec: 2.5 }, /MS=2, 2\.50 °\/с/], [{ mo: 1, so: 1, ms: 0, velocity_deg_per_sec: -1 }, /MS=0, 1\.00 °\/с/]]) {
+    const z = bepCalCtx();
+    z.global.set('drive_state', state);
+    feedChannels(z, 99900, [1, 1, 1, 1, 1]);
+    const r = withNow(100000, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, z));
+    const st = r.sent[r.sent.length - 1][0].payload;
+    assert.ok(/ось вращается/.test(st.message) && re.test(st.message), st.message);
+    assert.ok(/the axis is rotating/.test(st.message_en) && !CYR.test(st.message_en), st.message_en);
+  }
+  // 2.5 °/s above VH[2], MS=1 at rest: the operator sees the speed limit, not "axis rotating"
+  const z = bepCalCtx();
+  z.global.set('drive_state', { mo: 1, so: 1, ms: 1 });
+  z.global.set('drive_limits', { ticks_per_deg: REV / 360, speed_max_ticks: Math.round(2 * REV / 360), accel_max_ticks: 131072000 });
+  feedChannels(z, 99900, [1, 1, 1, 1, 1]);
+  withNow(100000, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, z));
+  assert.ok(/скорость 2\.5 °\/с больше VH\[2\]/.test(z.context.get('state').message), z.context.get('state').message);
+  const c = circCtx();
+  c.global.set('drive_state', Object.assign({}, c.global.get('drive_state'), { ms: 2 }));
+  c.global.set('drive_limits', { ticks_per_deg: REV / 360, speed_max_ticks: Math.round(2 * REV / 360), accel_max_ticks: 131072000 });
+  feedCircChannels(c, 99900, [1, 1, 1, 1, 1], 0);
+  withNow(100000, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, c));
+  assert.ok(/VH\[2\]/.test(c.context.get('state').message), c.context.get('state').message);
+});
+
+check('BEP: a rejected SP names the speed in °/s, in Russian and in English', () => {
+  for (const [name, topic, payload] of [['BEP ZeroCalibration', 'bep_zero_cal_start', { tiltConfirmed: true }], ['BEP Circlogram', 'bep_circ_start', { kind: 'initial', tiltConfirmed: true }]]) {
+    const ctx = name === 'BEP Circlogram' ? circCtx() : bepCalCtx();
+    if (name === 'BEP Circlogram') feedCircChannels(ctx, 99900, [1, 1, 1, 1, 1], 0); else feedChannels(ctx, 99900, [1, 1, 1, 1, 1]);
+    withNow(100000, () => runNode(name, { topic, payload }, ctx));
+    const r = withNow(101000, () => runNode(name, { topic: 'CMD.PART_REJECTED', payload: { cmd: 'SP=1820444', raw: ':?', topic: 'set_relative_position' } }, ctx));
+    const last = r.sent[r.sent.length - 1];
+    assert.ok(/привод отклонил скорость 2\.500 °\/с \(команда SP=1820444\)/.test(last[0].payload.message), last[0].payload.message);
+    assert.ok(/the drive rejected the speed 2\.500 °\/s/.test(last[0].payload.message_en) && !CYR.test(last[0].payload.message_en), last[0].payload.message_en);
+    assert.equal(last[1].topic, 'drive_stop');
+  }
+});
+
 console.log(failures ? ('\n' + failures + ' FAILED') : '\nall harness checks passed');
 process.exit(failures ? 1 : 0);
