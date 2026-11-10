@@ -28,7 +28,7 @@ function makeHarness(opts = {}) {
     emitEvent: (evt) => calls.emitEvent.push(evt),
     setStatus: (st) => calls.status.push(st),
     now: () => clock,
-    timeoutMs: 600000,
+    timeoutMs: opts.timeoutMs == null ? 600000 : opts.timeoutMs,
     connectTimeoutMs: 600000,
     reconnectMs: 600000,
     statePeriodMs: 1000,
@@ -248,6 +248,50 @@ test('waitForMotionDone command completes only after MS reports motion done', as
   assert.equal(h.calls.forwardResp[0].topic, 'poll_data');
   assert.equal(h.calls.forwardResp[0].raw, 'MS;0;TM;200;PX;20;VX;0;SR;0;');
   assert.equal(h.ctx().inFlight.pollRole, 'state');
+});
+
+test('lost reply during waitForMotionDone re-polls after TIMEOUT instead of hanging (homing freeze 2026-11-11)', async () => {
+  const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 60000, timeoutMs: 30 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: { id: 'init', kind: 'cmd', cmd: 'PR=1;BG', meta: { topic: 'driveInit', waitForMotionDone: true } },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PR;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+
+  // MS answered, the TM reply datagram is lost.
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MS;2;' });
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionPollPart' });
+  const sentBefore = h.calls.sendCmd.length;
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+  assert.equal(h.ctx().missCount, 1);
+  assert.equal(h.calls.sendCmd[sentBefore], 'MS');
+  assert.equal(failed(h.calls).length, 0);
+
+  // The next motion poll answers fully: the wait goes on and completes normally.
+  h.calls.forwardResp.length = 0;
+  feedMotionStatusPoll(h, { ms: 'MS;0;', tm: 'TM;200;', px: 'PX;20;', vx: 'VX;0;' });
+  assert.equal(completed(h.calls).at(-1).id, 'init');
+  assert.equal(h.calls.forwardResp[0].topic, 'poll_data');
+});
+
+test('no reply at all during waitForMotionDone fails the command and stops the drive after motionMaxMisses', async () => {
+  const h = makeHarness({ motionPollDelayMs: 2, motionDoneTimeoutMs: 60000, timeoutMs: 10 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: { id: 'init', kind: 'cmd', cmd: 'PR=1;BG', meta: { topic: 'driveInit', waitForMotionDone: true } },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PR;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: ';' });
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(failed(h.calls).at(-1).reason, 'motion_timeout');
+  assert.ok(h.calls.sendCmd.includes('ST'));
+  assert.ok(h.calls.sendCmd.includes('MO=0'));
 });
 
 test('waitForMotionDone accepts non-moving MS only when PA target is reached', async () => {

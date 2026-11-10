@@ -906,8 +906,19 @@ function createElmoTransport(effects) {
               },
             },
           },
+          // Lost reply datagram during the motion wait (homing revolution, PR/PA with waitForMotionDone):
+          // without this watchdog the machine waited forever for a reply that never came - no polls,
+          // the angle and the homing progress froze until the operator pressed Stop (stand report
+          // 2026-11-11). A missed part counts as a miss, the motion poll restarts after
+          // MOTION_POLL_DELAY, and motionPollPause still enforces the overall motion-done timeout.
           waitingForMotionDone: {
             entry: ['statusWaitingMotion', 'startMotionPoll', 'sendMotionPollPart'],
+            after: {
+              TIMEOUT: [
+                { guard: 'tooManyMotionMisses', target: '#transport.offline', actions: ['failMotionWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll'] },
+                { target: 'motionPollPause', actions: ['bumpMiss', 'clearMotionPoll'] },
+              ],
+            },
             on: {
               'UI.CMD': [
                 { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll', 'enqueueCmd'] },
@@ -929,6 +940,12 @@ function createElmoTransport(effects) {
             always: 'waitingForMotionPollPart',
           },
           waitingForMotionPollPart: {
+            after: {
+              TIMEOUT: [
+                { guard: 'tooManyMotionMisses', target: '#transport.offline', actions: ['failMotionWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll'] },
+                { target: 'motionPollPause', actions: ['bumpMiss', 'clearMotionPoll'] },
+              ],
+            },
             on: {
               'UI.CMD': [
                 { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearMotionWait', 'clearMotionPoll', 'enqueueCmd'] },

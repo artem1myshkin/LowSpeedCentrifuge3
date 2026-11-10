@@ -533,7 +533,7 @@ check('angle_buffer: TM overflow (~71.6 min) is compensated', () => {
   assert.ok(Math.abs((t[3] - t[0]) - 0.157296) < 0.001, 'span 0.157296 s, got ' + (t[3] - t[0]));
 });
 
-check('ProtocolManager data file: degrees column, normalized time, encoding fields', () => {
+check('ProtocolManager data file (English): degrees column, normalized time, encoding fields', () => {
   const s2 = JSON.parse(JSON.stringify(settings)); s2.general.recordingSaveRawData = true;
   const ctx = makeCtx({ current_range: 'high', recording_duration_sec: 60, velocity_setpoint_ticks: 728178, protocol_open: true, protocol_filename: 'C:\\NC3\\protocols\\protocol_x.txt', is_recording: true, is_recording_raw: true, recording_save_raw_data: true, settings: s2 });
   const base = 4000.0;
@@ -545,9 +545,10 @@ check('ProtocolManager data file: degrees column, normalized time, encoding fiel
   const dataMsg = msgs.find(m => m && typeof m.filename === 'string' && m.filename.indexOf('\\data\\') >= 0);
   assert.ok(dataMsg, 'data file written: ' + JSON.stringify(msgs.map(m => m && m.filename)));
   const text = String(dataMsg.payload);
-  assert.ok(text.includes('Время  Угол  Метки # секунда  градус  тики'), 'header: ' + text.split('\n').find(l => l.startsWith('Время')));
-  assert.ok(text.includes('Кодировка          UTF-8'));
-  assert.ok(text.includes('Десятичный_разделитель .'));
+  assert.ok(text.includes('Time  Angle  Counts # second  degree  ticks'), 'header: ' + text.split('\n').find(l => l.startsWith('Time')));
+  assert.ok(text.includes('Encoding             UTF-8'));
+  assert.ok(text.includes('Decimal_separator    .'));
+  assert.ok(!/[А-Яа-яЁё]/.test(text), 'new data files are in English');
   const rows = text.split('\n').filter(l => /^\d/.test(l));
   assert.equal(rows[0].split(/\s+/)[0], '0.0000', 'time normalized from zero: ' + rows[0]);
   const parts = rows[1].split(/\s+/);
@@ -708,289 +709,7 @@ check('JP scenario step: readiness by the TR[3]/TR[4] window on VX (no tolerance
   assert.equal(ctx.global.get('scenario_state').status, 'holding');
 });
 
-// ---------------- BEP gap sensors ----------------
-const BEP_K = [0.167, 0.184, 0.186, 0.2, 0.017];
-function bepSettings(zeroCodes) {
-  return { advanced: { BEPcoeffs: BEP_K.slice(), bepBaseMm: 112,
-    bepZero: { codes: zeroCodes, samples: [0, 0, 0, 0, 0], calibratedAt: zeroCodes[0] === null ? null : '2026-10-15T10:00:00.000Z' } } };
-}
-
-check('BEP Gap: Δi = k(K(ц) − K), pair halves and Δφ in arcsec', () => {
-  const ctx = makeCtx({ settings: bepSettings([4000, 4000, 4000, 4000, 4100]) });
-  const raw = [3990, 4010, 4020, 3980, 4050];
-  let r;
-  raw.forEach((v, i) => { r = runNode('BEP Gap', { topic: 'Channel ' + (i + 1), payload: String(v) }, ctx); });
-  const p = r.out.payload;
-  assert.equal(r.out.topic, 'bep_gap');
-  const d = raw.map((v, i) => BEP_K[i] * ([4000, 4000, 4000, 4000, 4100][i] - v));
-  p.gapUm.forEach((g, i) => assert.ok(Math.abs(g - d[i]) < 1e-9, 'gap ' + i + ': ' + g));
-  const p12 = (d[0] - d[1]) / 2, p34 = (d[2] - d[3]) / 2;
-  assert.ok(Math.abs(p.pair12Um - p12) < 1e-9);
-  assert.ok(Math.abs(p.pair34Um - p34) < 1e-9);
-  // (1.67 − (−1.84))/2 = 1.755; (−3.72 − 4)/2 = −3.86; Δφ = 5.615 µm / 112000 µm · 206264.81 ≈ 10.34″
-  assert.ok(Math.abs(p.tiltCorrArcsec - (p12 - p34) / 112000 * 206264.81) < 1e-9);
-  assert.ok(Math.abs(p.tiltCorrArcsec - 10.341) < 0.001, 'Δφ=' + p.tiltCorrArcsec);
-  assert.deepEqual(ctx.global.get('bep_gap'), p);
-});
-
-check('BEP Gap: no zero calibration -> raw only; stale bep_status clears values', () => {
-  const ctx = makeCtx({ settings: bepSettings([null, null, null, null, null]) });
-  let r = runNode('BEP Gap', { topic: 'Channel 1', payload: '4000' }, ctx);
-  assert.equal(r.out.payload.raw[0], 4000);
-  assert.equal(r.out.payload.gapUm[0], null);
-  assert.ok(Math.abs(r.out.payload.scaledUm[0] - 0.167 * 4000) < 1e-9, 'k·K in µm is shown before the zero calibration');
-  assert.equal(r.out.payload.tiltCorrArcsec, null);
-  r = runNode('BEP Gap', { topic: 'bep_status', payload: JSON.stringify({ running: true, stale: true }) }, ctx);
-  assert.equal(r.out.payload.raw[0], null);
-  r = runNode('BEP Gap', { topic: 'reread' }, ctx);
-  assert.equal(r.out.topic, 'bep_gap');
-});
-
-check('SettingsNormalize: BEP k defaults replace legacy zeros; K(ц) kept against a stale Settings form', () => {
-  const zero = { codes: [4001.5, 4002, 4003, 4004, 4100], samples: [290, 290, 290, 290, 290], calibratedAt: '2026-10-15T10:00:00.000Z' };
-  const ctx = makeCtx({ settings: { general: {}, advanced: { BEPcoeffs: [0, 0, 0, 0, 0], bepZero: zero } } });
-  const s = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: {
-    BEPcoeffs: [0, 0, 0, 0, 0], bepZero: { codes: [null, null, null, null, null] } } } }, ctx).out[0].payload;
-  assert.deepEqual(s.advanced.BEPcoeffs, BEP_K);
-  assert.equal(s.advanced.bepBaseMm, 112);
-  assert.deepEqual(s.advanced.bepZero, zero);
-  const s2 = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: { BEPcoeffs: [0.2, 0.2, 0.2, 0.2, 0.02], bepBaseMm: 110 } } }, ctx).out[0].payload;
-  assert.deepEqual(s2.advanced.BEPcoeffs, [0.2, 0.2, 0.2, 0.2, 0.02]);
-  assert.equal(s2.advanced.bepBaseMm, 110);
-});
-
 function withNow(t, fn) { const real = Date.now; Date.now = () => t; try { return fn(); } finally { Date.now = real; } }
-function bepCalCtx() {
-  return makeCtx({ settings: bepSettings([null, null, null, null, null]), current_range: 'high',
-    drive_limits: { ticks_per_deg: 262144000 / 360 }, drive_state: { mo: 1, so: 1, ms: 0 }, scenario_state: { status: 'idle' } });
-}
-function feedChannels(ctx, t, codes) {
-  withNow(t, () => codes.forEach((v, i) => runNode('BEP ZeroCalibration', { topic: 'Channel ' + (i + 1), payload: String(v) }, ctx)));
-}
-function tickCal(ctx, t) {
-  const iv = ctx.intervals.filter(x => x.active).pop();
-  if (!iv) return [];
-  const before = iv.sent.length;
-  withNow(t, () => iv.fn());
-  return iv.sent.slice(before);
-}
-
-check('BEP ZeroCalibration: preconditions — tilt confirmation, motor on, fresh data', () => {
-  const ctx = bepCalCtx();
-  let r = runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: {} }, ctx);
-  assert.equal(ctx.context.get('state').status, 'error');
-  feedChannels(ctx, 1000, [4000, 4000, 4000, 4000, 4100]);
-  ctx.global.set('drive_state', { mo: 0, so: 0, ms: 0 });
-  withNow(1500, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, ctx));
-  assert.ok(/MO=0/.test(ctx.context.get('state').message));
-  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 0 });
-  r = withNow(9000, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, ctx));
-  assert.ok(/нет данных/.test(ctx.context.get('state').message), 'stale BEP data must block the start');
-  assert.equal(r.out, null);
-});
-
-check('BEP ZeroCalibration: one turn at 2.5 °/s, 1 °/s², K(ц) = average, persisted', () => {
-  const ctx = bepCalCtx();
-  const t0 = 100000;
-  feedChannels(ctx, t0 - 100, [1, 1, 1, 1, 1]);
-  const r = withNow(t0, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, ctx));
-  assert.equal(r.out[0].payload.status, 'running');
-  assert.deepEqual(r.out[1], { topic: 'set_relative_position', payload: { ticks: 262144000, sp_ticks: 1820444, ac_ticks: 728178, dc_ticks: 728178 } });
-  assert.equal(r.out[3].topic, 'journal_event');
-  // samples before the drive reports motion are ignored
-  feedChannels(ctx, t0 + 200, [9999, 9999, 9999, 9999, 9999]);
-  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 2 });
-  tickCal(ctx, t0 + 1000);
-  for (let k = 0; k < 20; k++) feedChannels(ctx, t0 + 2000 + k * 500, [4000 + (k % 2), 4010, 4020, 4030, k < 5 ? 4100 : 4100]);
-  let out = tickCal(ctx, t0 + 60000);
-  assert.equal(out[0][0].payload.status, 'running');
-  assert.ok(out[0][0].payload.progressPct > 30 && out[0][0].payload.progressPct < 50);
-  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 0 });
-  out = tickCal(ctx, t0 + 147000);
-  const [ui, cmd, persist, jr] = out[0];
-  assert.equal(ui.payload.status, 'done');
-  assert.equal(cmd, null);
-  assert.deepEqual(ui.payload.codes, [4000.5, 4010, 4020, 4030, 4100]);
-  assert.equal(persist.topic, 'bep_zero_persist');
-  assert.deepEqual(persist.settings.advanced.bepZero.codes, [4000.5, 4010, 4020, 4030, 4100]);
-  assert.deepEqual(ctx.global.get('settings').advanced.bepZero.samples, [20, 20, 20, 20, 20]);
-  assert.equal(jr.topic, 'journal_event');
-  assert.equal(ctx.intervals.filter(x => x.active).length, 0, 'timer stopped');
-});
-
-check('BEP ZeroCalibration: abort stops the drive; early stop is an error; K(ц) untouched', () => {
-  const ctx = bepCalCtx();
-  feedChannels(ctx, 0, [1, 1, 1, 1, 1]);
-  withNow(10, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, ctx));
-  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 2 });
-  tickCal(ctx, 1000);
-  const ab = ctx.intervals[0].node;
-  const r = withNow(2000, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_abort', payload: true }, ctx));
-  assert.equal(r.out, null);
-  const last = r.sent[r.sent.length - 1];
-  assert.equal(last[0].payload.status, 'aborted');
-  assert.equal(last[1].topic, 'drive_stop');
-  assert.ok(ab);
-  // second run: the drive stops after 30 s (e.g. STOP from another tab)
-  feedChannels(ctx, 3000, [1, 1, 1, 1, 1]);
-  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 0 });
-  withNow(3010, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, ctx));
-  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 2 });
-  tickCal(ctx, 4000);
-  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 0 });
-  const out = tickCal(ctx, 33000);
-  assert.equal(out[0][0].payload.status, 'error');
-  assert.ok(/прервано/.test(out[0][0].payload.message));
-  assert.deepEqual(ctx.global.get('settings').advanced.bepZero.codes, [null, null, null, null, null]);
-});
-
-// ---------------- Appendix A: circlograms ----------------
-const REV = 262144000;
-function circCtx(extraAdvanced) {
-  const st = bepSettings([null, null, null, null, null]);
-  st.general = { angleCorrectionMode: 'circlogram' };
-  st.advanced.circlogram = { n: 4, turns: 1, speedDegSec: 5, accelDegSec2: 1 };
-  Object.assign(st.advanced, extraAdvanced || {});
-  return makeCtx({ settings: st, current_range: 'high', drive_limits: { ticks_per_deg: REV / 360 },
-    drive_state: { mo: 1, so: 1, ms: 0, position: 0 }, scenario_state: { status: 'idle' },
-    drive_init_state: { status: 'done', initialized: true }, bun_angle: 0 });
-}
-// One trial rotation: rowsByI[i] = codes EP1..EP5 seen at point i (one sample per channel per point).
-function runCirc(ctx, kind, rowsByI, t0) {
-  feedCircChannels(ctx, t0 - 100, rowsByI[0], 0);
-  const r = withNow(t0, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind, tiltConfirmed: true } }, ctx));
-  ctx.global.set('drive_state', Object.assign({}, ctx.global.get('drive_state'), { ms: 2 }));
-  tickCirc(ctx, t0 + 1000);
-  rowsByI.forEach((codes, i) => feedCircChannels(ctx, t0 + 2000 + i * 100, codes, (i * 90 + 45) / 360 * REV + 3 * REV));
-  ctx.global.set('drive_state', Object.assign({}, ctx.global.get('drive_state'), { ms: 0 }));
-  const out = tickCirc(ctx, t0 + 80000);
-  return { start: r, out: out[0] };
-}
-function feedCircChannels(ctx, t, codes, position) {
-  ctx.global.set('drive_state', Object.assign({}, ctx.global.get('drive_state'), { position }));
-  withNow(t, () => codes.forEach((v, j) => runNode('BEP Circlogram', { topic: 'Channel ' + (j + 1), payload: String(v) }, ctx)));
-}
-function tickCirc(ctx, t) {
-  const iv = ctx.intervals.filter(x => x.active).pop();
-  if (!iv) return [];
-  const before = iv.sent.length;
-  withNow(t, () => iv.fn());
-  return iv.sent.slice(before);
-}
-// Reference implementation of the Appendix A formulas (EP in µm via k).
-function appendixX(rows) {
-  const n = rows.length; let up = 0, low = 0;
-  rows.forEach((r, i) => {
-    const ep = r.map((v, j) => v * BEP_K[j]);
-    up += (ep[0] - ep[1]) / 2 * Math.cos(2 * Math.PI * i / n);
-    low += (ep[2] - ep[3]) / 2 * Math.cos(2 * Math.PI * i / n);
-  });
-  return { xUp: up / n, xLow: low / n };
-}
-
-check('BEP Circlogram: preconditions (initial first, homing done)', () => {
-  let ctx = circCtx();
-  feedCircChannels(ctx, 1000, [1, 1, 1, 1, 1], 0);
-  withNow(1500, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'current' } }, ctx));
-  assert.ok(/начальной/.test(ctx.context.get('state').message));
-  ctx = circCtx();
-  ctx.global.set('drive_init_state', {});
-  feedCircChannels(ctx, 1000, [1, 1, 1, 1, 1], 0);
-  withNow(1500, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, ctx));
-  assert.ok(/нулевой метки/.test(ctx.context.get('state').message));
-});
-
-check('BEP Circlogram: Appendix A — rows per point i, X by cos(360°·i/n), dφ = ((ΔXup) − (ΔXlow)) / L', () => {
-  const ctx = circCtx();
-  const initRows = [[1000, 1010, 2000, 2004, 4000], [1002, 1010, 2001, 2004, 4000], [1004, 1008, 2003, 2002, 4000], [1002, 1006, 2001, 2000, 4000]];
-  const r0 = runCirc(ctx, 'initial', initRows, 100000);
-  assert.deepEqual(r0.start.out[1].payload, { ticks: REV, sp_ticks: 3640889, ac_ticks: 728178, dc_ticks: 728178 });
-  const [ui0, , persist0, , file0] = r0.out;
-  assert.equal(ui0.payload.status, 'done');
-  const init = persist0.settings.advanced.circlogramInitial;
-  assert.deepEqual(init.rows, initRows);
-  const x0 = appendixX(initRows);
-  assert.ok(Math.abs(init.xUp - x0.xUp) < 1e-9 && Math.abs(init.xLow - x0.xLow) < 1e-9);
-  assert.ok(/^C:\\NC3\\circlograms\\circlogram_initial_\d{8}_\d{6}\.txt$/.test(file0.filename), file0.filename);
-  assert.ok(file0.payload.includes('i\tEP1\tEP2\tEP3\tEP4\tEP5\r\n0\t1000\t1010\t2000\t2004\t4000'));
-
-  ctx.global.set('bun_angle', 36000);
-  const curRows = [[1030, 1000, 2010, 2000, 4001], [1002, 1010, 2001, 2004, 4001], [990, 1020, 1995, 2010, 4001], [1002, 1006, 2001, 2000, 4001]];
-  const r1 = runCirc(ctx, 'current', curRows, 300000);
-  const cur = r1.out[2].settings.advanced.circlogramCurrent;
-  const x1 = appendixX(curRows);
-  const expected = ((x1.xUp - x0.xUp) - (x1.xLow - x0.xLow)) / 112000 * 206264.81;
-  assert.ok(Math.abs(cur.dphiArcsec - expected) < 1e-9, cur.dphiArcsec + ' vs ' + expected);
-  assert.equal(cur.tiltArcsec, 36000);
-  assert.equal(ctx.global.get('bep_motion_busy'), null);
-});
-
-check('BEP Circlogram: an empty point i is an error, not a guess', () => {
-  const ctx = circCtx();
-  feedCircChannels(ctx, 99900, [1, 1, 1, 1, 1], 0);
-  withNow(100000, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, ctx));
-  ctx.global.set('drive_state', Object.assign({}, ctx.global.get('drive_state'), { ms: 2 }));
-  tickCirc(ctx, 101000);
-  feedCircChannels(ctx, 102000, [1, 1, 1, 1, 1], 0.1 * REV);   // only point 0
-  ctx.global.set('drive_state', Object.assign({}, ctx.global.get('drive_state'), { ms: 0 }));
-  const out = tickCirc(ctx, 180000);
-  assert.equal(out[0][0].payload.status, 'error');
-  assert.ok(/i=1/.test(out[0][0].payload.message));
-});
-
-check('BEP trial rotation: drive rejection, VH[2] precheck, int32 target -> reverse direction', () => {
-  // ELMO answered "?" to the PR batch -> error with the drive answer, drive stopped
-  let ctx = circCtx();
-  feedCircChannels(ctx, 99900, [1, 1, 1, 1, 1], 0);
-  withNow(100000, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, ctx));
-  const rej = withNow(101000, () => runNode('BEP Circlogram', { topic: 'CMD.PART_REJECTED',
-    payload: { type: 'CMD.PART_REJECTED', cmd: 'BG', raw: 'BG?;', topic: 'set_relative_position' } }, ctx));
-  const last = rej.sent[rej.sent.length - 1];
-  assert.equal(last[0].payload.status, 'error');
-  assert.ok(/отклонил.*BG\?/.test(last[0].payload.message), last[0].payload.message);
-  assert.equal(last[1].topic, 'drive_stop');
-  assert.equal(ctx.global.get('bep_motion_busy'), null);
-  // speed above the live VH[2] -> refused before any command
-  ctx = circCtx();
-  ctx.global.set('drive_limits', { ticks_per_deg: REV / 360, speed_max_ticks: Math.round(4 * REV / 360), accel_max_ticks: 131072000 });
-  feedCircChannels(ctx, 99900, [1, 1, 1, 1, 1], 0);
-  let r = withNow(100000, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, ctx));
-  assert.ok(/VH\[2\]/.test(ctx.context.get('state').message));
-  assert.ok(!r.sent.some(m => m[1]), 'no drive command');
-  // PX close to +int32: 3 turns forward would overflow -> rotate backwards
-  ctx = circCtx();
-  feedCircChannels(ctx, 99900, [1, 1, 1, 1, 1], 2000000000);
-  r = withNow(100000, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, ctx));
-  assert.equal(r.out[1].payload.ticks, -REV);
-  // zero calibration shares the same checks
-  const z = bepCalCtx();
-  feedChannels(z, 99900, [1, 1, 1, 1, 1]);
-  withNow(100000, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, z));
-  const zr = withNow(101000, () => runNode('BEP ZeroCalibration', { topic: 'CMD.PART_REJECTED',
-    payload: { cmd: 'PR=262144000', raw: '?', topic: 'set_relative_position' } }, z));
-  assert.equal(zr.sent[zr.sent.length - 1][0].payload.status, 'error');
-});
-
-check('Tilt correction variants: displayed angle = БУН + dφ; AutoTilt keeps the raw angle', () => {
-  const ctx = circCtx({ circlogramInitial: { xUp: 0, xLow: 0 }, circlogramCurrent: { xUp: 1, xLow: 0, dphiArcsec: 12.5 } });
-  let r = runNode(' BUN Calibration'.trim(), { topic: 'bun_angle', payload: 3600 }, ctx);
-  assert.equal(r.out.payload, 3612.5);
-  assert.equal(r.out.raw_angle, 3600);
-  assert.equal(ctx.global.get('bun_angle'), 3600);
-  assert.equal(ctx.global.get('bun_angle_corrected'), 3612.5);
-  ctx.global.get('settings').general.angleCorrectionMode = 'bep';
-  ctx.global.set('bep_gap', { tiltCorrArcsec: -3.8, ts: Date.now() });
-  r = runNode('BUN Calibration', { topic: 'bun_angle', payload: 3600 }, ctx);
-  assert.ok(Math.abs(r.out.payload - 3596.2) < 1e-9);
-  ctx.global.get('settings').general.angleCorrectionMode = 'off';
-  r = runNode('BUN Calibration', { topic: 'bun_angle', payload: 3600 }, ctx);
-  assert.equal(r.out.payload, 3600);
-  // AutoTilt: target 3600, corrected angle 3612.5 but raw 3600 -> reached
-  ctx.global.get('settings').general.angleCorrectionMode = 'circlogram';
-  runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 3600, mode: 'Авто' }, ctx, { runTimers: true });
-  for (let i = 0; i < 3; i++) runNode('BUN AutoTilt', runNode('BUN Calibration', { topic: 'bun_angle', payload: 3600 }, ctx).out, ctx);
-  assert.equal(ctx.flow.get('bun_auto_state').status, 'complete');
-});
 
 // ---------------- 2026-10-29: auto tilt journal/UI, brake at every end (D4) ----------------
 function autoTiltStart(ctx, target, startAngle) {
@@ -1217,21 +936,6 @@ check('Scenario errors and notices carry English text', () => {
   assert.ok(j.payload.message_en && !CYR.test(j.payload.message_en), j.payload.message_en);
 });
 
-check('BEP calibration/circlogram refusals have English text without Cyrillic', () => {
-  const z = bepCalCtx();
-  let r = runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: {} }, z);
-  let sent = [].concat(r.sent || [], r.out ? [r.out] : []);
-  let st = sent.map(m => m && m[0]).filter(Boolean).pop();
-  assert.ok(st.payload.message_en && !CYR.test(st.payload.message_en), st.payload.message_en);
-  let jr = sent.map(m => m && m[3]).filter(Boolean).pop();
-  assert.ok(jr.payload.message_en && !CYR.test(jr.payload.message_en), jr.payload.message_en);
-  const c = circCtx({});
-  r = runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'current' } }, c);
-  sent = [].concat(r.sent || [], r.out ? [r.out] : []);
-  st = sent.map(m => m && m[0]).filter(Boolean).pop();
-  assert.ok(st.payload.message_en && !CYR.test(st.payload.message_en), st.payload.message_en);
-});
-
 check('Nav i18n: UI-scoped template gets the init snapshot through the "to UI" link', () => {
   const t = flows.find(n => n.id === 'nc3-nav-i18n');
   assert.ok(t && t.type === 'ui-template' && t.templateScope === 'widget:ui');
@@ -1374,60 +1078,374 @@ check('Tilt setpoint and mode survive a tab change: stored in Node-RED and sent 
   assert.ok(mon.includes('d.bun_target_seconds') && mon.includes("topic: 'tilt_target'"));
 });
 
-check('BEP: MS=1 at rest (high resolution) is not "axis rotating"; the rotation runs and completes', () => {
-  const z = bepCalCtx();
-  const t0 = 100000;
-  z.global.set('drive_state', { mo: 1, so: 1, ms: 1 });
-  feedChannels(z, t0 - 100, [1, 1, 1, 1, 1]);
-  const r = withNow(t0, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, z));
-  assert.equal(r.out[0].payload.status, 'running');
-  feedChannels(z, t0 + 200, [9999, 9999, 9999, 9999, 9999]);
-  tickCal(z, t0 + 500);
-  assert.equal(z.context.get('sawMotion'), false, 'MS=1 before the profile is not motion');
-  z.global.set('drive_state', { mo: 1, so: 1, ms: 2 });
-  tickCal(z, t0 + 1000);
-  for (let k = 0; k < 20; k++) feedChannels(z, t0 + 2000 + k * 500, [4000, 4010, 4020, 4030, 4100]);
-  z.global.set('drive_state', { mo: 1, so: 1, ms: 1 });
-  const out = tickCal(z, t0 + 147000);
-  assert.equal(out[0][0].payload.status, 'done', 'profile end with MS=1 completes the turn');
-  assert.deepEqual(out[0][0].payload.codes, [4000, 4010, 4020, 4030, 4100]);
-});
+// ---------------- 2026-11-11: BUN ±180°, tilt correction by "BEP calibration", speed lag, English protocols ----------------
+const TPD = 262144000 / 360;
+function sentFlat(r) { return [].concat(r.sent || [], r.out ? [r.out] : []); }
+function autoState(ctx) { return ctx.flow.get('bun_auto_state'); }
 
-check('BEP: real motion is refused with MS and speed; the VH[2] limit is reported first', () => {
-  for (const [state, re] of [[{ mo: 1, so: 1, ms: 2, velocity_deg_per_sec: 2.5 }, /MS=2, 2\.50 °\/с/], [{ mo: 1, so: 1, ms: 0, velocity_deg_per_sec: -1 }, /MS=0, 1\.00 °\/с/]]) {
-    const z = bepCalCtx();
-    z.global.set('drive_state', state);
-    feedChannels(z, 99900, [1, 1, 1, 1, 1]);
-    const r = withNow(100000, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, z));
-    const st = r.sent[r.sent.length - 1][0].payload;
-    assert.ok(/ось вращается/.test(st.message) && re.test(st.message), st.message);
-    assert.ok(/the axis is rotating/.test(st.message_en) && !CYR.test(st.message_en), st.message_en);
+check('BUN AutoTilt: a short path across the ±180° stop goes through 0 by jog, then stop, setpoint and GO', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  const t0 = 2000000, start = 170 * 3600, target = -170 * 3600;
+  ctx.global.set('bun_angle', start);
+  const run = withNow(t0, () => runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: target, mode: 'Автоматический' }, ctx));
+  const first = run.sent[0];
+  assert.equal(first[0], null, 'no setpoint before the pass through 0');
+  assert.deepEqual(first[2], { topic: 'tilt_brake', payload: 0 });
+  assert.ok(/упор ±180°/.test(first[3].payload.message) && /«Меньше»/.test(first[3].payload.message), first[3].payload.message);
+  assert.ok(/±180° stop/.test(first[3].payload.message_en) && !CYR.test(first[3].payload.message_en), first[3].payload.message_en);
+  assert.equal(autoState(ctx).phase, 'zero_pass');
+  withNow(t0 + 300, () => run.timers.find(t => t.ms === 300).fn());
+  assert.deepEqual(run.sent[1][1], { topic: 'bun_cmd', payload: 'slowdown' });
+  let angle = start, t = t0 + 300, res = null, stopAt = null;
+  for (let i = 0; i < 400; i++) {
+    t += 1000; angle -= Math.round(0.6 * 3600);
+    res = withNow(t, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: angle }, ctx));
+    if (autoState(ctx).phase === 'zero_pass_stop') { stopAt = angle; break; }
   }
-  // 2.5 °/s above VH[2], MS=1 at rest: the operator sees the speed limit, not "axis rotating"
-  const z = bepCalCtx();
-  z.global.set('drive_state', { mo: 1, so: 1, ms: 1 });
-  z.global.set('drive_limits', { ticks_per_deg: REV / 360, speed_max_ticks: Math.round(2 * REV / 360), accel_max_ticks: 131072000 });
-  feedChannels(z, 99900, [1, 1, 1, 1, 1]);
-  withNow(100000, () => runNode('BEP ZeroCalibration', { topic: 'bep_zero_cal_start', payload: { tiltConfirmed: true } }, z));
-  assert.ok(/скорость 2\.5 °\/с больше VH\[2\]/.test(z.context.get('state').message), z.context.get('state').message);
-  const c = circCtx();
-  c.global.set('drive_state', Object.assign({}, c.global.get('drive_state'), { ms: 2 }));
-  c.global.set('drive_limits', { ticks_per_deg: REV / 360, speed_max_ticks: Math.round(2 * REV / 360), accel_max_ticks: 131072000 });
-  feedCircChannels(c, 99900, [1, 1, 1, 1, 1], 0);
-  withNow(100000, () => runNode('BEP Circlogram', { topic: 'bep_circ_start', payload: { kind: 'initial', tiltConfirmed: true } }, c));
-  assert.ok(/VH\[2\]/.test(c.context.get('state').message), c.context.get('state').message);
+  assert.ok(stopAt !== null, 'the pass ends');
+  // |−170° − a| ≤ 180° − 2° → a ≤ 8°: the BUN is stopped as soon as the short path goes through 0.
+  assert.ok(stopAt / 3600 <= 8 && stopAt / 3600 > 7, 'stopped at ' + stopAt / 3600);
+  const stopMsg = res.sent.find(m => m[1]);
+  assert.deepEqual(stopMsg[1], { topic: 'bun_cmd', payload: 'stop' });
+  withNow(t + 1000, () => res.timers.find(x => x.ms === 1000).fn());
+  const goStart = res.sent[res.sent.length - 1];
+  assert.deepEqual(goStart[0], { topic: 'bun_cmd_setpoint', payload: target });
+  assert.equal(goStart[2], null, 'the brake stays released after the pass');
+  assert.ok(/проход через 0 выполнен/.test(goStart[3].payload.message), goStart[3].payload.message);
+  withNow(t + 1300, () => res.timers.filter(x => x.ms === 300).pop().fn());
+  assert.deepEqual(res.sent[res.sent.length - 1][1], { topic: 'bun_cmd', payload: 'go' });
+  let last;
+  for (let i = 0; i < 3; i++) last = withNow(t + 2000 + i * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: target }, ctx, { runTimers: true }));
+  assert.equal(autoState(ctx).status, 'complete');
+  assert.ok(brakeEngaged(last.sent), 'brake engaged at the end');
 });
 
-check('BEP: a rejected SP names the speed in °/s, in Russian and in English', () => {
-  for (const [name, topic, payload] of [['BEP ZeroCalibration', 'bep_zero_cal_start', { tiltConfirmed: true }], ['BEP Circlogram', 'bep_circ_start', { kind: 'initial', tiltConfirmed: true }]]) {
-    const ctx = name === 'BEP Circlogram' ? circCtx() : bepCalCtx();
-    if (name === 'BEP Circlogram') feedCircChannels(ctx, 99900, [1, 1, 1, 1, 1], 0); else feedChannels(ctx, 99900, [1, 1, 1, 1, 1]);
-    withNow(100000, () => runNode(name, { topic, payload }, ctx));
-    const r = withNow(101000, () => runNode(name, { topic: 'CMD.PART_REJECTED', payload: { cmd: 'SP=1820444', raw: ':?', topic: 'set_relative_position' } }, ctx));
-    const last = r.sent[r.sent.length - 1];
-    assert.ok(/привод отклонил скорость 2\.500 °\/с \(команда SP=1820444\)/.test(last[0].payload.message), last[0].payload.message);
-    assert.ok(/the drive rejected the speed 2\.500 °\/s/.test(last[0].payload.message_en) && !CYR.test(last[0].payload.message_en), last[0].payload.message_en);
-    assert.equal(last[1].topic, 'drive_stop');
+check('BUN AutoTilt: a jog that moves away from the setpoint stops the pass: stop, brake, error (RU+EN)', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  const t0 = 3000000, start = 170 * 3600, target = -170 * 3600;
+  ctx.global.set('bun_angle', start);
+  const run = withNow(t0, () => runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: target, mode: 'Автоматический' }, ctx));
+  withNow(t0 + 300, () => run.timers.find(t => t.ms === 300).fn());
+  let r;
+  for (let i = 1; i <= 3 && autoState(ctx).status === 'moving'; i++) {
+    r = withNow(t0 + 300 + i * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: start + i * Math.round(0.6 * 3600) }, ctx, { runTimers: true }));
+  }
+  const st = autoState(ctx);
+  assert.equal(st.status, 'wrong_direction');
+  assert.ok(/не в ту сторону/.test(st.message) && /tiltJogUpIncreases/.test(st.message), st.message);
+  assert.ok(!CYR.test(st.message_en), st.message_en);
+  assert.ok(r.sent.some(m => m[1] && m[1].payload === 'stop'), 'BUN stopped');
+  assert.ok(brakeEngaged(r.sent), 'brake engaged');
+});
+
+check('Manual tilt: the pass through 0 also runs in the manual mode (no brake); an operator command cancels it', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  const t0 = 4000000, start = -175 * 3600, target = 175 * 3600;
+  ctx.global.set('bun_angle', start);
+  const run = withNow(t0, () => runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: target, mode: 'Ручной' }, ctx));
+  const first = run.sent[0];
+  assert.equal(first[0], null);
+  assert.equal(first[2], null, 'the operator controls the brake');
+  assert.ok(/Ручной наклон/.test(first[3].payload.message) && /«Больше»/.test(first[3].payload.message), first[3].payload.message);
+  assert.equal(autoState(ctx).status, 'manual_go');
+  assert.equal(autoState(ctx).phase, 'zero_pass');
+  const cancel = runNode('BUN AutoTilt', { topic: 'bun_cmd', payload: 'stop' }, ctx);
+  assert.deepEqual(cancel.out[1], { topic: 'bun_cmd', payload: 'stop' });
+  assert.ok(/проход через 0 прерван/.test(cancel.out[3].payload.message), cancel.out[3].payload.message);
+  assert.equal(autoState(ctx).status, 'manual_done');
+  const before = run.sent.length;
+  run.timers.find(t => t.ms === 300).fn();
+  assert.equal(run.sent.length, before, 'the jog is not sent after the cancel');
+});
+
+check('BUN AutoTilt: a short path needs no pass; a setpoint outside ±180° is not sent', () => {
+  const ctx = makeCtx({ settings, bun: {} });
+  ctx.global.set('bun_angle', 100 * 3600);
+  let r = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 80 * 3600, mode: 'Автоматический' }, ctx);
+  assert.deepEqual(r.sent[0][0], { topic: 'bun_cmd_setpoint', payload: 80 * 3600 });
+  assert.equal(autoState(ctx).phase, '');
+  const ctx2 = makeCtx({ settings, bun: {} });
+  ctx2.global.set('bun_angle', 0);
+  r = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 181 * 3600, mode: 'Автоматический' }, ctx2);
+  assert.equal(r.sent.length, 0);
+  assert.ok(r.out && /вне диапазона ±180°/.test(r.out[3].payload.message), JSON.stringify(r.out));
+  const ctx3 = makeCtx({ settings, bun: {} });
+  ctx3.global.set('bun_angle', 90 * 3600);
+  runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: -89 * 3600, mode: 'Автоматический' }, ctx3);
+  assert.equal(autoState(ctx3).phase, 'zero_pass', '179° apart: the short path may cross ±180°');
+});
+
+const BEP_K = [0.167, 0.184, 0.186, 0.2, 0.017];
+function corrSettings(tc) {
+  const s = JSON.parse(JSON.stringify(settings));
+  s.advanced.BEPcoeffs = BEP_K.slice();
+  s.advanced.bepBaseMm = 112;
+  if (tc) s.advanced.tiltCorr = tc;
+  return s;
+}
+const CORR = { k: 2, apply: true, base: { xUp: 1, xLow: -1, at: '2026-11-11T08:00:00.000Z', phiSec: 0 },
+  meas: { xUp: 3, xLow: -2, at: '2026-11-11T09:00:00.000Z', phiSec: 36000 } };
+// ((3 − 1) − (−2 − (−1))) / 112000 · 206264.81 · 2 = 11.05″
+const CORR_ARCSEC = 3 / 112000 * 206264.81 * 2;
+
+check('Tilt correction: Δφ is added to the SET angle when the box is on and the setpoint is near φ', () => {
+  const ctx = makeCtx({ settings: corrSettings(CORR), bun: {} });
+  ctx.global.set('bun_angle', 0);
+  let r = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 36000, mode: 'Автоматический' }, ctx);
+  assert.deepEqual(r.sent[0][0], { topic: 'bun_cmd_setpoint', payload: 36000 + Math.round(CORR_ARCSEC) });
+  assert.ok(/поправка Δφ \+11″/.test(r.sent[0][3].payload.message), r.sent[0][3].payload.message);
+  assert.ok(/correction Δφ \+11″/.test(r.sent[0][3].payload.message_en));
+  assert.equal(autoState(ctx).operator_target_seconds, 36000);
+  assert.equal(autoState(ctx).correction_arcsec, 11);
+  assert.equal(ctx.global.get('bun_target_seconds'), 36000, 'the tabs restore the operator setpoint');
+  ctx.global.set('bun_auto_state', autoState(ctx));
+  const cal = runNode('BUN Calibration', { topic: 'bun_angle', payload: 1234 }, ctx).out;
+  assert.equal(cal.payload, 1234, 'the measured angle is shown without the correction');
+  assert.equal(cal.raw_angle, 1234);
+  assert.ok(Math.abs(cal.tilt_correction.arcsec - Math.round(CORR_ARCSEC * 10) / 10) < 1e-9, JSON.stringify(cal.tilt_correction));
+  assert.equal(cal.tilt_correction.appliedToSetpointArcsec, 11);
+  // far from φ: not applied, warning
+  const ctx2 = makeCtx({ settings: corrSettings(CORR), bun: {} });
+  ctx2.global.set('bun_angle', 0);
+  r = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 72000, mode: 'Автоматический' }, ctx2);
+  assert.deepEqual(r.sent[0][0], { topic: 'bun_cmd_setpoint', payload: 72000 });
+  assert.equal(r.sent[0][3].payload.type, 'warning');
+  assert.ok(/не применена: определена при 10\.0000°/.test(r.sent[0][3].payload.message), r.sent[0][3].payload.message);
+  // box off: plain setpoint, no note
+  const ctx3 = makeCtx({ settings: corrSettings(Object.assign({}, CORR, { apply: false })), bun: {} });
+  ctx3.global.set('bun_angle', 0);
+  r = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 36000, mode: 'Ручной' }, ctx3);
+  assert.deepEqual(r.sent[0][0], { topic: 'bun_cmd_setpoint', payload: 36000 });
+  assert.ok(!/поправк/.test(r.sent[0][3].payload.message), r.sent[0][3].payload.message);
+});
+
+function tcCtx(extra) {
+  return makeCtx(Object.assign({ settings: corrSettings(), current_range: 'high', drive_limits: { ticks_per_deg: TPD },
+    drive_state: { mo: 1, so: 1, ms: 0, position: 0, velocity_deg_per_sec: 0 }, scenario_state: { status: 'idle' },
+    null_mark_state: { status: 'found' }, drive_init_state: { status: 'done', initialized: true }, bun_angle: 0 }, extra || {}));
+}
+function feedTc(ctx, t, codes) {
+  withNow(t, () => codes.forEach((v, i) => runNode('BEP TiltCorrection', { topic: 'Channel ' + (i + 1), payload: String(v) }, ctx)));
+}
+function tickTc(ctx, t) {
+  const iv = ctx.intervals.filter(x => x.active).pop();
+  if (!iv) return [];
+  const before = iv.sent.length;
+  withNow(t, () => iv.fn());
+  return iv.sent.slice(before);
+}
+function sample30s(ctx, t0, codes) {
+  for (let ms = 0; ms < 30000; ms += 500) feedTc(ctx, t0 + ms, codes);
+  return tickTc(ctx, t0 + 30000);
+}
+
+check('BEP TiltCorrection: refusals — confirmation, null mark, vertical axis, calibration first, fresh data; English text', () => {
+  const ctx = tcCtx({ null_mark_state: { status: 'unknown' }, drive_init_state: { status: 'not_done' } });
+  const state = () => ctx.context.get('state');
+  runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'calibrate' } }, ctx);
+  assert.ok(/не подтверждено/.test(state().message));
+  feedTc(ctx, 1000, [4000, 4000, 4000, 4000, 4100]);
+  let r = withNow(1500, () => runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'calibrate', confirmed: true } }, ctx));
+  assert.ok(/поиск нулевой метки/.test(state().message), state().message);
+  const jr = r.sent.map(m => m[3]).filter(Boolean).pop();
+  assert.ok(jr.payload.message_en && !CYR.test(jr.payload.message_en), jr.payload.message_en);
+  ctx.global.set('null_mark_state', { status: 'found' });
+  ctx.global.set('bun_angle', 3600);
+  r = withNow(1500, () => runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'calibrate', confirmed: true } }, ctx));
+  assert.ok(/не вертикальна \(угол 1\.0000°\)/.test(state().message), state().message);
+  const en = r.sent[0][0].payload.message_en;
+  assert.ok(/not vertical \(angle 1\.0000°\)/.test(en) && !CYR.test(en), en);
+  assert.ok(!CYR.test(r.sent[0][3].payload.message_en), r.sent[0][3].payload.message_en);
+  withNow(1500, () => runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'measure', confirmed: true } }, ctx));
+  assert.ok(/нет калибровки/.test(state().message), state().message);
+  ctx.global.set('bun_angle', 0);
+  withNow(9000, () => runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'calibrate', confirmed: true } }, ctx));
+  assert.ok(/нет данных датчика 1/.test(state().message), 'stale BEP data must block the start: ' + state().message);
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 2, position: 0, velocity_deg_per_sec: 3 });
+  feedTc(ctx, 9000, [4000, 4000, 4000, 4000, 4100]);
+  withNow(9100, () => runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'calibrate', confirmed: true } }, ctx));
+  assert.ok(/ось вращается/.test(state().message), state().message);
+});
+
+check('BEP TiltCorrection: calibration turns the axis to 0 the short way, averages 30 s, persists Xup(0)/Xlow(0)', () => {
+  // the axis stands at 350° → turn +10°
+  const ctx = tcCtx({ drive_state: { mo: 1, so: 1, ms: 0, position: Math.round(350 * TPD), velocity_deg_per_sec: 0 } });
+  const t0 = 100000;
+  feedTc(ctx, t0 - 100, [4000, 4010, 4020, 3980, 4100]);
+  const r = withNow(t0, () => runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'calibrate', confirmed: true } }, ctx));
+  assert.equal(r.out[0].payload.status, 'running');
+  assert.equal(r.out[0].payload.phase, 'positioning');
+  assert.deepEqual(r.out[1], { topic: 'set_relative_position', payload: { ticks: Math.round(10 * TPD), sp_ticks: Math.round(2.5 * TPD), ac_ticks: Math.round(TPD), dc_ticks: Math.round(TPD) } });
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 2, position: Math.round(355 * TPD), velocity_deg_per_sec: 2.5 });
+  tickTc(ctx, t0 + 2000);
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 0, position: Math.round(360 * TPD), velocity_deg_per_sec: 0 });
+  tickTc(ctx, t0 + 6000);
+  assert.equal(ctx.context.get('state').phase, 'sampling');
+  const done = sample30s(ctx, t0 + 6000, [4000, 4010, 4020, 3980, 4100]);
+  const st = done.find(m => m[0]) [0].payload;
+  assert.equal(st.status, 'done', st.message);
+  const x = [4000 * BEP_K[0], 4010 * BEP_K[1], 4020 * BEP_K[2], 3980 * BEP_K[3]];
+  const base = ctx.global.get('settings').advanced.tiltCorr.base;
+  assert.ok(Math.abs(base.xUp - (x[0] - x[1]) / 2) < 0.002, 'Xup(0) ' + base.xUp);
+  assert.ok(Math.abs(base.xLow - (x[2] - x[3]) / 2) < 0.002, 'Xlow(0) ' + base.xLow);
+  assert.ok(base.samples.every(n => n >= 59), JSON.stringify(base.samples));
+  const persist = done.find(m => m[2]);
+  assert.equal(persist[2].topic, 'bep_tc_persist');
+  assert.equal(persist[2].payload.advanced.tiltCorr.base.xUp, base.xUp);
+  const jr = done.find(m => m[3])[3].payload;
+  assert.ok(/Калибровка поправки к углу наклона: выполнена/.test(jr.message) && !CYR.test(jr.message_en), jr.message_en);
+  assert.equal(ctx.global.get('bep_motion_busy'), null);
+});
+
+check('BEP TiltCorrection: measurement gives Δφ = ((ΔXup) − (ΔXlow)) / L · K; K and the box are saved', () => {
+  const ctx = tcCtx();
+  ctx.global.set('settings', corrSettings({ k: 1, apply: false, base: { xUp: 1, xLow: -1, at: 'x', phiSec: 0 }, meas: null }));
+  ctx.global.set('bun_angle', 36000);
+  const t0 = 200000;
+  // X1−X2 = 2·3 → Xup = 3; X3−X4 = 2·(−2) → Xlow = −2 (k = 1 for these channels)
+  ctx.global.get('settings').advanced.BEPcoeffs = [1, 1, 1, 1, 0.017];
+  feedTc(ctx, t0 - 100, [106, 100, 96, 100, 4100]);
+  const r = withNow(t0, () => runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'measure', confirmed: true } }, ctx));
+  assert.equal(r.out, null, 'the axis is at 0: sampling starts at once');
+  assert.equal(ctx.context.get('state').phase, 'sampling');
+  const done = sample30s(ctx, t0, [106, 100, 96, 100, 4100]);
+  const st = done.find(m => m[0])[0].payload;
+  assert.equal(st.status, 'done', st.message);
+  const dphi1 = 3 / 112000 * 206264.81;
+  assert.ok(Math.abs(st.corr.dphiArcsec - Math.round(dphi1 * 10) / 10) < 1e-9, 'Δφ ' + st.corr.dphiArcsec);
+  assert.equal(st.corr.meas.phiSec, 36000);
+  let s = runNode('BEP TiltCorrection', { topic: 'bep_tc_set', payload: { k: 2 } }, ctx).out;
+  assert.equal(s[2].topic, 'bep_tc_persist');
+  assert.equal(s[2].payload.advanced.tiltCorr.k, 2);
+  assert.ok(Math.abs(s[0].payload.corr.dphiArcsec - Math.round(dphi1 * 2 * 10) / 10) < 1e-9);
+  assert.ok(/масштабный коэффициент K = 2/.test(s[3].payload.message) && /scale factor K = 2/.test(s[3].payload.message_en));
+  s = runNode('BEP TiltCorrection', { topic: 'bep_tc_set', payload: { apply: true } }, ctx).out;
+  assert.equal(ctx.global.get('settings').advanced.tiltCorr.apply, true);
+  assert.ok(/включено/.test(s[3].payload.message));
+  s = runNode('BEP TiltCorrection', { topic: 'bep_tc_set', payload: { apply: true } }, ctx).out;
+  assert.equal(s[2], null, 'no change - no write');
+  // a new calibration clears the measurement made against the old zero
+  ctx.global.set('bun_angle', 0);
+  feedTc(ctx, 300000 - 100, [100, 100, 100, 100, 4100]);
+  withNow(300000, () => runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'calibrate', confirmed: true } }, ctx));
+  sample30s(ctx, 300000, [100, 100, 100, 100, 4100]);
+  assert.equal(ctx.global.get('settings').advanced.tiltCorr.meas, null);
+  assert.equal(ctx.global.get('settings').advanced.tiltCorr.k, 2, 'K survives the calibration');
+});
+
+check('BEP TiltCorrection: axis motion while sampling is an error; abort while turning stops the drive', () => {
+  const ctx = tcCtx();
+  feedTc(ctx, 99900, [100, 100, 100, 100, 4100]);
+  withNow(100000, () => runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'calibrate', confirmed: true } }, ctx));
+  ctx.global.set('drive_state', { mo: 1, so: 1, ms: 2, position: 0, velocity_deg_per_sec: 1 });
+  const sent = tickTc(ctx, 101000);
+  assert.equal(ctx.context.get('state').status, 'error');
+  assert.ok(/сдвинулась/.test(ctx.context.get('state').message));
+  assert.ok(sent.some(m => m[3] && m[3].payload.type === 'error'));
+  const c2 = tcCtx({ drive_state: { mo: 1, so: 1, ms: 0, position: Math.round(90 * TPD), velocity_deg_per_sec: 0 } });
+  feedTc(c2, 99900, [100, 100, 100, 100, 4100]);
+  const r = withNow(100000, () => runNode('BEP TiltCorrection', { topic: 'bep_tc_start', payload: { kind: 'calibrate', confirmed: true } }, c2));
+  assert.equal(r.out[1].payload.ticks, -Math.round(90 * TPD), '90° → turn −90°');
+  const ab = runNode('BEP TiltCorrection', { topic: 'bep_tc_abort', payload: true }, c2);
+  assert.equal(ab.sent[0][1].topic, 'drive_stop');
+  assert.equal(c2.context.get('state').status, 'aborted');
+});
+
+check('BEP Gap: X = k·K in µm and the live Xup/Xlow; stale bep_status clears values', () => {
+  const ctx = makeCtx({ settings: corrSettings() });
+  const raw = [3990, 4010, 4020, 3980, 4050];
+  let r;
+  raw.forEach((v, i) => { r = runNode('BEP Gap', { topic: 'Channel ' + (i + 1), payload: String(v) }, ctx); });
+  const p = r.out.payload;
+  const x = raw.map((v, i) => BEP_K[i] * v);
+  p.scaledUm.forEach((g, i) => assert.ok(Math.abs(g - x[i]) < 1e-9, 'X' + i + ': ' + g));
+  assert.ok(Math.abs(p.xUpUm - (x[0] - x[1]) / 2) < 1e-9);
+  assert.ok(Math.abs(p.xLowUm - (x[2] - x[3]) / 2) < 1e-9);
+  assert.equal('tiltCorrArcsec' in p, false, 'no instantaneous Δφ any more');
+  r = runNode('BEP Gap', { topic: 'bep_status', payload: JSON.stringify({ running: true, stale: true }) }, ctx);
+  assert.equal(r.out.payload.raw[0], null);
+  assert.equal(r.out.payload.xUpUm, null);
+});
+
+check('SettingsNormalize: old correction keys removed; tiltCorr kept against a stale Settings form; poll defaults', () => {
+  const tc = { k: 1.5, apply: true, base: { xUp: 1, xLow: 2, means: [1, 2, 3, 4], samples: [60, 60, 60, 60], at: 'a', phiSec: 0 },
+    meas: { xUp: 3, xLow: 4, means: [1, 2, 3, 4], samples: [60, 60, 60, 60], at: 'b', phiSec: 36000 } };
+  const ctx = makeCtx({ settings: { general: { angleCorrectionMode: 'circlogram', angleCorrectionEnabled: true },
+    advanced: { BEPcoeffs: [0, 0, 0, 0, 0], tiltCorr: tc, circlogram: { n: 36 }, circlogramInitial: {}, bepZero: { codes: [1] } } } });
+  const s = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: { BEPcoeffs: [0, 0, 0, 0, 0], tiltCorr: { k: 9, apply: false, base: null, meas: null } } } }, ctx).out[0].payload;
+  assert.deepEqual(s.advanced.BEPcoeffs, BEP_K);
+  assert.deepEqual(s.advanced.tiltCorr, tc, 'the BEP tab owns tiltCorr');
+  ['circlogram', 'circlogramInitial', 'circlogramCurrent', 'bepZero'].forEach(k => assert.equal(k in s.advanced, false, k));
+  assert.equal('angleCorrectionMode' in s.general, false);
+  assert.equal('angleCorrectionEnabled' in s.general, false);
+  assert.equal(s.advanced.normalPollHz, 5);
+  assert.equal(s.advanced.velocityWindowMs, 1000);
+  const ctx2 = makeCtx({});
+  const s2 = runNode('SettingsNormalize', { topic: 'settings_aply', payload: { advanced: { tiltCorr: { k: 'x', base: { xUp: 1, xLow: null }, meas: { xUp: 1, xLow: 1 } } } } }, ctx2).out[0].payload;
+  assert.deepEqual(s2.advanced.tiltCorr, { k: 1, apply: false, base: null, meas: null }, 'a broken calibration is dropped with its measurement');
+});
+
+check('Speed display: velocity over a 1 s TM/PX window (was 3 s), normal ELMO poll 5 Hz', () => {
+  const ctx = makeCtx({ settings });
+  // 10 °/s for 3 s, then 20 °/s for 1.2 s, samples every 200 ms
+  let px = 0, p;
+  for (let i = 0; i <= 21; i++) {
+    const tm = i * 200000;
+    if (i > 0) px += Math.round((i <= 15 ? 10 : 20) * 0.2 * TPD);
+    p = parse(ctx, 'TM;' + tm + ';PX;' + px + ';VX;0;').payload;
+  }
+  assert.equal(p.velocity_source, 'tm_px_buffer');
+  assert.ok(Math.abs(p.velocity_deg_per_sec - 20) < 0.01, 'the last second only: ' + p.velocity_deg_per_sec);
+  const slow = JSON.parse(JSON.stringify(settings)); slow.advanced.velocityWindowMs = 3000;
+  const ctx2 = makeCtx({ settings: slow });
+  px = 0;
+  for (let i = 0; i <= 21; i++) {
+    if (i > 0) px += Math.round((i <= 15 ? 10 : 20) * 0.2 * TPD);
+    p = parse(ctx2, 'TM;' + (i * 200000) + ';PX;' + px + ';VX;0;').payload;
+  }
+  assert.ok(p.velocity_deg_per_sec < 15, 'the old 3 s window lags: ' + p.velocity_deg_per_sec);
+  const tr = flows.find(n => n.id === 'elmoxs-transport');
+  for (const code of [tr.func, tr.initialize]) assert.ok(/normalPollHz: clamp\(finiteNumber\(advanced\.normalPollHz, 5\), 1, 10\)/.test(code));
+});
+
+check('ProtocolManager: a new protocol file is in English with the BUN angle and the tilt correction', () => {
+  const s2 = JSON.parse(JSON.stringify(settings)); s2.general.angleSavingMode = 'header';
+  const ctx = makeCtx({ settings: s2, current_range: 'high', bun_angle: 36011,
+    tilt_correction: { apply: true, arcsec: 11.1, k: 2, appliedToSetpointArcsec: 11 } });
+  const r = runNode('ProtocolManager', { topic: 'open_protocol', payload: {} }, ctx);
+  const text = String(r.out[0].payload);
+  assert.ok(!CYR.test(text), text);
+  assert.ok(/^# Protocol file ID \d{8}_\d{6}$/m.test(text), text);
+  assert.ok(/^Rotation_axis_tilt_angle\s+10\.003056 # degree, BUN angle$/m.test(text), text);
+  assert.ok(/^Tilt_angle_correction\s+11 # arcsec, added to the tilt setpoint, measured dphi 11\.1 arcsec, K 2$/m.test(text), text);
+  assert.ok(/^Speed_value Error Data_file # degree\/s %$/m.test(text), text);
+  assert.ok(/^Date\s+\d{4}-\d{2}-\d{2}$/m.test(text) && /^Time\s+\d{2}:\d{2}:\d{2}$/m.test(text), text);
+});
+
+check('Протоколы tab reads old Russian and new English data files', () => {
+  const page = flows.find(n => n.id === 'prot-tmpl-nc3-0001').format;
+  assert.ok(page.includes("/^(Время\\s+Угол|Time\\s+Angle)/i"), 'data column header');
+  assert.ok(page.includes("text.indexOf('Speed_setpoint') === 0") && page.includes("text.indexOf('Скорость_задания') === 0"));
+  assert.ok(page.includes("text.indexOf('Speed_measured') === 0") && page.includes('/^Error\\s/.test(text)'));
+});
+
+check('BEP flow: circlogram nodes are gone; cmd? routes bep_tc_start/abort/set to BEP TiltCorrection', () => {
+  assert.equal(JSON.stringify(flows).indexOf('bep-circlogram'), -1);
+  const sw = flows.find(n => n.id === '68c290d96d3569d2');
+  const tcId = flows.find(n => n.name === 'BEP TiltCorrection').id;
+  ['bep_tc_start', 'bep_tc_abort', 'bep_tc_set'].forEach(topic => {
+    const i = sw.rules.findIndex(r => r.v === topic);
+    assert.ok(i >= 0 && sw.wires[i].includes(tcId), topic);
+  });
+  assert.equal(sw.outputs, sw.rules.length);
+  const page = flows.find(n => n.id === 'f249f99f21f4d1a7').format;
+  ['bep_tc_start', 'bep_tc_abort', 'bep_tc_set', 'bep_tc_state'].forEach(t => assert.ok(page.includes(t), t));
+  assert.ok(!/bep_circ_|bep_zero_cal_/.test(page));
+  const persist = flows.find(n => n.name === 'SettingsPersist').func;
+  assert.ok(persist.includes("msg.topic === 'bep_tc_persist'"));
+  for (const id of ['0c3c6139972245b3', 'cd1902e1e473a48c']) {
+    const f = flows.find(n => n.id === id).format;
+    assert.ok(f.includes('{ min: -180, max: 180 }'), id + ' accepts ±180°');
   }
 });
 
