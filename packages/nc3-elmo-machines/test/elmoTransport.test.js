@@ -978,3 +978,55 @@ test('motor_on with a leading ST does not preempt an in-flight command', () => {
   assert.equal(h.ctx().queue[0].id, 'mo');
   assert.equal(h.ctx().queue[0].priority, 3);
 });
+
+test('lost reply to a setter part of a motion batch re-sends the part instead of failing the homing', () => {
+  const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 100000 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: { id: 'init', kind: 'cmd', cmd: 'HM[1]=1;PR=1;BG', meta: { topic: 'driveInit', waitForMotionDone: true } },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  assert.equal(h.calls.sendCmd.at(-1), 'HM[1]=1');
+  h.actor.send({ type: 'ELMO.TIMEOUT' });              // HM[1]=1 echo lost
+  assert.equal(h.calls.sendCmd.at(-1), 'HM[1]=1', 'the same part is sent again');
+  assert.equal(failed(h.calls).length, 0);
+  const lost = h.calls.emitEvent.filter((e) => e.type === 'CMD.PART_LOST');
+  assert.equal(lost.length, 1);
+  assert.equal(lost[0].cmd, 'HM[1]=1');
+  assert.equal(lost[0].action, 'resend');
+  h.actor.send({ type: 'ELMO.RESP', raw: 'HM[1];1;' });
+  assert.equal(h.calls.sendCmd.at(-1), 'PR=1');
+  assert.equal(h.ctx().missCount, 0);
+});
+
+test('lost BG echo of a motion batch enters the motion wait (the axis may already turn)', () => {
+  const h = makeHarness({ motionPollDelayMs: 5, motionDoneTimeoutMs: 100000 });
+  h.actor.send({
+    type: 'UI.CMD',
+    envelope: { id: 'init', kind: 'cmd', cmd: 'HM[1]=1;PR=1;BG', meta: { topic: 'driveInit', waitForMotionDone: true } },
+  });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'HM[1];1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'PR;1;' });
+  assert.equal(h.calls.sendCmd.at(-1), 'BG');
+  h.calls.forwardResp.length = 0;
+  h.actor.send({ type: 'ELMO.TIMEOUT' });              // BG echo lost
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+  assert.equal(h.calls.sendCmd.filter((c) => c === 'BG').length, 1, 'BG is never re-sent');
+  assert.equal(h.calls.sendCmd.at(-1), 'MS');
+  assert.equal(failed(h.calls).length, 0);
+  assert.equal(h.calls.emitEvent.filter((e) => e.type === 'CMD.PART_LOST').at(-1).action, 'motion_wait');
+  assert.equal(h.calls.forwardResp[0].topic, 'driveInit', 'collected echoes still reach the parser');
+  feedMotionStatusPoll(h, { ms: 'MS;2;' });
+  assert.deepEqual(h.value(), { connected: 'motionPollPause' });
+  assert.equal(failed(h.calls).length, 0);
+});
+
+test('a plain command batch (no motion wait) still fails on a lost reply', () => {
+  const h = makeHarness({});
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'c', kind: 'cmd', cmd: 'SP=1;AC=2', meta: { topic: 'set_motion' } } });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.TIMEOUT' });
+  assert.equal(failed(h.calls).at(-1).reason, 'timeout');
+  assert.equal(h.calls.emitEvent.filter((e) => e.type === 'CMD.PART_LOST').length, 0);
+});

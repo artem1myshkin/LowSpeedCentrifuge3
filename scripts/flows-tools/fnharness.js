@@ -219,7 +219,21 @@ check('DriveInitState: homing lifecycle with SR bit 7, angle progress and comple
   assert.equal(ctx.global.get('null_mark_state').status, 'found');
 });
 
-check('DriveInitState: revolution completed without index capture -> failed "не найдена"', () => {
+check('DriveInitState: revolution completed without index capture -> failed "не найдена" with travel and PX', () => {
+  // Stand 2026-11-11 (low pair): PX 0 -> 6553625 after a full turn, the counter never jumped.
+  const ctx = makeCtx({ settings, current_range: 'low', logs: [] });
+  const meta = { topic: 'driveInit', resolution: 'low', waitForMotionDone: true, revolutionTicks: 6553600, homingSpeedDegSec: 5 };
+  runNode('DriveInitState', { topic: 'CMD.STARTED', payload: { topic: 'driveInit', meta } }, ctx);
+  for (let k = 0; k <= 72; k++) runNode('DriveInitState', { topic: 'poll_data', payload: { sr: 128, position: k * 91022, resolution: 'low' } }, ctx);
+  const r = runNode('DriveInitState', { topic: 'CMD.COMPLETED', payload: { topic: 'driveInit', meta, raw: 'MS;1;TM;1;PX;6553625;VX;0;SR;128;' } }, ctx);
+  assert.equal(r.out[0].payload.status, 'failed');
+  assert.equal(r.out[0].payload.null_mark, 'not_found');
+  assert.ok(/не найдена/.test(r.out[0].payload.last_error) && /Index/.test(r.out[0].payload.last_error), r.out[0].payload.last_error);
+  assert.ok(/пройдено 360°, PX=6553625/.test(r.out[1].payload.message), r.out[1].payload.message);
+  assert.ok(/travelled 360°, PX=6553625/.test(r.out[1].payload.message_en), r.out[1].payload.message_en);
+});
+
+check('DriveInitState: no travel after BG -> "оборот не выполнен", not "метка не найдена"', () => {
   const ctx = makeCtx({ settings, current_range: 'high', logs: [] });
   const meta = { topic: 'driveInit', resolution: 'high', waitForMotionDone: true, revolutionTicks: 262144000 };
   runNode('DriveInitState', { topic: 'CMD.STARTED', payload: { topic: 'driveInit', meta } }, ctx);
@@ -227,7 +241,18 @@ check('DriveInitState: revolution completed without index capture -> failed "н�
   const r = runNode('DriveInitState', { topic: 'CMD.COMPLETED', payload: { topic: 'driveInit', meta, raw: 'MS;0;SR;128;' } }, ctx);
   assert.equal(r.out[0].payload.status, 'failed');
   assert.equal(r.out[0].payload.null_mark, 'not_found');
-  assert.ok(/не найдена/.test(r.out[0].payload.last_error));
+  assert.ok(/Оборот не выполнен/.test(r.out[0].payload.last_error) && /пройдено 0°/.test(r.out[0].payload.last_error), r.out[0].payload.last_error);
+});
+
+check('DriveInitState: CMD.PART_LOST from the transport goes to the journal (re-send / motion wait)', () => {
+  const ctx = makeCtx({ settings, current_range: 'low', logs: [] });
+  let r = runNode('DriveInitState', { topic: 'CMD.PART_LOST', payload: { type: 'CMD.PART_LOST', cmd: 'HM[1]=1', action: 'resend', topic: 'driveInit', meta: {} } }, ctx);
+  assert.equal(r.out[0], null);
+  assert.equal(r.out[1].payload.type, 'warning');
+  assert.ok(/«HM\[1\]=1»/.test(r.out[1].payload.message) && /отправлена повторно/.test(r.out[1].payload.message), r.out[1].payload.message);
+  r = runNode('DriveInitState', { topic: 'CMD.PART_LOST', payload: { cmd: 'BG', action: 'motion_wait', topic: 'driveInit', meta: {} } }, ctx);
+  assert.ok(/«BG»/.test(r.out[1].payload.message) && /опросу MS\/PX\/SR/.test(r.out[1].payload.message), r.out[1].payload.message);
+  assert.ok(/No ELMO reply to "BG"/.test(r.out[1].payload.message_en), r.out[1].payload.message_en);
 });
 
 check('DriveInitState: resolution switch resets the null-mark status; old journal wording still recognised', () => {

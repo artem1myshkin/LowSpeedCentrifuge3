@@ -255,6 +255,12 @@ function createElmoTransport(effects) {
     return /\bMO\s*=\s*1\b/.test(String(cmd || '').toUpperCase());
   }
 
+  function motionBatchReplyLost(context) {
+    const env = context && context.inFlight;
+    return isAckable(env) && isMultiPart(env) && !!(env.meta && env.meta.waitForMotionDone === true)
+      && (Number(context.missCount) || 0) + 1 < motionMaxMisses;
+  }
+
   function isBgCommand(cmd) {
     return /\bBG\b/.test(String(cmd || '').toUpperCase());
   }
@@ -391,6 +397,13 @@ function createElmoTransport(effects) {
       hasNextMotionPollPart: ({ context }) => motionPollCursorOf(context) < motionPollCmdsOf(context).length - 1,
       motionDoneAfterMotionPoll: ({ context, event }) => motionDoneFromRaw(motionPollRawFor(context, event.raw), context.inFlight, context),
       operatorAbortCommand: ({ context, event }) => canOperatorAbort(context.inFlight) && isOperatorAbortEnvelope(event.envelope),
+      // Lost reply to one part of a motion batch (homing: HM…;SP;AC;DC;PR;BG with
+      // waitForMotionDone). The drive may have executed the part, so failing the batch here
+      // left the axis turning a full revolution while the software had already given up on
+      // the search (stand report 2026-11-11). Setters are idempotent and are re-sent; a lost
+      // BG echo goes straight to the motion wait, which polls MS/PX/SR and decides.
+      motionBatchReplyLost: ({ context }) => motionBatchReplyLost(context),
+      motionBatchBgReplyLost: ({ context }) => motionBatchReplyLost(context) && isBgCommand(commandFor(context.inFlight)),
       motionWaitTimedOut: ({ context }) => {
         const startedAt = Number(context.motionWaitStartedAt) || 0;
         return startedAt > 0 && now() - startedAt >= motionDoneTimeoutFor(context.inFlight);
@@ -654,7 +667,22 @@ function createElmoTransport(effects) {
       forwardBatchParts: ({ context, event }) => {
         const env = context.inFlight;
         if (!isAckable(env) || !isMultiPart(env)) return;
-        forwardResp(rawFor(env, event.raw), topicFor(env));
+        forwardResp(rawFor(env, event.raw == null ? '' : event.raw), topicFor(env));
+      },
+
+      // Journal hook for motionBatchReplyLost: which part lost its reply and what was done.
+      reportLostPartReply: ({ context }) => {
+        const env = context.inFlight;
+        if (!isAckable(env)) return;
+        const cmd = commandFor(env);
+        emitEvent({
+          type: 'CMD.PART_LOST',
+          id: env.id,
+          cmd,
+          action: isBgCommand(cmd) ? 'motion_wait' : 'resend',
+          topic: topicFor(env),
+          meta: env.meta || {},
+        });
       },
 
       // ELMO answers with '?' (observed ':?') when it rejects a command. Poll parts are
@@ -836,6 +864,8 @@ function createElmoTransport(effects) {
             // link offline after maxMisses consecutive misses (then offline self-heals).
             after: {
               TIMEOUT: [
+                { guard: 'motionBatchBgReplyLost', target: 'waitingForMotionDone', actions: ['reportLostPartReply', 'bumpMiss', 'forwardBatchParts', 'markMotionWait'] },
+                { guard: 'motionBatchReplyLost', target: 'sendingNextPart', actions: ['reportLostPartReply', 'bumpMiss'] },
                 { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
                 { target: 'idle', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
               ],
@@ -856,6 +886,8 @@ function createElmoTransport(effects) {
                 { target: 'dispatch', actions: ['resetMiss', 'reportRejectedPart', 'ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'] },
               ],
               'ELMO.TIMEOUT': [
+                { guard: 'motionBatchBgReplyLost', target: 'waitingForMotionDone', actions: ['reportLostPartReply', 'bumpMiss', 'forwardBatchParts', 'markMotionWait'] },
+                { guard: 'motionBatchReplyLost', target: 'sendingNextPart', actions: ['reportLostPartReply', 'bumpMiss'] },
                 { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
                 { target: 'idle', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
               ],
