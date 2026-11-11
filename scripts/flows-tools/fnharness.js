@@ -40,6 +40,7 @@ function runNode(name, msg, ctx, opts) {
   return { out, sent, logs, timers };
 }
 
+const CYR = /[А-Яа-яЁё]/;
 let failures = 0;
 function check(label, fn) { try { fn(); console.log('ok  ', label); } catch (e) { failures++; console.log('FAIL', label, '\n     ', e.message); } }
 
@@ -720,7 +721,7 @@ function autoTiltStart(ctx, target, startAngle) {
   return r;
 }
 check('BUN AutoTilt: start and completion go to the journal (RU+EN) and to the UI; brake engaged', () => {
-  const ctx = makeCtx({ settings, bun: {} });
+  const ctx = makeCtx({ settings, bun: {}, bun_dev_state: { code: 3, ts: Date.now() } });
   const r = autoTiltStart(ctx, 36000, 0);
   const startSent = r.sent[0];
   assert.equal(startSent[2].payload, 0, 'brake released first');
@@ -737,53 +738,60 @@ check('BUN AutoTilt: start and completion go to the journal (RU+EN) and to the U
   assert.ok(last.sent.some(m => m[1] && m[1].payload === 'release'), 'BUN drive off after the brake');
 });
 
-check('BUN AutoTilt: BUN stops off the tolerance after moving -> "settled", brake engaged, warning', () => {
-  const ctx = makeCtx({ settings, bun: {} });
+check('BUN AutoTilt: the BUN state register ends the movement off the tolerance -> "not_reached", brake, warning', () => {
+  const ctx = makeCtx({ settings, bun: {}, bun_dev_state: { code: 3, ts: Date.now() } });
   autoTiltStart(ctx, 36000, 0);
-  const base = Date.now();
-  let last; const all = [];
-  // the BUN moves 0 -> 35970 and stays there (30″ off the setpoint, tolerance 5″)
-  const samples = [10000, 25000, 35970, 35971, 35970, 35969, 35970, 35970, 35971];
-  samples.forEach((a, i) => {
-    const st = ctx.flow.get('bun_auto_state');
-    st.window = (st.window || []).map(p => ({ t: p.t - 1000, a: p.a }));
-    ctx.flow.set('bun_auto_state', st);
-    last = runNode('BUN AutoTilt', { topic: 'bun_angle', payload: a }, ctx, { runTimers: true });
-    all.push(...last.sent);
-  });
+  const all = [];
+  const feed = (topic, payload) => { const r = runNode('BUN AutoTilt', { topic, payload }, ctx, { runTimers: true }); all.push(...r.sent); if (r.out) all.push(r.out); return r; };
+  feed('bun_state', JSON.stringify({ state: 4, gpio: 3128 }));
+  [10000, 25000, 35970].forEach(a => { feed('bun_angle', a); feed('bun_state', { state: 5 }); });
+  // the BUN stands at 35970 (30″ off) but still reports "moving to the setpoint": the sequence waits
+  for (let i = 0; i < 30; i++) { feed('bun_angle', 35970); feed('bun_state', { state: 5 }); }
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'moving', 'no timer ends the movement while the BUN is moving to the setpoint');
+  assert.ok(!all.some(m => m[2] && m[2].payload === 1), 'no brake while the BUN reports the motion');
+  feed('bun_state', { state: 3 });
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'moving', 'the decision waits for the angle of the same poll');
+  feed('bun_angle', 35971);
   const st = ctx.flow.get('bun_auto_state');
-  assert.equal(st.status, 'settled', JSON.stringify(st.window));
-  assert.ok(base > 0);
-  const journal = all.find(m => m[3]);
+  assert.equal(st.status, 'not_reached');
+  const journal = all.filter(m => m[3]).pop();
   assert.equal(journal[3].payload.type, 'warning');
-  assert.ok(/остановился/.test(journal[3].payload.message));
+  assert.ok(/уставка не достигнута/.test(journal[3].payload.message) && /«остановлен» \(3\)/.test(journal[3].payload.message), journal[3].payload.message);
+  assert.ok(/setpoint not reached/.test(journal[3].payload.message_en) && !CYR.test(journal[3].payload.message_en), journal[3].payload.message_en);
   assert.ok(all.some(m => m[2] && m[2].payload === 1), 'brake engaged');
+  const ui = all.filter(m => m[4]).map(m => [].concat(m[4])).flat();
+  assert.ok(ui.some(u => u.topic === 'bun_dev_state' && u.payload.code === 3 && u.payload.gpio === undefined), 'the state goes to the Tilt page');
 });
-
-check('BUN AutoTilt: no motion / no data -> stop BUN, then brake, error in journal and UI', () => {
+check('BUN AutoTilt: GO not executed (state register) / no data -> stop BUN, then brake, error in journal and UI', () => {
   for (const kind of ['no_motion', 'no_data']) {
-    const ctx = makeCtx({ settings, bun: {} });
+    const ctx = makeCtx({ settings, bun: {}, bun_dev_state: { code: 3, ts: Date.now() } });
     const r = autoTiltStart(ctx, 36000, 0);
-    const st = ctx.flow.get('bun_auto_state');
-    if (kind === 'no_motion') { st.go_at -= 16000; st.last_sample_at = Date.now(); }
-    else { st.go_at -= 6000; st.last_sample_at -= 6000; }
-    ctx.flow.set('bun_auto_state', st);
-    const watch = r.timers.find(t => t.ms === 1000);
     const before = r.sent.length;
-    watch.fn();
+    let after; const runs = [];
+    if (kind === 'no_motion') {
+      const outs = [];
+      for (let i = 0; i < 3; i++) { const x = runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 3 } }, ctx); runs.push(x); outs.push(...x.sent); r.timers.push(...x.timers); }
+      after = outs;
+      const j = after.find(m => m[3]);
+      assert.ok(/не выполнил команду GO — состояние «остановлен» \(3\) в 3 опросах/.test(j[3].payload.message), j[3].payload.message);
+    } else {
+      const st = ctx.flow.get('bun_auto_state');
+      st.go_at -= 6000; st.last_sample_at -= 6000;
+      ctx.flow.set('bun_auto_state', st);
+      r.timers.find(t => t.ms === 1000).fn();
+      after = r.sent.slice(before);
+    }
     assert.equal(ctx.flow.get('bun_auto_state').status, kind);
-    const after = r.sent.slice(before);
     assert.ok(after[0][1] && after[0][1].payload === 'stop', kind + ': BUN stop first');
     const j = after.find(m => m[3]);
     assert.equal(j[3].payload.type, 'error');
-    assert.ok(j[3].payload.message_en.length > 0);
-    // brake after brakeSettleMs, then release
-    r.timers.filter(t => t.ms === 300).slice(1).forEach(t => t.fn());
-    r.timers.filter(t => t.ms === 300).slice(2).forEach(t => t.fn());
-    assert.ok(r.sent.some(m => m[2] && m[2].topic === 'tilt_brake' && m[2].payload === 1), kind + ': brake engaged');
+    assert.ok(j[3].payload.message_en.length > 0 && !CYR.test(j[3].payload.message_en), j[3].payload.message_en);
+    r.timers.filter(t => t.ms === 300).forEach(t => t.fn());
+    r.timers.filter(t => t.ms === 300).forEach(t => t.fn());
+    const sentAll = r.sent.concat(...runs.map(x => x.sent));
+    assert.ok(sentAll.some(m => m[2] && m[2].topic === 'tilt_brake' && m[2].payload === 1), kind + ': brake engaged');
   }
 });
-
 check('BUN AutoTilt: operator stop during the sequence engages the brake and journals it', () => {
   const ctx = makeCtx({ settings, bun: {} });
   autoTiltStart(ctx, 36000, 0);
@@ -923,7 +931,6 @@ check('ScenarioManager: "close at the end of the scenario" is stored on the serv
 });
 
 // ---------------- 2026-10-29: English texts of operator messages (D7) ----------------
-const CYR = /[А-Яа-яЁё]/;
 check('Scenario errors and notices carry English text', () => {
   const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [], scenario_files: ['t.scn'] });
   runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 't.scn' } }, ctx);
@@ -978,28 +985,67 @@ check('BUN AutoTilt: a slow BUN (0.6 °/s over 101°, stand journal) is not "no 
   assert.ok(brakeEngaged(last.sent), 'brake engaged at the end');
 });
 
-check('BUN AutoTilt: BUN stops before half of the path -> "stalled" after 15 s: stop, brake, error', () => {
-  const ctx = makeCtx({ settings, bun: {} });
-  const t0 = 2000000, target = 360000;
-  const run = withNow(t0, () => autoTiltStart(ctx, target, 0));
+check('BUN AutoTilt: stand case -165.95° → -180°: no timer ends the movement; the watch timer only checks the data', () => {
+  const ctx = makeCtx({ settings, bun: {}, bun_dev_state: { code: 3, ts: 2000000 } });
+  const t0 = 2000000, target = -180 * 3600, stuck = Math.round(-165.9469 * 3600);
+  const run = withNow(t0, () => autoTiltStart(ctx, target, -150 * 3600));
   let t = 0;
-  for (; t < 10; t++) {
-    withNow(t0 + t * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: 10000 * t }, ctx));
+  for (; t < 120; t++) {
+    withNow(t0 + t * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: t < 10 ? -150 * 3600 - 6000 * t : stuck }, ctx));
+    withNow(t0 + t * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 5 } }, ctx));
     fireWatch(run, t0 + t * 1000);
   }
-  const stoppedAt = 90000;
-  for (; t < 40 && ctx.flow.get('bun_auto_state').status === 'moving'; t++) {
-    withNow(t0 + t * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: stoppedAt }, ctx));
-    if (ctx.flow.get('bun_auto_state').status === 'moving') fireWatch(run, t0 + t * 1000);
-  }
-  const st = ctx.flow.get('bun_auto_state');
-  assert.equal(st.status, 'stalled');
-  assert.ok(t >= 22 && t <= 28, 'fault about 15 s after the last motion, t=' + t);
-  const j = run.sent.find(m => m[3] && m[3].payload.type === 'error');
-  assert.ok(j && /не двигается/.test(j[3].payload.message) && !CYR.test(j[3].payload.message_en));
-  assert.ok(run.sent.some(m => m[1] && m[1].payload === 'stop'), 'BUN stop first');
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'moving', 'two minutes without motion, the BUN still reports "moving to the setpoint"');
+  assert.ok(!brakeEngaged(run.sent), 'no brake');
+  assert.ok(!run.sent.some(m => m[1] && m[1].payload === 'stop'), 'no stop');
 });
 
+check('BUN state register: a zero pass waits for the BUN to leave the jog after stop, a jog that ends early is "stalled"', () => {
+  const ctx = makeCtx({ settings, bun: {}, bun_dev_state: { code: 3, ts: Date.now() } });
+  ctx.global.set('bun_angle', 170 * 3600);
+  const run = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: -170 * 3600, mode: 'Автоматический' }, ctx);
+  run.timers.find(t => t.ms === 300).fn();
+  runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 9 } }, ctx);
+  const r = runNode('BUN AutoTilt', { topic: 'bun_angle', payload: 7 * 3600 }, ctx);
+  assert.equal(ctx.flow.get('bun_auto_state').phase, 'zero_pass_stop');
+  assert.ok(!r.timers.some(t => t.ms === 1000), 'no pause timer with the state register');
+  runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 9 } }, ctx);
+  assert.equal(ctx.flow.get('bun_auto_state').phase, 'zero_pass_stop', 'still in the jog');
+  const go = runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 2 } }, ctx);
+  assert.deepEqual(go.sent[0][0], { topic: 'bun_cmd_setpoint', payload: -170 * 3600 });
+  assert.equal(ctx.flow.get('bun_auto_state').phase, '');
+  // a jog that the BUN ends by itself before the zone
+  const c2 = makeCtx({ settings, bun: {}, bun_dev_state: { code: 3, ts: Date.now() } });
+  c2.global.set('bun_angle', 170 * 3600);
+  const r2 = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: -170 * 3600, mode: 'Автоматический' }, c2);
+  r2.timers.find(t => t.ms === 300).fn();
+  runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 9 } }, c2);
+  const end = runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 10 } }, c2, { runTimers: true });
+  assert.equal(c2.flow.get('bun_auto_state').status, 'stalled');
+  assert.ok(/аварийной остановки/.test(c2.flow.get('bun_auto_state').message), c2.flow.get('bun_auto_state').message);
+  assert.ok(brakeEngaged(end.sent));
+});
+
+check('After an auto tilt fault the operator commands still reach the BUN (Slow Up, Set Zero, Stop)', () => {
+  const ctx = makeCtx({ settings, bun: {}, bun_dev_state: { code: 3, ts: Date.now() } });
+  ctx.global.set('bun_angle', Math.round(-165.9 * 3600));
+  const run = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: 180 * 3600, mode: 'Автоматический' }, ctx);
+  run.timers.find(t => t.ms === 300).fn();
+  for (let i = 0; i < 3; i++) runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 3 } }, ctx, { runTimers: true });
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'no_motion');
+  runNode('BUN AutoTilt', { topic: 'tilt_mode', payload: 'Ручной' }, ctx);
+  for (const cmd of ['slowup', 'slowdown', 'zero', 'stop']) {
+    const r = runNode('BUN AutoTilt', { topic: 'bun_cmd', payload: cmd }, ctx);
+    assert.deepEqual(r.out[1], { topic: 'bun_cmd', payload: cmd }, cmd);
+  }
+  const sw = flows.find(n => n.id === '481ce8eefd66dde7');
+  const mq = flows.find(n => n.id === 'ea3912f1c70c27b0');
+  assert.equal(mq.type, 'mqtt out');
+  assert.ok(flows.find(n => n.id === '6a4a0b267f9da9d9').wires[1].includes(mq.id), 'AutoTilt output 2 -> MQTT bun_cmd');
+  assert.ok(sw.wires[sw.rules.findIndex(r => r.v === 'bun_cmd')].includes('6a4a0b267f9da9d9'));
+  const inState = flows.find(n => n.type === 'mqtt in' && n.topic === 'bun_state');
+  assert.ok(inState && inState.datatype === 'json' && inState.wires[0].includes('6a4a0b267f9da9d9'), 'bun_state -> AutoTilt');
+});
 check('Manual tilt: setpoint and result go to the journal; no automatic brake or stop', () => {
   const ctx = makeCtx({ settings, bun: {} });
   ctx.global.set('bun_angle', 0);
