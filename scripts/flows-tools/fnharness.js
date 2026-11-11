@@ -743,10 +743,10 @@ check('BUN AutoTilt: the BUN state register ends the movement off the tolerance 
   autoTiltStart(ctx, 36000, 0);
   const all = [];
   const feed = (topic, payload) => { const r = runNode('BUN AutoTilt', { topic, payload }, ctx, { runTimers: true }); all.push(...r.sent); if (r.out) all.push(r.out); return r; };
-  feed('bun_state', JSON.stringify({ state: 4, gpio: 3128 }));
-  [10000, 25000, 35970].forEach(a => { feed('bun_angle', a); feed('bun_state', { state: 5 }); });
+  feed('bun_state', JSON.stringify({ state: 7, gpio: 3128 }));
+  [10000, 25000, 35970].forEach(a => { feed('bun_angle', a); feed('bun_state', { state: 7 }); });
   // the BUN stands at 35970 (30″ off) but still reports "moving to the setpoint": the sequence waits
-  for (let i = 0; i < 30; i++) { feed('bun_angle', 35970); feed('bun_state', { state: 5 }); }
+  for (let i = 0; i < 30; i++) { feed('bun_angle', 35970); feed('bun_state', { state: 7 }); }
   assert.equal(ctx.flow.get('bun_auto_state').status, 'moving', 'no timer ends the movement while the BUN is moving to the setpoint');
   assert.ok(!all.some(m => m[2] && m[2].payload === 1), 'no brake while the BUN reports the motion');
   feed('bun_state', { state: 3 });
@@ -992,10 +992,10 @@ check('BUN AutoTilt: stand case -165.95° → -180°: no timer ends the movement
   let t = 0;
   for (; t < 120; t++) {
     withNow(t0 + t * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_angle', payload: t < 10 ? -150 * 3600 - 6000 * t : stuck }, ctx));
-    withNow(t0 + t * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 5 } }, ctx));
+    withNow(t0 + t * 1000, () => runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 7 } }, ctx));
     fireWatch(run, t0 + t * 1000);
   }
-  assert.equal(ctx.flow.get('bun_auto_state').status, 'moving', 'two minutes without motion, the BUN still reports "moving to the setpoint"');
+  assert.equal(ctx.flow.get('bun_auto_state').status, 'moving', 'two minutes without motion, the BUN still reports the GO motion (state 7)');
   assert.ok(!brakeEngaged(run.sent), 'no brake');
   assert.ok(!run.sent.some(m => m[1] && m[1].payload === 'stop'), 'no stop');
 });
@@ -1005,11 +1005,11 @@ check('BUN state register: a zero pass waits for the BUN to leave the jog after 
   ctx.global.set('bun_angle', 170 * 3600);
   const run = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: -170 * 3600, mode: 'Автоматический' }, ctx);
   run.timers.find(t => t.ms === 300).fn();
-  runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 9 } }, ctx);
+  runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 13 } }, ctx);
   const r = runNode('BUN AutoTilt', { topic: 'bun_angle', payload: 7 * 3600 }, ctx);
   assert.equal(ctx.flow.get('bun_auto_state').phase, 'zero_pass_stop');
   assert.ok(!r.timers.some(t => t.ms === 1000), 'no pause timer with the state register');
-  runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 9 } }, ctx);
+  runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 13 } }, ctx);
   assert.equal(ctx.flow.get('bun_auto_state').phase, 'zero_pass_stop', 'still in the jog');
   const go = runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 2 } }, ctx);
   assert.deepEqual(go.sent[0][0], { topic: 'bun_cmd_setpoint', payload: -170 * 3600 });
@@ -1019,10 +1019,10 @@ check('BUN state register: a zero pass waits for the BUN to leave the jog after 
   c2.global.set('bun_angle', 170 * 3600);
   const r2 = runNode('BUN AutoTilt', { topic: 'bun_cmd_setpoint', payload: -170 * 3600, mode: 'Автоматический' }, c2);
   r2.timers.find(t => t.ms === 300).fn();
-  runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 9 } }, c2);
-  const end = runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 10 } }, c2, { runTimers: true });
+  runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 13 } }, c2);
+  const end = runNode('BUN AutoTilt', { topic: 'bun_state', payload: { state: 3 } }, c2, { runTimers: true });
   assert.equal(c2.flow.get('bun_auto_state').status, 'stalled');
-  assert.ok(/аварийной остановки/.test(c2.flow.get('bun_auto_state').message), c2.flow.get('bun_auto_state').message);
+  assert.ok(/«остановлен» \(3\)/.test(c2.flow.get('bun_auto_state').message), c2.flow.get('bun_auto_state').message);
   assert.ok(brakeEngaged(end.sent));
 });
 

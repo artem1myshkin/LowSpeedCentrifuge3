@@ -519,10 +519,9 @@ while(1):
         #device state register for Node-RED: published AFTER the angle, so the angle of the same
         #poll is already there when the state says the movement is over.
         #full_stat reply: data[3..6] MOTOR_STAT, data[7..10] MOTOR_SPEED, data[11..14] SYS_STATE, data[15..18] ANGLE.
-        #SYS_STATE low 16 bits = device state (codes from the vendor BUN.exe, "Device status"):
-        #0 Released, 1 Release received, 2 Stop received, 3 Stopped, 4 Go received, 5 Seting (moving to
-        #the setpoint), 6 Slow Up received, 7 Rotating slow Up, 8 Slow Down received, 9 Rotating slow Down,
-        #10 Hard stop received. High 16 bits = GPIO (published as bun_systate).
+        #SYS_STATE low 16 bits = device state. Stand firmware (log 2026-11-11): 0 Released, 3 Stopped
+        #(1/2 = release/stop received), GO -> 7, Slow Up -> 11, Slow Down -> 13. Node-RED treats 0..3 as
+        #standing and any other code as a running command. High 16 bits = GPIO (published as bun_systate).
         if buf_sended[1] == 0x03 and len(data) >= 19:
             dev_state = data[11] + data[12]*0x100
             motor_stat = data[3] + data[4]*0x100 + data[5]*0x10000 + data[6]*0x1000000
