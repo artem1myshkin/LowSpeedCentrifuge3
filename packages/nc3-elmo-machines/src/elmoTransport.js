@@ -327,6 +327,19 @@ function createElmoTransport(effects) {
     return parseElmoScalars(raw).so === 1;
   }
 
+  // SR low nibble = amplifier status code (0 = no fault). A faulted amplifier never reaches
+  // SO=1, so the SO wait checks SR between SO reads instead of blocking 30 s (stand 2026-11-12).
+  function srFaultCode(raw) {
+    const sr = parseElmoScalars(raw).sr;
+    return Number.isFinite(sr) ? (sr & 0xF) : 0;
+  }
+
+  // Queued motion starts (BG) are dropped when the motor did not come on: otherwise they ran
+  // late, one after another, once the SO wait released the queue.
+  function isQueuedMotionStart(env) {
+    return env && env.kind === 'cmd' && splitElmoCommands(env.cmds || env.cmd).some(isBgCommand);
+  }
+
   function motionDoneTimeoutFor(env) {
     const n = Number(env && env.meta && env.meta.motionDoneTimeoutMs);
     return Number.isFinite(n) && n > 0 ? n : motionDoneTimeoutMs;
@@ -442,6 +455,10 @@ function createElmoTransport(effects) {
       needsSoReadyWait: ({ context }) => needsSoReadyWait(context.inFlight),
       soReadyAndHasPendingCommandPart: ({ context, event }) => soReadyAndHasPendingCommandPart(context.inFlight, event.raw),
       soReady: ({ event }) => soReadyFromRaw(event.raw),
+      moOnRejected: ({ context, event }) => needsSoReadyWait(context.inFlight) && String(event.raw == null ? '' : event.raw).includes('?'),
+      // Two SR reads in a row with an amplifier code: a single read right after MO=1 is not trusted.
+      srFaultConfirmed: ({ context, event }) => srFaultCode(event.raw) !== 0 && (Number(context.soWaitSrFaults) || 0) + 1 >= 2,
+      srFault: ({ event }) => srFaultCode(event.raw) !== 0,
       needsMotionDoneWait: ({ context }) => needsMotionDoneWait(context.inFlight),
       verifyBg: ({ context }) => context.inFlight.meta.verifyMotionStart && isBgCommand(commandFor(context.inFlight)),
       rejectedMotionCommand: ({ context, event }) => context.inFlight.meta.verifyMotionStart
@@ -674,8 +691,8 @@ function createElmoTransport(effects) {
         };
       }),
 
-      markSoWait: assign(() => ({ soWaitStartedAt: now() })),
-      clearSoWait: assign({ soWaitStartedAt: 0 }),
+      markSoWait: assign(() => ({ soWaitStartedAt: now(), soWaitSrFaults: 0 })),
+      clearSoWait: assign({ soWaitStartedAt: 0, soWaitSrFaults: 0 }),
 
       sendProbe: () => {
         sendCmd(probeCmd);
@@ -850,6 +867,50 @@ function createElmoTransport(effects) {
         });
       },
 
+      failMotorOnRejected: ({ context, event }) => {
+        const env = context.inFlight;
+        if (!isAckable(env)) return;
+        emitEvent({
+          type: 'CMD.FAILED',
+          id: env.id,
+          reason: 'motor_on_rejected',
+          message: 'ELMO rejected ' + commandFor(env) + ': ' + String(event.raw == null ? '' : event.raw).slice(0, 80),
+          topic: topicFor(env),
+          meta: env.meta || {},
+        });
+      },
+
+      failDriveFault: ({ context, event }) => {
+        const env = context.inFlight;
+        if (!isAckable(env)) return;
+        const sr = parseElmoScalars(event.raw).sr;
+        emitEvent({
+          type: 'CMD.FAILED',
+          id: env.id,
+          reason: 'drive_fault',
+          sr,
+          code: srFaultCode(event.raw),
+          message: 'Amplifier fault after MO=1: SR=' + sr + ' (code ' + srFaultCode(event.raw) + ')',
+          topic: topicFor(env),
+          meta: env.meta || {},
+        });
+      },
+
+      dropQueuedMotion: assign(({ context }) => {
+        const keep = [];
+        (context.queue || []).forEach((item) => {
+          if (!isQueuedMotionStart(item)) { keep.push(item); return; }
+          emitEvent({ type: 'CMD.FAILED', id: item.id, reason: 'motor_not_on', topic: topicFor(item), meta: item.meta || {} });
+        });
+        return keep.length === (context.queue || []).length ? {} : { queue: keep };
+      }),
+
+      sendSoWaitSrPoll: () => {
+        sendCmd('SR');
+      },
+      countSrFault: assign(({ context }) => ({ soWaitSrFaults: (Number(context.soWaitSrFaults) || 0) + 1 })),
+      clearSrFaults: assign({ soWaitSrFaults: 0 }),
+
       completeMotionWait: ({ context, event }) => {
         const env = context.inFlight;
         if (!isAckable(env)) return;
@@ -908,6 +969,7 @@ function createElmoTransport(effects) {
         lastFastVx: undefined,
         lastFastPollStartedAt: 0,
         soWaitStartedAt: 0,
+        soWaitSrFaults: 0,
         motionWaitStartedAt: 0,
         motionPollCmds: [],
         motionPollCursor: 0,
@@ -989,6 +1051,8 @@ function createElmoTransport(effects) {
                 { guard: 'rejectedMotionCommand', target: 'idle', actions: ['reportRejectedPart', 'failMotionStart', 'sendEmergencyStop', 'freeInFlight'] },
                 { guard: 'wrongStartBaselineReply' },
                 { guard: 'verifyBg', target: 'verifyingMotionStart', actions: ['resetMiss', 'forwardBatchParts'] },
+                // MO=1 answered with '?': the drive refused to enable - fail now, do not wait 30 s for SO.
+                { guard: 'moOnRejected', target: 'idle', actions: ['resetMiss', 'reportRejectedPart', 'failMotorOnRejected', 'sendEmergencyStop', 'dropQueuedMotion', 'freeInFlight'] },
                 { guard: 'needsSoReadyWait', target: 'waitingForSoReady', actions: ['resetMiss', 'reportRejectedPart', 'forwardBatchParts', 'collectPollPart', 'markSoWait'] },
                 { guard: 'needsMotionDoneWait', target: 'waitingForMotionDone', actions: ['resetMiss', 'reportRejectedPart', 'forwardBatchParts', 'markMotionWait'] },
                 { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: ['resetMiss', 'reportRejectedPart', 'collectPollPart'] },
@@ -1069,7 +1133,7 @@ function createElmoTransport(effects) {
             after: {
               SO_READY_TIMEOUT: {
                 target: 'idle',
-                actions: ['failSoWait', 'sendEmergencyStop', 'freeInFlight', 'clearSoWait'],
+                actions: ['failSoWait', 'sendEmergencyStop', 'dropQueuedMotion', 'freeInFlight', 'clearSoWait'],
               },
             },
             on: {
@@ -1091,12 +1155,27 @@ function createElmoTransport(effects) {
                   'ELMO.RESP': [
                     { guard: 'soReadyAndHasPendingCommandPart', target: '#transport.connected.sendingNextPart', actions: ['resetMiss', 'collectSoReadyPart', 'clearSoWait'] },
                     { guard: 'soReady', target: '#transport.connected.dispatch', actions: ['resetMiss', 'forwardAndAck', 'enqueueConfirmPoll', 'clearSoWait'] },
-                    { target: 'pause', actions: ['resetMiss'] },
+                    { target: 'checkingSr', actions: ['resetMiss'] },
                   ],
                   'ELMO.TIMEOUT': [
                     { guard: 'tooManyMotionMisses', target: '#transport.offline', actions: ['failSoWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearSoWait'] },
                     { target: 'polling', reenter: true, actions: ['bumpMiss'] },
                   ],
+                },
+              },
+              // SO is still 0: read SR. A confirmed amplifier fault ends the wait at once
+              // (ST;MO=0, queued motion starts dropped) instead of blocking every command but
+              // STOP for SO_READY_TIMEOUT.
+              checkingSr: {
+                entry: 'sendSoWaitSrPoll',
+                after: { TIMEOUT: { target: 'pause', actions: ['bumpMiss'] } },
+                on: {
+                  'ELMO.RESP': [
+                    { guard: 'srFaultConfirmed', target: '#transport.connected.idle', actions: ['resetMiss', 'failDriveFault', 'sendEmergencyStop', 'dropQueuedMotion', 'freeInFlight', 'clearSoWait'] },
+                    { guard: 'srFault', target: 'pause', actions: ['resetMiss', 'countSrFault'] },
+                    { target: 'pause', actions: ['resetMiss', 'clearSrFaults'] },
+                  ],
+                  'ELMO.TIMEOUT': { target: 'pause', actions: ['bumpMiss'] },
                 },
               },
               pause: {

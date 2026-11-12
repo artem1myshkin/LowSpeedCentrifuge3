@@ -187,6 +187,30 @@ check('CommandHandler set_resolution: PX=0 after range params, TR/VH2 read back,
   assert.equal(ctx.flow.get('poll_buffer').vh2, undefined);
 });
 
+check('CommandHandler set_resolution high: KP[2] in decimal form, no exponent in any command (stand 2026-11-12)', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'low' });
+  const r = runNode('CommandHandler', { topic: 'set_resolution', payload: { resolution: 'high' } }, ctx);
+  const cmds = r.out.payload.split(/;\r/).map(s => s.replace(/\r$/, ''));
+  assert.ok(cmds.includes('KP[2]=0.0000005'), cmds.join(' '));
+  assert.ok(!cmds.some(c => /=\-?[\d.]+e[+-]?\d/i.test(c)), cmds.join(' '));
+  const r2 = runNode('CommandHandler', { topic: 'set_kp2', payload: { kp2: 5e-7 } }, ctx);
+  assert.equal(r2.out.payload.replace(/\r$/, ''), 'KP[2]=0.0000005');
+});
+
+check('DriveInitState: failed motor_on and dropped motion starts go to the journal', () => {
+  const ctx = makeCtx({ settings, current_range: 'high', logs: [] });
+  let r = runNode('DriveInitState', { topic: 'CMD.FAILED', payload: { type: 'CMD.FAILED', topic: 'motor_on', reason: 'drive_fault', sr: 5, code: 5, meta: { topic: 'motor_on' } } }, ctx);
+  assert.equal(r.out[0], null);
+  assert.equal(r.out[1].payload.type, 'error');
+  assert.ok(/двигатель не включён/.test(r.out[1].payload.message) && /SR=5, код 5/.test(r.out[1].payload.message), r.out[1].payload.message);
+  assert.ok(/did not come on/.test(r.out[1].payload.message_en), r.out[1].payload.message_en);
+  r = runNode('DriveInitState', { topic: 'CMD.FAILED', payload: { topic: 'motor_on', reason: 'motor_on_rejected', meta: { topic: 'motor_on' } } }, ctx);
+  assert.ok(/отклонил MO=1/.test(r.out[1].payload.message), r.out[1].payload.message);
+  r = runNode('DriveInitState', { topic: 'CMD.FAILED', payload: { topic: 'set_jv', reason: 'motor_not_on', meta: { topic: 'set_jv' } } }, ctx);
+  assert.equal(r.out[1].payload.type, 'warning');
+  assert.ok(/отменена: двигатель не включился \(set_jv\)/.test(r.out[1].payload.message), r.out[1].payload.message);
+});
+
 check('CommandHandler high TR windows from settings (0.02° -> 14564 ticks, 120 ms)', () => {
   const ctx = makeCtx({ settings, nc3, current_range: 'high' });
   const r = runNode('CommandHandler', { topic: 'apply_tr_windows', payload: settings }, ctx);

@@ -186,6 +186,10 @@ test('command batch waits for SO=1 after MO=1 before continuing', async () => {
   assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'SO');
 
   h.actor.send({ type: 'ELMO.RESP', raw: 'SO;0;' });
+  // SO still 0: SR is read between SO reads (amplifier fault check), then the pause.
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'checkingSr' } });
+  assert.equal(h.calls.sendCmd[h.calls.sendCmd.length - 1], 'SR');
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SR;0;' });
   assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'pause' } });
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'polling' } });
@@ -1159,4 +1163,66 @@ test('a lost scenario speed setter is resent before BG; an explicit rejection st
   h.actor.send({ type: 'ELMO.RESP', raw: ':?' });
   assert.equal(failed(h.calls).at(-1).reason, 'command_rejected');
   assert.ok(!h.calls.sendCmd.includes('BG'));
+});
+
+test('motor_on: MO=1 rejected with "?" fails at once, stops the drive and drops queued motion starts (stand 2026-11-12)', () => {
+  const h = makeHarness({ motionPollDelayMs: 5 });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'on', kind: 'cmd', cmd: 'ST;MO=1;MO;SO;SR', meta: { topic: 'motor_on' } } });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'ST;' });
+  assert.equal(h.calls.sendCmd.at(-1), 'MO=1');
+  // the operator presses "set speed" while ON is still in flight
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'jv', kind: 'cmd', cmd: 'AC=1;DC=1;JV=1000;BG;JV;JP', meta: { topic: 'set_jv' } } });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'sp', kind: 'cmd', cmd: 'SP=5;AC=1;DC=1;SP;AC;DC', meta: { topic: 'set_motion_params' } } });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MO=1;?;' });
+  const f = failed(h.calls);
+  assert.equal(f.find((e) => e.id === 'on').reason, 'motor_on_rejected');
+  assert.equal(f.find((e) => e.id === 'jv').reason, 'motor_not_on');
+  assert.ok(!f.some((e) => e.id === 'sp'), 'parameter writes stay queued');
+  assert.ok(h.calls.sendCmd.includes('MO=0'));
+  assert.ok(!h.calls.sendCmd.includes('JV=1000'), 'JV/BG never runs');
+  assert.ok(!h.calls.sendCmd.some((c) => c === 'SO'), 'no 30 s SO wait');
+  assert.ok(h.calls.emitEvent.some((e) => e.type === 'CMD.PART_REJECTED' && e.cmd === 'MO=1'));
+});
+
+test('motor_on: amplifier fault in SR during the SO wait ends the wait after two reads', () => {
+  const h = makeHarness({ motionPollDelayMs: 5, soReadyTimeoutMs: 600000 });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'on', kind: 'cmd', cmd: 'ST;MO=1;MO;SO;SR', meta: { topic: 'motor_on' } } });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'ST;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MO=1;' });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'jv', kind: 'cmd', cmd: 'JV=1000;BG', meta: { topic: 'set_jv' } } });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SR;5;' });           // first faulty read: not trusted yet
+  assert.deepEqual(h.value(), { connected: { waitingForSoReady: 'pause' } });
+  assert.equal(failed(h.calls).length, 0);
+  return new Promise((resolve) => setTimeout(resolve, 20)).then(() => {
+    h.actor.send({ type: 'ELMO.RESP', raw: 'SO;0;' });
+    h.actor.send({ type: 'ELMO.RESP', raw: 'SR;5;' });
+    const on = failed(h.calls).find((e) => e.id === 'on');
+    assert.equal(on.reason, 'drive_fault');
+    assert.equal(on.code, 5);
+    assert.equal(failed(h.calls).find((e) => e.id === 'jv').reason, 'motor_not_on');
+    assert.deepEqual(h.calls.sendCmd.slice(-2), ['ST', 'MO=0']);
+  });
+});
+
+test('motor_on: a single faulty SR read followed by a clean one keeps waiting for SO', async () => {
+  const h = makeHarness({ motionPollDelayMs: 5, soReadyTimeoutMs: 600000 });
+  h.actor.send({ type: 'UI.CMD', envelope: { id: 'on', kind: 'cmd', cmd: 'MO=1;SO', meta: { topic: 'motor_on' } } });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'MO=1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SR;5;' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SR;0;' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SO;0;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SR;5;' });
+  assert.equal(failed(h.calls).length, 0, 'the fault counter restarts after a clean SR');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SO;1;' });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'SO;1;' });
+  assert.equal(acked(h.calls).at(-1).id, 'on');
 });
