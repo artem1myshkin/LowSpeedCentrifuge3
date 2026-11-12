@@ -9,11 +9,6 @@ const { clamp, splitElmoCommands } = require('./util');
 // SR is included so the homing run can watch bit 7 (HM[1] active -> 0 when the index mark
 // is captured) without a separate poll (Recommendations section 6).
 const MOTION_STATUS_POLL_CMDS = ['MS', 'TM', 'PX', 'VX', 'SR'];
-const START_POLL_CMDS = ['MO', 'SO', ...MOTION_STATUS_POLL_CMDS];
-const START_RETRY_MS = 5000;
-const MAX_START_RETRIES = 2;
-// Includes time to recover a lost echo or an incomplete status poll.
-const START_CHECK_TIMEOUT_MS = 20000;
 
 // ElmoTransport — single serialized owner of the ELMO UDP link (plan §4, reworked for UDP).
 //
@@ -193,23 +188,9 @@ function createElmoTransport(effects) {
     return env && env.cmd;
   }
 
-  function replyPart(env, cmd, raw) {
-    const text = String(raw == null ? '' : raw);
-    const topic = topicOfEnvelope(env);
-    // A motor batch contains both MO=<request> and a later MO read. The parser
-    // ignores assignment echoes; identify real register reads from the in-flight command.
-    if ((topic === 'motor_on' || topic === 'motor_off') && (cmd === 'MO' || cmd === 'SO' || cmd === 'SR')) {
-      return text.replace(/^\s*(MO|SO|SR)\s*=/i, (prefix, field) => field.toUpperCase() === cmd ? cmd + ';' : prefix);
-    }
-    return text;
-  }
-
   function rawFor(env, raw) {
     if (!isMultiPart(env)) return raw;
-    // Each UDP datagram is one reply, even when its text has no trailing delimiter.
-    const parts = env.parts || [];
-    return parts.map(part => part && !/[;\r\n]$/.test(part) ? part + ';' : part).join('')
-      + replyPart(env, commandFor(env), raw);
+    return (env.parts || []).concat([raw]).join('');
   }
 
   // Whole-frame validation (after all parts reassembled, or for a non-batch envelope).
@@ -276,7 +257,7 @@ function createElmoTransport(effects) {
 
   function motionBatchReplyLost(context) {
     const env = context && context.inFlight;
-    return isAckable(env) && isMultiPart(env) && (env.meta.waitForMotionDone || env.meta.verifyMotionStart)
+    return isAckable(env) && isMultiPart(env) && !!(env.meta && env.meta.waitForMotionDone === true)
       && (Number(context.missCount) || 0) + 1 < motionMaxMisses;
   }
 
@@ -327,19 +308,6 @@ function createElmoTransport(effects) {
     return parseElmoScalars(raw).so === 1;
   }
 
-  // SR low nibble = amplifier status code (0 = no fault). A faulted amplifier never reaches
-  // SO=1, so the SO wait checks SR between SO reads instead of blocking 30 s (stand 2026-11-12).
-  function srFaultCode(raw) {
-    const sr = parseElmoScalars(raw).sr;
-    return Number.isFinite(sr) ? (sr & 0xF) : 0;
-  }
-
-  // Queued motion starts (BG) are dropped when the motor did not come on: otherwise they ran
-  // late, one after another, once the SO wait released the queue.
-  function isQueuedMotionStart(env) {
-    return env && env.kind === 'cmd' && splitElmoCommands(env.cmds || env.cmd).some(isBgCommand);
-  }
-
   function motionDoneTimeoutFor(env) {
     const n = Number(env && env.meta && env.meta.motionDoneTimeoutMs);
     return Number.isFinite(n) && n > 0 ? n : motionDoneTimeoutMs;
@@ -382,37 +350,7 @@ function createElmoTransport(effects) {
   }
 
   function motionPollRawFor(context, raw) {
-    const parts = ((context && context.motionPollParts) || []).concat([raw]);
-    return parts.map(part => /[;\r\n]$/.test(part) ? part : part + ';').join('');
-  }
-
-  // Use only a complete, tagged reply from this poll. The pre-BG PX/VX are
-  // from the same serialized envelope, including after a change of encoder.
-  function motionStartVerdict(context, sample) {
-    const check = context.startCheck;
-    const meta = context.inFlight.meta;
-    if (sample.mo !== 1 || sample.so !== 1 || (sample.sr & 15) !== 0) return 'drive_unavailable';
-    const deltaPx = sample.px - check.basePx;
-    let unchanged;
-    if (meta.homing) {
-      const armed = ((sample.sr >>> meta.homingSrBit) & 1) === 1;
-      if (!armed && !check.armedBeforeBg) return 'homing_not_armed';
-      // A captured mark can reset PX to its original value before the first poll.
-      if (!armed || check.sawHomingMotion) return 'started';
-      unchanged = check.baseVx === 0 && (sample.ms === 0 || sample.ms === 1);
-    } else {
-      const target = meta.targetVelocity;
-      const delta = target - check.baseVx;
-      const progress = (sample.vx - check.baseVx) * Math.sign(delta);
-      const responding = progress >= 1; // VX is in encoder counts/s, including slow ramps.
-      const leavingRest = check.baseVx === 0 && deltaPx * Math.sign(target) > 0;
-      if (sample.vx === target || responding || leavingRest) return 'started';
-      // Consecutive steps may request the same speed while VX fluctuates.
-      if (sample.vx * target > 0 && Math.abs(sample.vx - target) <= meta.speedWindowTicks) return 'started';
-      unchanged = sample.vx === check.baseVx && (sample.vx !== 0 || deltaPx === 0);
-    }
-    if (!unchanged || check.lastTm == null || check.lastTm === sample.tm || now() - check.sentAt < START_RETRY_MS) return 'waiting';
-    return check.retries < MAX_START_RETRIES ? 'retry' : 'motion_start_timeout';
+    return ((context && context.motionPollParts) || []).concat([raw]).join('');
   }
 
   function confirmPollRoleFor(env) {
@@ -455,20 +393,7 @@ function createElmoTransport(effects) {
       needsSoReadyWait: ({ context }) => needsSoReadyWait(context.inFlight),
       soReadyAndHasPendingCommandPart: ({ context, event }) => soReadyAndHasPendingCommandPart(context.inFlight, event.raw),
       soReady: ({ event }) => soReadyFromRaw(event.raw),
-      moOnRejected: ({ context, event }) => needsSoReadyWait(context.inFlight) && String(event.raw == null ? '' : event.raw).includes('?'),
-      // Two SR reads in a row with an amplifier code: a single read right after MO=1 is not trusted.
-      srFaultConfirmed: ({ context, event }) => srFaultCode(event.raw) !== 0 && (Number(context.soWaitSrFaults) || 0) + 1 >= 2,
-      srFault: ({ event }) => srFaultCode(event.raw) !== 0,
       needsMotionDoneWait: ({ context }) => needsMotionDoneWait(context.inFlight),
-      verifyBg: ({ context }) => context.inFlight.meta.verifyMotionStart && isBgCommand(commandFor(context.inFlight)),
-      rejectedMotionCommand: ({ context, event }) => context.inFlight.meta.verifyMotionStart
-        && /^(?:BG$|(?:JV|JP|PR|SP|AC|DC|HM\[\d+\])=)/i.test(commandFor(context.inFlight)) && String(event.raw).includes('?'),
-      wrongStartBaselineReply: ({ context, event }) => {
-        const cmd = commandFor(context.inFlight);
-        return context.inFlight.meta.verifyMotionStart && (cmd === 'VX' || cmd === 'PX')
-          && parseElmoScalars(event.raw)[cmd.toLowerCase()] === undefined;
-      },
-      wrongStartPollReply: ({ context, event }) => parseElmoScalars(event.raw)[motionPollCommandFor(context).toLowerCase()] === undefined,
       hasNextMotionPollPart: ({ context }) => motionPollCursorOf(context) < motionPollCmdsOf(context).length - 1,
       motionDoneAfterMotionPoll: ({ context, event }) => motionDoneFromRaw(motionPollRawFor(context, event.raw), context.inFlight, context),
       operatorAbortCommand: ({ context, event }) => canOperatorAbort(context.inFlight) && isOperatorAbortEnvelope(event.envelope),
@@ -510,13 +435,7 @@ function createElmoTransport(effects) {
 
       enqueueCmd: assign(({ context, event }) => {
         const env = normalizeEnvelope(event.envelope);
-        // A stop also cancels a scenario movement still waiting behind a poll/command.
-        const pending = isOperatorAbortEnvelope(env) ? context.queue.filter(item => {
-          if (!item.meta.verifyMotionStart) return true;
-          emitEvent({ type: 'CMD.FAILED', id: item.id, reason: 'operator_aborted', topic: topicFor(item), meta: item.meta });
-          return false;
-        }) : context.queue;
-        const patch = { queue: priorityInsert(pending, env) };
+        const patch = { queue: priorityInsert(context.queue, env) };
         // Setpoint fallback (§4.4): use target speed for poll rate until the first VX poll.
         const sp = env.meta && env.meta.setpointDegS;
         if (sp != null && Number.isFinite(Number(sp))) {
@@ -674,7 +593,7 @@ function createElmoTransport(effects) {
             ...env,
             cmds,
             meta,
-            parts: (env.parts || []).concat([replyPart(env, commandFor(env), event.raw)]),
+            parts: (env.parts || []).concat([event.raw]),
             cursor,
           },
         };
@@ -686,13 +605,13 @@ function createElmoTransport(effects) {
         return {
           inFlight: {
             ...env,
-            parts: (env.parts || []).concat([replyPart(env, 'SO', event.raw)]),
+            parts: (env.parts || []).concat([event.raw]),
           },
         };
       }),
 
-      markSoWait: assign(() => ({ soWaitStartedAt: now(), soWaitSrFaults: 0 })),
-      clearSoWait: assign({ soWaitStartedAt: 0, soWaitSrFaults: 0 }),
+      markSoWait: assign(() => ({ soWaitStartedAt: now() })),
+      clearSoWait: assign({ soWaitStartedAt: 0 }),
 
       sendProbe: () => {
         sendCmd(probeCmd);
@@ -702,8 +621,8 @@ function createElmoTransport(effects) {
         sendCmd('SO');
       },
 
-      startMotionPoll: assign(({ context }) => ({
-        motionPollCmds: context.startCheck ? START_POLL_CMDS : MOTION_STATUS_POLL_CMDS,
+      startMotionPoll: assign(() => ({
+        motionPollCmds: MOTION_STATUS_POLL_CMDS,
         motionPollCursor: 0,
         motionPollParts: [],
       })),
@@ -711,47 +630,6 @@ function createElmoTransport(effects) {
       sendMotionPollPart: ({ context }) => {
         sendCmd(motionPollCommandFor(context));
       },
-
-      beginStartCheck: assign(({ context, event }) => {
-        const parts = context.inFlight.parts;
-        const { px, vx } = parseElmoScalars(parts.slice(-2).join(';'));
-        const { sr } = parseElmoScalars(parts.join(';'));
-        return { startCheck: {
-          basePx: px, baseVx: vx, armedBeforeBg: ((sr >>> context.inFlight.meta.homingSrBit) & 1) === 1,
-          bgEcho: event.raw || '', sentAt: now(), retries: 0, lastTm: null, sawHomingMotion: false, verdict: 'waiting',
-        } };
-      }),
-      // Even if the rest of this poll is lost, keep any evidence that the relative move ran.
-      rememberHomingMotion: assign(({ context, event }) => {
-        const check = context.startCheck;
-        if (!context.inFlight.meta.homing || check.sawHomingMotion) return {};
-        const f = parseElmoScalars(event.raw);
-        const moving = (f.vx !== undefined && f.vx !== 0) || (f.px !== undefined && f.px !== check.basePx);
-        return moving ? { startCheck: { ...check, sawHomingMotion: true } } : {};
-      }),
-      checkStartSample: assign(({ context, event }) => {
-        const sample = parseElmoScalars(motionPollRawFor(context, event.raw));
-        return { startCheck: { ...context.startCheck, verdict: motionStartVerdict(context, sample), lastTm: sample.tm } };
-      }),
-      retryBg: assign(({ context }) => {
-        const retries = context.startCheck.retries + 1;
-        const env = context.inFlight;
-        emitEvent({ type: 'CMD.MOTION_RETRY', id: env.id, topic: topicFor(env), attempt: retries, limit: MAX_START_RETRIES });
-        sendCmd('BG');
-        return { startCheck: { ...context.startCheck, retries, lastTm: null, sentAt: now() } };
-      }),
-      resumeAfterBg: assign(({ context }) => {
-        const env = context.inFlight;
-        return { inFlight: { ...env, cursor: env.cursor + 1, parts: env.parts.concat(context.startCheck.bgEcho) } };
-      }),
-      markVerifiedMotionWait: assign(({ context }) => ({ motionWaitStartedAt: context.startCheck.sentAt })),
-      failMotionStart: ({ context, event }) => {
-        const env = context.inFlight;
-        const reason = String(event.raw || '').includes('?') ? 'command_rejected' : (context.startCheck || {}).verdict;
-        emitEvent({ type: 'CMD.FAILED', id: env.id, topic: topicFor(env), meta: env.meta,
-          reason: ['command_rejected', 'drive_unavailable', 'homing_not_armed'].includes(reason) ? reason : 'motion_start_timeout' });
-      },
-      clearStartCheck: assign({ startCheck: null }),
 
       markMotionWait: assign(({ context }) => (context.motionWaitStartedAt ? {} : { motionWaitStartedAt: now() })),
       clearMotionWait: assign({ motionWaitStartedAt: 0 }),
@@ -867,50 +745,6 @@ function createElmoTransport(effects) {
         });
       },
 
-      failMotorOnRejected: ({ context, event }) => {
-        const env = context.inFlight;
-        if (!isAckable(env)) return;
-        emitEvent({
-          type: 'CMD.FAILED',
-          id: env.id,
-          reason: 'motor_on_rejected',
-          message: 'ELMO rejected ' + commandFor(env) + ': ' + String(event.raw == null ? '' : event.raw).slice(0, 80),
-          topic: topicFor(env),
-          meta: env.meta || {},
-        });
-      },
-
-      failDriveFault: ({ context, event }) => {
-        const env = context.inFlight;
-        if (!isAckable(env)) return;
-        const sr = parseElmoScalars(event.raw).sr;
-        emitEvent({
-          type: 'CMD.FAILED',
-          id: env.id,
-          reason: 'drive_fault',
-          sr,
-          code: srFaultCode(event.raw),
-          message: 'Amplifier fault after MO=1: SR=' + sr + ' (code ' + srFaultCode(event.raw) + ')',
-          topic: topicFor(env),
-          meta: env.meta || {},
-        });
-      },
-
-      dropQueuedMotion: assign(({ context }) => {
-        const keep = [];
-        (context.queue || []).forEach((item) => {
-          if (!isQueuedMotionStart(item)) { keep.push(item); return; }
-          emitEvent({ type: 'CMD.FAILED', id: item.id, reason: 'motor_not_on', topic: topicFor(item), meta: item.meta || {} });
-        });
-        return keep.length === (context.queue || []).length ? {} : { queue: keep };
-      }),
-
-      sendSoWaitSrPoll: () => {
-        sendCmd('SR');
-      },
-      countSrFault: assign(({ context }) => ({ soWaitSrFaults: (Number(context.soWaitSrFaults) || 0) + 1 })),
-      clearSrFaults: assign({ soWaitSrFaults: 0 }),
-
       completeMotionWait: ({ context, event }) => {
         const env = context.inFlight;
         if (!isAckable(env)) return;
@@ -939,7 +773,7 @@ function createElmoTransport(effects) {
 
       bumpMiss: assign(({ context }) => ({ missCount: (Number(context.missCount) || 0) + 1 })),
       resetMiss: assign({ missCount: 0 }),
-      freeInFlight: assign({ inFlight: null, startCheck: null }),
+      freeInFlight: assign({ inFlight: null }),
 
       statusOffline: () => setStatus({ fill: 'red', shape: 'ring', text: 'ELMO offline' }),
       statusConnecting: () => setStatus({ fill: 'yellow', shape: 'ring', text: 'ELMO connecting' }),
@@ -969,7 +803,6 @@ function createElmoTransport(effects) {
         lastFastVx: undefined,
         lastFastPollStartedAt: 0,
         soWaitStartedAt: 0,
-        soWaitSrFaults: 0,
         motionWaitStartedAt: 0,
         motionPollCmds: [],
         motionPollCursor: 0,
@@ -1031,7 +864,6 @@ function createElmoTransport(effects) {
             // link offline after maxMisses consecutive misses (then offline self-heals).
             after: {
               TIMEOUT: [
-                { guard: 'verifyBg', target: 'verifyingMotionStart', actions: ['reportLostPartReply', 'forwardBatchParts'] },
                 { guard: 'motionBatchBgReplyLost', target: 'waitingForMotionDone', actions: ['reportLostPartReply', 'bumpMiss', 'forwardBatchParts', 'markMotionWait'] },
                 { guard: 'motionBatchReplyLost', target: 'sendingNextPart', actions: ['reportLostPartReply', 'bumpMiss'] },
                 { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
@@ -1048,79 +880,17 @@ function createElmoTransport(effects) {
               // reportRejectedPart/forwardBatchParts run before collectPollPart on purpose:
               // both read the pre-advance cursor / pre-append parts.
               'ELMO.RESP': [
-                { guard: 'rejectedMotionCommand', target: 'idle', actions: ['reportRejectedPart', 'failMotionStart', 'sendEmergencyStop', 'freeInFlight'] },
-                { guard: 'wrongStartBaselineReply' },
-                { guard: 'verifyBg', target: 'verifyingMotionStart', actions: ['resetMiss', 'forwardBatchParts'] },
-                // MO=1 answered with '?': the drive refused to enable - fail now, do not wait 30 s for SO.
-                { guard: 'moOnRejected', target: 'idle', actions: ['resetMiss', 'reportRejectedPart', 'failMotorOnRejected', 'sendEmergencyStop', 'dropQueuedMotion', 'freeInFlight'] },
                 { guard: 'needsSoReadyWait', target: 'waitingForSoReady', actions: ['resetMiss', 'reportRejectedPart', 'forwardBatchParts', 'collectPollPart', 'markSoWait'] },
                 { guard: 'needsMotionDoneWait', target: 'waitingForMotionDone', actions: ['resetMiss', 'reportRejectedPart', 'forwardBatchParts', 'markMotionWait'] },
                 { guard: 'hasNextPollPart', target: 'sendingNextPart', actions: ['resetMiss', 'reportRejectedPart', 'collectPollPart'] },
                 { target: 'dispatch', actions: ['resetMiss', 'reportRejectedPart', 'ingestResp', 'forwardAndAck', 'enqueueDiagnosticOnBadPoll', 'enqueueConfirmPoll'] },
               ],
               'ELMO.TIMEOUT': [
-                { guard: 'verifyBg', target: 'verifyingMotionStart', actions: ['reportLostPartReply', 'forwardBatchParts'] },
                 { guard: 'motionBatchBgReplyLost', target: 'waitingForMotionDone', actions: ['reportLostPartReply', 'bumpMiss', 'forwardBatchParts', 'markMotionWait'] },
                 { guard: 'motionBatchReplyLost', target: 'sendingNextPart', actions: ['reportLostPartReply', 'bumpMiss'] },
                 { guard: 'tooManyMisses', target: '#transport.offline', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
                 { target: 'idle', actions: ['failInFlight', 'bumpMiss', 'freeInFlight'] },
               ],
-            },
-          },
-          // Keep ownership of the original envelope through the start check. Leaving this
-          // state on a stop cancels its timers, so no later BG can revive the movement.
-          verifyingMotionStart: {
-            entry: 'beginStartCheck',
-            initial: 'poll',
-            after: { [START_CHECK_TIMEOUT_MS]: '.failed' },
-            on: {
-              'UI.CMD': [
-                { guard: 'operatorAbortCommand', target: 'idle', actions: ['failInFlightAborted', 'freeInFlight', 'clearMotionPoll', 'enqueueCmd'] },
-                { actions: 'enqueueCmd' },
-              ],
-            },
-            states: {
-              poll: {
-                entry: 'startMotionPoll',
-                always: 'read',
-              },
-              read: {
-                entry: 'sendMotionPollPart',
-                after: { TIMEOUT: 'pause' },
-                on: {
-                  'ELMO.TIMEOUT': 'pause',
-                  'ELMO.RESP': [
-                    { guard: 'wrongStartPollReply' },
-                    { guard: 'hasNextMotionPollPart', target: 'read', reenter: true, actions: ['rememberHomingMotion', 'collectMotionPollPart', 'advanceMotionPoll'] },
-                    { target: 'decide', actions: ['checkStartSample', 'ingestMotionPoll', 'forwardMotionPollData'] },
-                  ],
-                },
-              },
-              decide: {
-                always: [
-                  { guard: ({ context }) => context.startCheck.verdict === 'waiting', target: 'pause' },
-                  { guard: ({ context }) => context.startCheck.verdict === 'retry', target: 'retry' },
-                  { guard: ({ context }) => context.startCheck.verdict !== 'started', target: 'failed' },
-                  { guard: 'needsMotionDoneWait', target: '#transport.connected.waitingForMotionDone', actions: ['markVerifiedMotionWait', 'clearStartCheck'] },
-                  { target: '#transport.connected.sendingNextPart', actions: ['resumeAfterBg', 'clearStartCheck', 'clearMotionPoll'] },
-                ],
-              },
-              pause: { after: { MOTION_POLL_DELAY: 'poll' } },
-              retry: {
-                entry: 'retryBg',
-                after: { TIMEOUT: 'poll' },
-                on: {
-                  'ELMO.TIMEOUT': 'poll',
-                  'ELMO.RESP': [
-                    { guard: 'rejectedMotionCommand', target: 'failed', actions: 'reportRejectedPart' },
-                    { target: 'poll' },
-                  ],
-                },
-              },
-              failed: {
-                entry: ['failMotionStart', 'sendEmergencyStop', 'freeInFlight', 'clearMotionPoll'],
-                always: '#transport.connected.idle',
-              },
             },
           },
           // SO-ready wait after MO=1. Nested so a lost SO reply datagram is re-polled after
@@ -1133,7 +903,7 @@ function createElmoTransport(effects) {
             after: {
               SO_READY_TIMEOUT: {
                 target: 'idle',
-                actions: ['failSoWait', 'sendEmergencyStop', 'dropQueuedMotion', 'freeInFlight', 'clearSoWait'],
+                actions: ['failSoWait', 'sendEmergencyStop', 'freeInFlight', 'clearSoWait'],
               },
             },
             on: {
@@ -1155,27 +925,12 @@ function createElmoTransport(effects) {
                   'ELMO.RESP': [
                     { guard: 'soReadyAndHasPendingCommandPart', target: '#transport.connected.sendingNextPart', actions: ['resetMiss', 'collectSoReadyPart', 'clearSoWait'] },
                     { guard: 'soReady', target: '#transport.connected.dispatch', actions: ['resetMiss', 'forwardAndAck', 'enqueueConfirmPoll', 'clearSoWait'] },
-                    { target: 'checkingSr', actions: ['resetMiss'] },
+                    { target: 'pause', actions: ['resetMiss'] },
                   ],
                   'ELMO.TIMEOUT': [
                     { guard: 'tooManyMotionMisses', target: '#transport.offline', actions: ['failSoWait', 'bumpMiss', 'sendEmergencyStop', 'freeInFlight', 'clearSoWait'] },
                     { target: 'polling', reenter: true, actions: ['bumpMiss'] },
                   ],
-                },
-              },
-              // SO is still 0: read SR. A confirmed amplifier fault ends the wait at once
-              // (ST;MO=0, queued motion starts dropped) instead of blocking every command but
-              // STOP for SO_READY_TIMEOUT.
-              checkingSr: {
-                entry: 'sendSoWaitSrPoll',
-                after: { TIMEOUT: { target: 'pause', actions: ['bumpMiss'] } },
-                on: {
-                  'ELMO.RESP': [
-                    { guard: 'srFaultConfirmed', target: '#transport.connected.idle', actions: ['resetMiss', 'failDriveFault', 'sendEmergencyStop', 'dropQueuedMotion', 'freeInFlight', 'clearSoWait'] },
-                    { guard: 'srFault', target: 'pause', actions: ['resetMiss', 'countSrFault'] },
-                    { target: 'pause', actions: ['resetMiss', 'clearSrFaults'] },
-                  ],
-                  'ELMO.TIMEOUT': { target: 'pause', actions: ['bumpMiss'] },
                 },
               },
               pause: {
