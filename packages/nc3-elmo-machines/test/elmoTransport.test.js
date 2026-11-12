@@ -2,7 +2,7 @@
 
 const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { createActor } = require('xstate');
+const { createActor, SimulatedClock } = require('xstate');
 
 const { createElmoTransport, startElmoTransport } = require('../src/elmoTransport');
 const { LEAN_POLL } = require('../src/poll');
@@ -27,7 +27,7 @@ function makeHarness(opts = {}) {
     forwardResp: (raw, topic) => calls.forwardResp.push({ raw, topic }),
     emitEvent: (evt) => calls.emitEvent.push(evt),
     setStatus: (st) => calls.status.push(st),
-    now: () => clock,
+    now: () => opts.clock ? opts.clock.now() : clock,
     timeoutMs: opts.timeoutMs == null ? 600000 : opts.timeoutMs,
     connectTimeoutMs: 600000,
     reconnectMs: 600000,
@@ -40,7 +40,7 @@ function makeHarness(opts = {}) {
   if (opts.motionDoneTimeoutMs != null) effects.motionDoneTimeoutMs = opts.motionDoneTimeoutMs;
   const input = { resolution: opts.resolution || 'high' };
   if (opts.pollConfig) input.pollConfig = opts.pollConfig;
-  const actor = createActor(createElmoTransport(effects), { input }).start();
+  const actor = createActor(createElmoTransport(effects), opts.clock ? { input, clock: opts.clock } : { input }).start();
   createdActors.push(actor);
   return { actor, calls, setClock: (v) => { clock = v; }, value: () => actor.getSnapshot().value, ctx: () => actor.getSnapshot().context };
 }
@@ -1029,4 +1029,134 @@ test('a plain command batch (no motion wait) still fails on a lost reply', () =>
   h.actor.send({ type: 'ELMO.TIMEOUT' });
   assert.equal(failed(h.calls).at(-1).reason, 'timeout');
   assert.equal(h.calls.emitEvent.filter((e) => e.type === 'CMD.PART_LOST').length, 0);
+});
+
+function startScenarioMotion({ homing = false, target = -10, initialVx = 0, loseEcho = false } = {}) {
+  const clock = new SimulatedClock();
+  clock.increment(1000);
+  const h = makeHarness({ clock, timeoutMs: 1000 });
+  const meta = homing
+    ? { topic: 'driveInit', homing: true, homingSrBit: 7, waitForMotionDone: true }
+    : { topic: 'set_jp', targetVelocity: target };
+  const setup = homing ? ['HM[1]=1', 'SR', 'PR=100'] : ['AC=5', 'JP=' + target];
+  const cmds = [...setup, 'PX', 'VX', 'BG', ...(homing ? [] : ['JP', 'MS', 'VX'])];
+  const reply = raw => h.actor.send({ type: 'ELMO.RESP', raw });
+  h.actor.send({ type: 'UI.CMD', envelope: { cmds, meta: { ...meta, verifyMotionStart: true } } });
+  reply('probe-ok');
+  for (const cmd of setup) {
+    assert.equal(h.calls.sendCmd.at(-1), cmd);
+    reply(cmd === 'SR' ? 'SR;128;' : cmd + ';');
+  }
+  reply('PX;100;');
+  reply('VX;' + initialVx + ';');
+  assert.equal(h.calls.sendCmd.at(-1), 'BG');
+  if (loseEcho) clock.increment(1000);
+  else reply(';');
+  function sample(fields = {}) {
+    const values = { MO: 1, SO: 1, MS: 0, TM: clock.now(), PX: 100, VX: initialVx, SR: homing ? 128 : 0, ...fields };
+    for (const [key, value] of Object.entries(values)) {
+      assert.equal(h.calls.sendCmd.at(-1), key);
+      reply(key + ';' + value + ';');
+    }
+  }
+  return { ...h, clock, sample, reply, bgCount: () => h.calls.sendCmd.filter(cmd => cmd === 'BG').length };
+}
+
+test('lost scenario BG retries after 5 s at rest; velocity feedback releases the original command once', () => {
+  const h = startScenarioMotion({ loseEcho: true });
+  h.reply('BG;'); // late echo is not the requested MO frame
+  h.sample();
+  h.clock.increment(4999);
+  h.sample();
+  assert.equal(h.bgCount(), 1);
+  h.clock.increment(500);
+  h.sample();
+  assert.equal(h.bgCount(), 2);
+  assert.equal(h.calls.emitEvent.at(-1).type, 'CMD.MOTION_RETRY');
+  h.reply(';');
+  h.sample({ PX: 99, VX: -2, MS: 2 });
+  assert.equal(h.calls.sendCmd.at(-1), 'JP');
+  h.reply('JP;-10;'); h.reply('MS;2;'); h.reply('VX;-2;');
+  assert.equal(acked(h.calls).length, 1);
+  assert.equal(failed(h.calls).length, 0);
+  assert.equal(h.calls.sendCmd.filter(c => c === 'JP=-10').length, 1);
+});
+
+test('lost homing BG echo with travel or a captured index never repeats the relative movement', () => {
+  for (const fields of [{ PX: 102, MS: 2 }, { SR: 0 }]) {
+    const h = startScenarioMotion({ homing: true, loseEcho: true });
+    h.sample(fields);
+    assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+    assert.equal(h.bgCount(), 1);
+    assert.equal(h.calls.sendCmd.filter(c => c === 'PR=100').length, 1);
+  }
+});
+
+test('stationary armed homing retries BG twice then fails and stops without re-arming PR/HM', () => {
+  const h = startScenarioMotion({ homing: true });
+  for (let i = 0; i < 3; i++) {
+    h.sample();
+    h.clock.increment(5000);
+    h.sample();
+    if (i < 2) { assert.equal(h.calls.sendCmd.at(-1), 'BG'); h.reply(';'); }
+  }
+  assert.equal(h.bgCount(), 3);
+  assert.equal(h.calls.sendCmd.filter(c => c === 'HM[1]=1').length, 1);
+  assert.equal(completed(h.calls).length, 0);
+  assert.equal(failed(h.calls).at(-1).reason, 'motion_start_timeout');
+  assert.deepEqual(h.calls.sendCmd.slice(-2), ['ST', 'MO=0']);
+});
+
+test('stop, drive fault and missing fresh telemetry prevent a delayed BG', () => {
+  const stopped = startScenarioMotion();
+  stopped.sample();
+  stopped.actor.send({ type: 'UI.CMD', envelope: { cmd: 'ST', meta: { topic: 'drive_stop' } } });
+  stopped.clock.increment(20000);
+  assert.equal(stopped.bgCount(), 1);
+  assert.equal(failed(stopped.calls)[0].reason, 'operator_aborted');
+
+  const fault = startScenarioMotion();
+  fault.sample({ SR: 7 });
+  assert.equal(failed(fault.calls)[0].reason, 'drive_unavailable');
+  assert.equal(fault.bgCount(), 1);
+
+  const stale = startScenarioMotion();
+  stale.sample({ TM: 99 });
+  stale.clock.increment(6000);
+  stale.sample({ TM: 99 });
+  stale.clock.increment(14000);
+  assert.equal(stale.bgCount(), 1);
+  assert.equal(failed(stale.calls)[0].reason, 'motion_start_timeout');
+});
+
+test('reversing and zero setpoints recognise deceleration without replaying BG', () => {
+  for (const target of [-100, 0]) {
+    const h = startScenarioMotion({ initialVx: 100, target });
+    h.sample({ VX: 90, PX: 120, MS: 2 });
+    assert.equal(h.calls.sendCmd.at(-1), 'JP');
+    assert.equal(h.bgCount(), 1);
+  }
+});
+
+test('a partial poll that saw homing travel prevents a later BG, even if PX returns to its baseline', () => {
+  const h = startScenarioMotion({ homing: true });
+  for (const raw of ['MO;1;', 'SO;1;', 'MS;2;', 'TM;1;', 'PX;101;']) h.reply(raw);
+  h.actor.send({ type: 'ELMO.TIMEOUT' });
+  h.clock.increment(5500);
+  h.sample();
+  assert.deepEqual(h.value(), { connected: 'waitingForMotionDone' });
+  assert.equal(h.bgCount(), 1);
+});
+
+test('a lost scenario speed setter is resent before BG; an explicit rejection stops the command', () => {
+  const h = makeHarness();
+  h.actor.send({ type: 'UI.CMD', envelope: { cmds: ['JV=10', 'PX', 'VX', 'BG', 'MS'], meta: {
+    topic: 'set_jv', verifyMotionStart: true, targetVelocity: 10,
+  } } });
+  h.actor.send({ type: 'ELMO.RESP', raw: 'probe-ok' });
+  h.actor.send({ type: 'ELMO.TIMEOUT' });
+  assert.deepEqual(h.calls.sendCmd.slice(-2), ['JV=10', 'JV=10']);
+  h.actor.send({ type: 'ELMO.RESP', raw: ':?' });
+  assert.equal(failed(h.calls).at(-1).reason, 'command_rejected');
+  assert.ok(!h.calls.sendCmd.includes('BG'));
 });

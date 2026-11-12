@@ -267,6 +267,11 @@ check('DriveInitState: resolution switch resets the null-mark status; old journa
 });
 
 // ---------------- ScenarioManager ----------------
+function ackScenarioSpeed(ctx, topic) {
+  const speedRequestId = ctx.global.get('scenario_state').speed_request_id;
+  return runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic, meta: { topic, verifyMotionStart: true, speedRequestId } } }, ctx);
+}
+
 check('ScenarioManager: full homing before first step, JV command, MS criterion ramp -> ready -> hold', () => {
   const ctx = makeCtx({ settings, nc3, current_range: 'high', logs: [], scenario_files: ['t.scn'], drive_state: { mo: false, so: false } });
   ctx.flow.set('motion_params', { sp: 728178, ac: 364088, dc: 364088 }); // 0.5 deg/s^2
@@ -281,7 +286,7 @@ check('ScenarioManager: full homing before first step, JV command, MS criterion 
   r = runNode('ScenarioManager', { topic: 'CMD.COMPLETED', payload: { topic: 'driveInit', meta: { topic: 'driveInit' } } }, ctx);
   assert.equal(r.out[0][0].topic, 'set_jv', 'JV by default: ' + JSON.stringify(r.out[0]));
   assert.equal(r.out[0][0].payload.ticks, 3640889);
-  r = runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: 'set_jv', meta: { topic: 'set_jv' } } }, ctx);
+  r = ackScenarioSpeed(ctx, 'set_jv');
   let st = ctx.global.get('scenario_state');
   assert.equal(st.status, 'waiting_ready');
   assert.equal(st.ready_criterion, 'ms');
@@ -308,7 +313,7 @@ check('ScenarioManager: MS timeout after the ramp fails the scenario with a jour
   ctx.flow.set('motion_params', { sp: 728178, ac: 364088, dc: 364088 });
   runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'high_resolution.scn' } }, ctx);
   runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n5 10\n' }, ctx);
-  runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: 'set_jv' } }, ctx);
+  ackScenarioSpeed(ctx, 'set_jv');
   let st = ctx.global.get('scenario_state');
   st.ready_eval.startedAt -= 25000; ctx.global.set('scenario_state', st);
   const r = runNode('ScenarioManager', { topic: 'poll_state', payload: { ms: 1, velocity_deg_per_sec: 4, resolution: 'high' } }, ctx);
@@ -324,8 +329,58 @@ check('ScenarioManager: JP mode falls back to the software criterion', () => {
   runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'high_resolution.scn' } }, ctx);
   const r = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n5 10\n' }, ctx);
   assert.equal(r.out[0][0].topic, 'set_jp');
-  runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: 'set_jp' } }, ctx);
+  ackScenarioSpeed(ctx, 'set_jp');
   assert.equal(ctx.global.get('scenario_state').ready_criterion, 'software');
+});
+
+check('Scenario startup verifies BG for homing, JV and JP; pre-ACK polls cannot start a recording', () => {
+  for (const mode of ['JV', 'JP']) {
+    const cfg = { ...settings, advanced: { ...settings.advanced, rotationCommandMode: mode } };
+    const ctx = makeCtx({ settings: cfg, nc3, current_range: 'high', logs: [] });
+    runNode('ScenarioManager', { topic: 'scenario_start' }, ctx);
+    const init = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n-2 10\n' }, ctx).out[0][0];
+    assert.equal(init.payload.verifyMotionStart, true);
+    const staged = runNode('CommandHandler', init, ctx);
+    staged.timers.forEach(t => t.fn());
+    assert.match(staged.sent.at(-1)[0].payload, /PR=\d+;\rPX;\rVX;\rBG\r$/);
+    assert.equal(staged.sent.at(-1)[0].elmo_meta.verifyMotionStart, true);
+    const cancelled = runNode('CommandHandler', init, ctx);
+    runNode('CommandHandler', { topic: 'drive_stop' }, ctx);
+    cancelled.timers.forEach(t => t.fn());
+    assert.equal(cancelled.sent.length, 1, 'only the initial ST was sent');
+
+    const speed = runNode('ScenarioManager', { topic: 'CMD.COMPLETED', payload: { topic: 'driveInit' } }, ctx).out[0][0];
+    assert.equal(speed.topic, 'set_' + mode.toLowerCase());
+    const targetTicks = speed.payload.ticks;
+    const cmd = runNode('CommandHandler', speed, ctx).out;
+    assert.ok(cmd.payload.includes(mode + '=' + targetTicks + ';PX;VX;BG;'));
+    assert.equal(cmd.elmo_meta.targetVelocity, targetTicks);
+    assert.equal(cmd.elmo_meta.speedRequestId, ctx.global.get('scenario_state').speed_request_id);
+    assert.equal(cmd.elmo_meta.verifyMotionStart, true);
+    runNode('ScenarioManager', { topic: 'poll_data', payload: { velocity_deg_per_sec: -2, ms: 0 } }, ctx);
+    runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: cmd.topic } }, ctx);
+    assert.equal(ctx.global.get('scenario_state').status, 'commanding');
+    runNode('ScenarioManager', { topic: 'scenario_pause' }, ctx);
+    runNode('ScenarioManager', { topic: 'CMD.FAILED', payload: { topic: speed.topic, reason: 'operator_aborted' } }, ctx);
+    assert.equal(ctx.global.get('scenario_state').status, 'paused');
+    assert.equal(ctx.global.get('scenario_state').can_resume, true);
+  }
+});
+
+check('a silent speed command times out; an ACK or watchdog from before resume cannot affect the new attempt', () => {
+  const ctx = makeCtx({ settings, nc3, current_range: 'high', drive_state: { mo: true, so: true },
+    drive_init_state: { status: 'done', initialized: true, resolution: 'high' } });
+  runNode('ScenarioManager', { topic: 'scenario_start' }, ctx);
+  const first = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n1 10\n' }, ctx);
+  runNode('ScenarioManager', { topic: 'scenario_pause' }, ctx);
+  const resumed = runNode('ScenarioManager', { topic: 'scenario_resume' }, ctx);
+  const oldMeta = first.out[0][0].payload;
+  runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: 'set_jv', meta: oldMeta } }, ctx);
+  first.timers.find(t => t.ms === 60000).fn();
+  assert.equal(ctx.global.get('scenario_state').status, 'commanding');
+  resumed.timers.find(t => t.ms === 60000).fn();
+  assert.equal(ctx.global.get('scenario_state').status, 'error');
+  assert.equal(resumed.sent.at(-1)[0][0].topic, 'drive_stop');
 });
 
 // ---------------- SettingsNormalize ----------------
@@ -424,7 +479,7 @@ check('ScenarioManager: MS=2 at steady JV -> ready by TR[3]/TR[4] window after t
   ctx.flow.set('motion_params', { sp: 728178, ac: 364088, dc: 364088 });
   runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'high_resolution.scn' } }, ctx);
   runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n2 10\n' }, ctx);
-  runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: 'set_jv' } }, ctx);
+  ackScenarioSpeed(ctx, 'set_jv');
   let st = ctx.global.get('scenario_state');
   st.ready_eval.startedAt -= 5000; ctx.global.set('scenario_state', st);
   runNode('ScenarioManager', { topic: 'poll_state', payload: { ms: 2, velocity_deg_per_sec: 2.0047, resolution: 'high' } }, ctx);
@@ -490,7 +545,7 @@ check('ScenarioManager: ramp after homing/pause is computed from zero speed, not
   // stale "current speed" 25 deg/s measured long ago must not shorten the ramp
   let st = ctx.global.get('scenario_state');
   st.current_speed_deg_per_sec = 25; st.current_speed_updated_at = Date.now() - 20000; ctx.global.set('scenario_state', st);
-  runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: 'set_jv' } }, ctx);
+  ackScenarioSpeed(ctx, 'set_jv');
   st = ctx.global.get('scenario_state');
   assert.equal(st.speed_reach_from_deg_per_sec, 0);
   assert.ok(st.speed_reach_ramp_ms >= 10000, 'ramp from zero: ' + st.speed_reach_ramp_ms);
@@ -723,7 +778,7 @@ check('JP scenario step: readiness by the TR[3]/TR[4] window on VX (no tolerance
   runNode('ScenarioManager', { topic: 'scenario_start', payload: { file: 'a.scn' } }, ctx);
   let r = runNode('ScenarioManager', { topic: 'scenario_file_loaded', payload: '-----\n10 10\n' }, ctx);
   assert.equal(r.out[0][0].topic, 'set_jp');
-  runNode('ScenarioManager', { topic: 'CMD.ACKED', payload: { topic: 'set_jp', meta: { topic: 'set_jp' } } }, ctx);
+  ackScenarioSpeed(ctx, 'set_jp');
   let st = ctx.global.get('scenario_state');
   assert.equal(st.ready_criterion, 'software');
   // 9.3 deg/s: outside TR[3] = 0.5 deg/s -> not ready even with MS=0 (MS is ignored for JP)
@@ -1493,11 +1548,43 @@ check('ProtocolManager: a new protocol file is in English with the BUN angle and
   assert.ok(/^Date\s+\d{4}-\d{2}-\d{2}$/m.test(text) && /^Time\s+\d{2}:\d{2}:\d{2}$/m.test(text), text);
 });
 
-check('Протоколы tab reads old Russian and new English data files', () => {
-  const page = flows.find(n => n.id === 'prot-tmpl-nc3-0001').format;
-  assert.ok(page.includes("/^(Время\\s+Угол|Time\\s+Angle)/i"), 'data column header');
-  assert.ok(page.includes("text.indexOf('Speed_setpoint') === 0") && page.includes("text.indexOf('Скорость_задания') === 0"));
-  assert.ok(page.includes("text.indexOf('Speed_measured') === 0") && page.includes('/^Error\\s/.test(text)'));
+check('Protocols opens legacy and current data files, plots both units and returns to the protocol', () => {
+  const src = flows.find(n => n.id === 'prot-tmpl-nc3-0001').format.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const component = new Function(src.replace('export default', 'return'))();
+  const view = Object.assign(component.data(), component.methods, { $nextTick: cb => cb() });
+  for (const [name, get] of Object.entries(component.computed)) Object.defineProperty(view, name, { get });
+  const ctx = makeCtx({});
+  const protocol = 'C:\\NC3\\protocols\\test.txt';
+  function open(rows, file, kind) {
+    const msg = { topic: 'journal_open_file', payload: { filename: file, selectedProtocol: protocol, kind } };
+    const read = runNode('ProtocolManager', msg, ctx).out[4];
+    const state = runNode('ProtocolManager', { ...read, payload: rows.join('\n') }, ctx).out[2];
+    view.handleIncoming(state);
+  }
+  for (const [header, sample, angle] of [
+    ['Time  Angle  Counts', '1  12.5  8192', 12.5],
+    ['Время  Угол  Метки', '1  12.5  8192', 12.5],
+    ['Время  Значение', '1  8192', 8192 / 262144000 * 360],
+  ]) {
+    open(['-------------------', '1 0 data_test.txt'], protocol, 'protocol');
+    const link = view.rows.find(row => row.kind === 'protocol-link');
+    view.send = msg => assert.equal(msg.payload.selectedProtocol, protocol);
+    view.openDataFile(link.dataFilePath);
+    open(['Speed_measured 2.5', '-------------------', header, sample, sample.replace(/^1/, '2')], link.dataFilePath, 'data');
+    view.chartUnit = 'ticks';
+    assert.equal(view.chartStats.count, 2);
+    assert.equal(view.chartStats.measuredSpeed, 2.5);
+    assert.equal(view.chartPoints[0].y, 8192);
+    view.chartUnit = 'decimal_angle';
+    assert.equal(view.chartPoints[0].y, angle);
+    view.buildChart();
+    assert.ok(view.chartReady && view.chartPolyline);
+    assert.ok(view.dataText.includes(sample));
+    view.openProtocolByPath(view.selectedProtocol);
+    open(['-------------------', '1 0 data_test.txt'], protocol, 'protocol');
+    assert.equal(view.chartStats.count, 0);
+    assert.equal(view.selectedKind, 'protocol');
+  }
 });
 
 check('BEP flow: circlogram nodes are gone; cmd? routes bep_tc_start/abort/set to BEP TiltCorrection', () => {
