@@ -61,6 +61,80 @@ check('CommandHandler motor_on clears pending motion with ST before MO=1', () =>
   assert.equal(r.out.payload, 'ST;MO=1;MO;SO;SR\r');
 });
 
+check('motor readbacks reach both dashboards and the state cache without a data poll or restart', () => {
+  const byId = id => flows.find(n => n.id === id);
+  const route = byId(byName.ResponseParser.wires[0][0]);
+  const liveOutput = route.wires[route.rules.findIndex(r => r.v === 'poll_data')][0];
+  const links = byId(liveOutput).links.flatMap(id => byId(id).wires[0]);
+  const cache = byId('57266dd52d61d4de');
+  const speedId = 'f0893e7d43d9e2b8', monitorId = 'cd1902e1e473a48c';
+  assert.ok(links.includes(cache.id) && cache.wires[0].includes(speedId) && links.includes(monitorId));
+  const views = [speedId, monitorId].map(id => {
+    const script = byId(id).format.match(/<script>([\s\S]*?)<\/script>/)[1];
+    const options = new Function(script.replace('export default', 'return'))();
+    const view = Object.assign(options.data(), options.methods);
+    for (const [key, get] of Object.entries(options.computed)) {
+      Object.defineProperty(view, key, typeof get === 'function' ? { get } : get);
+    }
+    return view;
+  });
+  const ctx = makeCtx({ settings, nc3 });
+  const commands = [];
+  const frames = [];
+  const assertMotor = (state, enabled, source) => {
+    assert.equal(state.mo, enabled, source + ' MO');
+    assert.equal(state.so, enabled, source + ' SO');
+  };
+  const actor = nc3.startElmoTransport({
+    initialFullState: false,
+    sendCmd: cmd => commands.push(cmd),
+    forwardResp: (payload, topic) => frames.push({ topic, payload }),
+  });
+  try {
+    actor.send({ type: 'CONNECT' });
+    assert.equal(commands.shift(), 'TM');
+    actor.send({ type: 'ELMO.RESP', raw: 'TM;0;' });
+    for (const resolution of ['low', 'high']) {
+      for (const topic of ['motor_on', 'motor_off']) {
+        const request = runNode('CommandHandler', { topic, payload: null }, ctx).out;
+        actor.send({ type: 'UI.CMD', envelope: { cmd: request.payload, meta: { topic } } });
+        const enabled = topic === 'motor_on';
+        const fields = { MO: +enabled, SO: +enabled, SR: 0, MS: 0, 'OL[1]': +(resolution === 'low'), 'VH[2]': 100 };
+        while (commands.length) {
+          const cmd = commands.shift();
+          const raw = cmd in fields ? (resolution === 'low' ? cmd + ';' + fields[cmd] + ';' : cmd + '=' + fields[cmd]) : cmd + ';';
+          actor.send({ type: 'ELMO.RESP', raw });
+        }
+        assert.ok(frames.some(f => f.topic === topic) && frames.some(f => f.topic === 'poll_state'));
+        const responses = frames.splice(0);
+        for (const [index, frame] of responses.entries()) {
+          const msg = runNode('ResponseParser', frame, ctx).out;
+          if (!msg) continue;
+          const output = route.rules.findIndex(r => r.v === msg.topic);
+          assert.ok(output >= 0 && route.wires[output].includes(liveOutput), 'missing live route for ' + msg.topic);
+          ctx.global.set(cache.rules[0].p, msg.payload);
+          for (const view of views) view.handleIncoming(msg);
+          // The completed motor command and the independent confirmation poll each carry MO/SO.
+          // An early, partial echo before the SO wait has no confirmed MO yet.
+          if (index === responses.findLastIndex(f => f.topic === topic) || frame.topic === 'poll_state') {
+            for (const view of views) assertMotor(view.current, enabled, frame.topic + ' (' + resolution + ')');
+          }
+        }
+        assertMotor(ctx.global.get('drive_state'), enabled, 'drive_state');
+      }
+    }
+    // A write echo alone must leave the display OFF. A subsequent read-only
+    // health frame must update it even if no motor ACK or data poll arrives.
+    for (const frame of [{ topic: 'motor_on', payload: 'MO=1;' }, { topic: 'poll_state', payload: 'MO=1;SO=1;SR=0;' }]) {
+      const msg = runNode('ResponseParser', frame, ctx).out;
+      for (const view of views) {
+        view.handleIncoming(msg);
+        assertMotor(view.current, frame.topic === 'poll_state', frame.topic);
+      }
+    }
+  } finally { actor.stop(); }
+});
+
 check('CommandHandler manual driveInit: HM reset + one revolution, MS completion, no PX target', () => {
   const ctx = makeCtx({ settings, nc3, current_range: 'high', drive_state: { position: 1000, resolution: 'high' } });
   const r = runNode('CommandHandler', { topic: 'driveInit', payload: null }, ctx);

@@ -193,9 +193,23 @@ function createElmoTransport(effects) {
     return env && env.cmd;
   }
 
+  function replyPart(env, cmd, raw) {
+    const text = String(raw == null ? '' : raw);
+    const topic = topicOfEnvelope(env);
+    // A motor batch contains both MO=<request> and a later MO read. The parser
+    // ignores assignment echoes; identify real register reads from the in-flight command.
+    if ((topic === 'motor_on' || topic === 'motor_off') && (cmd === 'MO' || cmd === 'SO' || cmd === 'SR')) {
+      return text.replace(/^\s*(MO|SO|SR)\s*=/i, (prefix, field) => field.toUpperCase() === cmd ? cmd + ';' : prefix);
+    }
+    return text;
+  }
+
   function rawFor(env, raw) {
     if (!isMultiPart(env)) return raw;
-    return (env.parts || []).concat([raw]).join('');
+    // Each UDP datagram is one reply, even when its text has no trailing delimiter.
+    const parts = env.parts || [];
+    return parts.map(part => part && !/[;\r\n]$/.test(part) ? part + ';' : part).join('')
+      + replyPart(env, commandFor(env), raw);
   }
 
   // Whole-frame validation (after all parts reassembled, or for a non-batch envelope).
@@ -643,7 +657,7 @@ function createElmoTransport(effects) {
             ...env,
             cmds,
             meta,
-            parts: (env.parts || []).concat([event.raw]),
+            parts: (env.parts || []).concat([replyPart(env, commandFor(env), event.raw)]),
             cursor,
           },
         };
@@ -655,7 +669,7 @@ function createElmoTransport(effects) {
         return {
           inFlight: {
             ...env,
-            parts: (env.parts || []).concat([event.raw]),
+            parts: (env.parts || []).concat([replyPart(env, 'SO', event.raw)]),
           },
         };
       }),
